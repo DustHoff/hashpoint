@@ -161,7 +161,9 @@ func shouldSkip(b storage.FocusBlock, tags map[int64]storage.Tag) bool {
 		return true
 	}
 	mapping := tagging.Resolve(tag, tags)
-	return !mapping.SyncToPersonio || mapping.ProjectID == ""
+	// A missing project_id is allowed — Personio accepts work periods without
+	// a project assignment (the comment carries the tag name in that case).
+	return !mapping.SyncToPersonio
 }
 
 // dayPeriods is the per-date bucket built from tag-grouped blocks.

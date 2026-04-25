@@ -108,7 +108,9 @@ func TestBuildDayPeriods_PerProjectAndCommentBuckets(t *testing.T) {
 func TestShouldSkip(t *testing.T) {
 	t.Parallel()
 	parent := storage.Tag{ID: 1, Name: "#x", PersonioProjectID: ptr("4711"), SyncToPersonio: true}
-	tags := map[int64]storage.Tag{1: parent}
+	noProject := storage.Tag{ID: 2, Name: "#y", SyncToPersonio: true}
+	noSync := storage.Tag{ID: 3, Name: "#z", PersonioProjectID: ptr("4712"), SyncToPersonio: false}
+	tags := map[int64]storage.Tag{1: parent, 2: noProject, 3: noSync}
 
 	cases := []struct {
 		name string
@@ -119,6 +121,8 @@ func TestShouldSkip(t *testing.T) {
 		{"untagged", storage.FocusBlock{EndTime: mustEnd(t, "2026-04-25T12:00:00Z")}, true},
 		{"idle", storage.FocusBlock{IsIdle: true, TagID: ptr(int64(1)), EndTime: mustEnd(t, "2026-04-25T12:00:00Z")}, true},
 		{"valid", storage.FocusBlock{TagID: ptr(int64(1)), EndTime: mustEnd(t, "2026-04-25T12:00:00Z")}, false},
+		{"valid without project id", storage.FocusBlock{TagID: ptr(int64(2)), EndTime: mustEnd(t, "2026-04-25T12:00:00Z")}, false},
+		{"sync_to_personio false", storage.FocusBlock{TagID: ptr(int64(3)), EndTime: mustEnd(t, "2026-04-25T12:00:00Z")}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -395,7 +395,7 @@ export default function Timeline() {
       } else if (r.BlocksSkipped > 0) {
         setSyncMessage({
           level: "info",
-          text: `Nichts an Personio gesendet — alle ${r.BlocksSkipped} Block/Blöcke übersprungen. Tags müssen "Zu Personio synchronisieren" aktiviert und eine Personio-Projekt-ID hinterlegt haben.`,
+          text: `Nichts an Personio gesendet — alle ${r.BlocksSkipped} Block/Blöcke übersprungen. Tags müssen "Zu Personio synchronisieren" aktiviert haben (Idle- und offene Blöcke werden immer übersprungen).`,
         });
       } else {
         setSyncMessage({
