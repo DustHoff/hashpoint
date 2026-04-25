@@ -896,6 +896,8 @@ export default function Timeline() {
         )}
         {visibleGroups.map((g) => {
           const tag = g.tagID != null ? tagsByID[g.tagID] : undefined;
+          const parentTag =
+            tag && tag.parent_id != null ? tagsByID[tag.parent_id] : undefined;
           const isSel = g.blockIDs.every((id) => selected.has(id));
           const startISO = new Date(g.startMs).toISOString();
           const endISO = new Date(g.endMs).toISOString();
@@ -933,6 +935,14 @@ export default function Timeline() {
                     title={g.description}
                   >
                     📝 {g.description}
+                  </span>
+                )}
+                {parentTag && (
+                  <span
+                    className="rounded px-2 py-0.5 text-xs"
+                    style={{ background: parentTag.color ?? "#4f8cff" }}
+                  >
+                    {parentTag.name}
                   </span>
                 )}
                 {tag && (
