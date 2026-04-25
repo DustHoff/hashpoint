@@ -61,7 +61,7 @@ jobs:
         shell: bash
         run: |
           DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          wails build -clean -ldflags "-X main.version=${{ needs.bump-tag.outputs.new_tag }} -X main.commit=${{ github.sha }} -X main.buildDate=${DATE}"
+          wails build -clean -skipbindings -ldflags "-X main.version=${{ needs.bump-tag.outputs.new_tag }} -X main.commit=${{ github.sha }} -X main.buildDate=${DATE}"
 
       - name: Compute SHA-256 checksums
         shell: pwsh

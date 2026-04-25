@@ -96,7 +96,7 @@ jobs:
           key: dist-${{ hashFiles('frontend/package.json', 'frontend/src/**') }}
 
       - name: Build
-        run: wails build -clean
+        run: wails build -clean -skipbindings
 
       - name: Upload artefact
         uses: actions/upload-artifact@v4
