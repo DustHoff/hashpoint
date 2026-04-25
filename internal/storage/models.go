@@ -22,6 +22,11 @@ type FocusBlock struct {
 	Description *string    `json:"description,omitempty"`
 	PersonioID  *string    `json:"personio_id,omitempty"`
 	SyncedAt    *time.Time `json:"synced_at,omitempty"`
+	// IsPlaceholder marks synthetic blocks the user created via the timeline
+	// drag-range workflow to extend a tagged period past actually tracked
+	// activity. They have no real process metadata and are deleted again when
+	// their tag is cleared.
+	IsPlaceholder bool `json:"is_placeholder"`
 }
 
 // IsOpen returns true while the block is still being recorded (no end time).

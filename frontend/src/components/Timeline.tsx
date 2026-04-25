@@ -71,12 +71,22 @@ function buildSegments(blocks: FocusBlock[]): Segment[] {
   return out;
 }
 
+interface MsRange {
+  start: number;
+  end: number;
+}
+
 export default function Timeline() {
   const [day, setDay] = useState<Date>(new Date());
   const [blocks, setBlocks] = useState<FocusBlock[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [hovered, setHovered] = useState<Set<number>>(new Set());
+  // Active hover range — used to filter the table to apps within it.
+  const [hoverRange, setHoverRange] = useState<MsRange | null>(null);
+  // Range committed by the last mouse-drag. Forwarded to the backend so any
+  // gap between the dragged time window and actual tracked blocks is filled
+  // with placeholder blocks (which then sync as a contiguous Personio period).
+  const [selectedRange, setSelectedRange] = useState<MsRange | null>(null);
   const [description, setDescription] = useState<string>("");
   const [paused, setPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -151,7 +161,15 @@ export default function Timeline() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [day]);
 
+  function clearSelection() {
+    setSelected(new Set());
+    setSelectedRange(null);
+    setDescription("");
+  }
+
   function toggleSelect(id: number, range: boolean) {
+    // Any individual click invalidates the previously committed drag range.
+    setSelectedRange(null);
     const next = new Set(selected);
     if (range && selected.size > 0) {
       const ids = blocks.map((b) => b.id);
@@ -171,17 +189,32 @@ export default function Timeline() {
   }
 
   function selectSegment(seg: Segment, additive: boolean) {
+    setSelectedRange(null);
     const next = additive ? new Set(selected) : new Set<number>();
     for (const id of seg.blockIDs) next.add(id);
     setSelected(next);
   }
 
+  function rangeToISO(r: MsRange | null): { start: string; end: string } {
+    if (!r) return { start: "", end: "" };
+    return {
+      start: new Date(r.start).toISOString(),
+      end: new Date(r.end).toISOString(),
+    };
+  }
+
   async function assignTag(tagID: number) {
-    if (selected.size === 0) return;
+    if (selected.size === 0 && !selectedRange) return;
+    const { start, end } = rangeToISO(selectedRange);
     try {
-      await api.assignTagAndDescription([...selected], tagID, description);
-      setSelected(new Set());
-      setDescription("");
+      await api.assignTagAndDescription(
+        [...selected],
+        tagID,
+        description,
+        start,
+        end,
+      );
+      clearSelection();
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -192,7 +225,14 @@ export default function Timeline() {
     if (selected.size === 0) return;
     try {
       // tagID = -1 leaves the existing tag(s) untouched; only writes description.
-      await api.assignTagAndDescription([...selected], -1, description);
+      // No range is forwarded — description-only edits never spawn placeholders.
+      await api.assignTagAndDescription(
+        [...selected],
+        -1,
+        description,
+        "",
+        "",
+      );
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -235,15 +275,17 @@ export default function Timeline() {
     return clampPct((e.clientX - rect.left) / rect.width);
   }
 
-  function blocksInPctRange(a: number, b: number): FocusBlock[] {
+  function pctRangeToMs(a: number, b: number): MsRange {
     const lo = Math.min(a, b);
     const hi = Math.max(a, b);
-    const loMs = dayFromMs + lo * MS_PER_DAY;
-    const hiMs = dayFromMs + hi * MS_PER_DAY;
+    return { start: dayFromMs + lo * MS_PER_DAY, end: dayFromMs + hi * MS_PER_DAY };
+  }
+
+  function blocksInMsRange(r: MsRange): FocusBlock[] {
     return blocks.filter((bl) => {
       if (bl.is_idle) return false;
       const { start, end } = blockBounds(bl);
-      return end > loMs && start < hiMs;
+      return end > r.start && start < r.end;
     });
   }
 
@@ -254,6 +296,7 @@ export default function Timeline() {
     const pct = pctFromEvent(e);
     dragStartPctRef.current = pct;
     setDragRange({ a: pct, b: pct });
+    setHoverRange(pctRangeToMs(pct, pct));
     e.preventDefault();
   }
 
@@ -262,8 +305,7 @@ export default function Timeline() {
       if (dragStartPctRef.current == null) return;
       const pct = pctFromEvent(e);
       setDragRange({ a: dragStartPctRef.current, b: pct });
-      const inRange = blocksInPctRange(dragStartPctRef.current, pct);
-      setHovered(new Set(inRange.map((b) => b.id)));
+      setHoverRange(pctRangeToMs(dragStartPctRef.current, pct));
     }
     function onUp(e: MouseEvent) {
       if (dragStartPctRef.current == null) return;
@@ -271,14 +313,16 @@ export default function Timeline() {
       const endPct = pctFromEvent(e);
       dragStartPctRef.current = null;
       const moved = Math.abs(endPct - startPct) > 0.001;
-      const matched = blocksInPctRange(startPct, endPct);
-      if (moved && matched.length > 0) {
+      const r = pctRangeToMs(startPct, endPct);
+      const matched = moved ? blocksInMsRange(r) : [];
+      if (moved) {
         const next = e.shiftKey ? new Set(selected) : new Set<number>();
         for (const b of matched) next.add(b.id);
         setSelected(next);
+        setSelectedRange(r);
       }
       setDragRange(null);
-      setHovered(new Set());
+      setHoverRange(null);
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -291,15 +335,29 @@ export default function Timeline() {
 
   function onSegmentMouseEnter(seg: Segment) {
     if (dragStartPctRef.current != null) return;
-    setHovered(new Set(seg.blockIDs));
+    setHoverRange({ start: seg.start, end: seg.end });
   }
 
   function onSegmentMouseLeave() {
     if (dragStartPctRef.current != null) return;
-    setHovered(new Set());
+    setHoverRange(null);
   }
 
+  // -- Table filtering -----------------------------------------------------
+
+  const visibleBlocks = useMemo<FocusBlock[]>(() => {
+    if (!hoverRange) return blocks;
+    return blocks.filter((b) => {
+      const { start, end } = blockBounds(b);
+      return end > hoverRange.start && start < hoverRange.end;
+    });
+  }, [blocks, hoverRange]);
+
   // -- Render --------------------------------------------------------------
+
+  const hasSelection = selected.size > 0 || selectedRange != null;
+  const rangeMsLabel = (r: MsRange) =>
+    `${formatHHMM(new Date(r.start).toISOString())}–${formatHHMM(new Date(r.end).toISOString())}`;
 
   return (
     <div className="space-y-4">
@@ -397,8 +455,16 @@ export default function Timeline() {
             const width = (pctOfMs(seg.end) - pctOfMs(seg.start)) * 100;
             const tag = seg.tagID != null ? tagsByID[seg.tagID] : undefined;
             const bg = tag?.color ?? (seg.tagID == null ? "#475569" : "#4f8cff");
-            const isHovered = seg.blockIDs.some((id) => hovered.has(id));
+            const isHovered =
+              hoverRange != null &&
+              seg.end > hoverRange.start &&
+              seg.start < hoverRange.end;
             const isSelected = seg.blockIDs.every((id) => selected.has(id));
+            // A segment is "all placeholder" if every contained block is one —
+            // marked with a dashed outline so it reads as user-authored time.
+            const allPlaceholder = seg.blockIDs.every(
+              (id) => blocks.find((b) => b.id === id)?.is_placeholder,
+            );
             return (
               <div
                 key={`seg-${i}`}
@@ -414,7 +480,9 @@ export default function Timeline() {
                     : isHovered
                       ? "outline outline-1 outline-white/70"
                       : ""
-                } ${seg.tagID == null ? "opacity-50" : ""}`}
+                } ${seg.tagID == null ? "opacity-50" : ""} ${
+                  allPlaceholder ? "border border-dashed border-white/60" : ""
+                }`}
                 style={{
                   left: `${left}%`,
                   width: `${Math.max(width, 0.2)}%`,
@@ -422,6 +490,7 @@ export default function Timeline() {
                 }}
                 title={
                   (tag ? tag.name : "ohne Tag") +
+                  (allPlaceholder ? " · manuelle Zeitspanne" : "") +
                   (seg.description
                     ? `\n${seg.description}${seg.hasMixedDescriptions ? " (gemischt)" : ""}`
                     : "")
@@ -440,25 +509,47 @@ export default function Timeline() {
               }}
             />
           )}
+
+          {/* Committed selected-range marker (after mouse-up) */}
+          {!dragRange && selectedRange && (
+            <div
+              className="pointer-events-none absolute inset-y-0 rounded outline outline-1 outline-accent/70"
+              style={{
+                left: `${pctOfMs(selectedRange.start) * 100}%`,
+                width: `${(pctOfMs(selectedRange.end) - pctOfMs(selectedRange.start)) * 100}%`,
+              }}
+            />
+          )}
         </div>
         <div className="mt-1 text-[11px] text-slate-500">
-          Tipp: Zeitspanne ziehen, um alle Blöcke darin zu markieren ·
-          Hover auf einen Tag-Abschnitt hebt die Programme in der Liste hervor.
+          Tipp: Zeitspanne ziehen, um alle Blöcke darin zu markieren · Hover auf
+          einen Tag-Abschnitt filtert die Programmliste · Ein gezogener Bereich
+          ohne Programme erzeugt beim Taggen einen Platzhalter.
         </div>
       </div>
 
       {/* --- Selection / tagging panel ------------------------------------ */}
-      {selected.size > 0 && (
+      {hasSelection && (
         <div className="space-y-2 rounded bg-surface px-3 py-3">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm text-slate-300">
-              {selected.size} Block(s) markiert
-              {sharedTagID === "mixed" && (
-                <span className="ml-2 text-xs text-amber-300">
-                  (verschiedene Tags)
+              {selected.size > 0 && (
+                <>
+                  {selected.size} Block(s) markiert
+                  {sharedTagID === "mixed" && (
+                    <span className="ml-2 text-xs text-amber-300">
+                      (verschiedene Tags)
+                    </span>
+                  )}
+                </>
+              )}
+              {selectedRange && (
+                <span className="ml-2 text-xs text-slate-400">
+                  · Bereich {rangeMsLabel(selectedRange)}
+                  {selected.size === 0 && " (ohne Programme)"}
                 </span>
               )}
-              →
+              <span className="ml-1">→</span>
             </span>
             {tags.map((t) => (
               <button
@@ -472,14 +563,12 @@ export default function Timeline() {
             <button
               onClick={() => assignTag(0)}
               className="rounded bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600"
+              title="Tag entfernen — Platzhalterblöcke werden gelöscht"
             >
               Tag entfernen
             </button>
             <button
-              onClick={() => {
-                setSelected(new Set());
-                setDescription("");
-              }}
+              onClick={clearSelection}
               className="ml-auto rounded bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600"
             >
               Auswahl aufheben
@@ -495,7 +584,8 @@ export default function Timeline() {
             />
             <button
               onClick={saveDescriptionOnly}
-              className="rounded bg-accent px-3 py-1 text-xs text-white hover:bg-accent/80"
+              disabled={selected.size === 0}
+              className="rounded bg-accent px-3 py-1 text-xs text-white hover:bg-accent/80 disabled:opacity-50"
             >
               Beschreibung speichern
             </button>
@@ -503,32 +593,33 @@ export default function Timeline() {
           <p className="text-[11px] text-slate-500">
             „Tag wählen" speichert Tag und Beschreibung in einem Schritt;
             „Beschreibung speichern" lässt das bestehende Tagging unverändert.
+            Bei einem gezogenen Bereich ohne Programme wird beim Taggen ein
+            Platzhalter erzeugt — „Tag entfernen" löscht ihn wieder.
           </p>
         </div>
       )}
 
       {/* --- Block list (table view) -------------------------------------- */}
       <ul className="divide-y divide-slate-700 rounded bg-surface">
-        {blocks.length === 0 && (
+        {visibleBlocks.length === 0 && (
           <li className="px-3 py-6 text-center text-sm text-slate-400">
-            Keine Blöcke an diesem Tag.
+            {hoverRange
+              ? "Keine Programme im markierten Zeitraum."
+              : "Keine Blöcke an diesem Tag."}
           </li>
         )}
-        {blocks.map((b) => {
+        {visibleBlocks.map((b) => {
           const tag = b.tag_id ? tagsByID[b.tag_id] : undefined;
-          const isHover = hovered.has(b.id);
           const isSel = selected.has(b.id);
           return (
             <li
               key={b.id}
               onClick={(e) => toggleSelect(b.id, e.shiftKey)}
               className={`cursor-pointer px-3 py-2 text-sm transition-colors ${
-                isSel
-                  ? "bg-accent/20"
-                  : isHover
-                    ? "bg-accent/10"
-                    : "hover:bg-slate-700/40"
-              } ${b.is_idle ? "opacity-50" : ""}`}
+                isSel ? "bg-accent/20" : "hover:bg-slate-700/40"
+              } ${b.is_idle ? "opacity-50" : ""} ${
+                b.is_placeholder ? "italic" : ""
+              }`}
             >
               <div className="flex items-center gap-3">
                 <span className="w-24 font-mono text-xs text-slate-400">
@@ -539,10 +630,10 @@ export default function Timeline() {
                   {formatDuration(b.duration_sec)}
                 </span>
                 <span className="w-40 truncate text-slate-300">
-                  {b.process_name}
+                  {b.is_placeholder ? "(Manueller Eintrag)" : b.process_name}
                 </span>
                 <span className="flex-1 truncate text-slate-400">
-                  {b.window_title}
+                  {b.is_placeholder ? "—" : b.window_title}
                 </span>
                 {b.description && (
                   <span

@@ -114,12 +114,12 @@ export default function Settings() {
         <h3 className="text-sm font-semibold text-slate-200">Erfassung</h3>
         <Field
           label="Poll-Intervall (Sekunden)"
-          help="Wie oft der TimeTracker den fokussierten Prozess prüft. 1–30."
+          help="Wie oft der TimeTracker den fokussierten Prozess prüft. 1–300."
         >
           <input
             type="number"
             min={1}
-            max={30}
+            max={300}
             value={config.tracking.poll_interval_sec}
             onChange={(e) =>
               update("tracking", {

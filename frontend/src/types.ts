@@ -15,6 +15,7 @@ export interface FocusBlock {
   description?: string;
   personio_id?: string;
   synced_at?: string;
+  is_placeholder: boolean;
 }
 
 export interface Tag {

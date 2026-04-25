@@ -47,15 +47,23 @@ export const api = {
     bridge().AssignTag(blockIds, tagId) as Promise<void>,
 
   // tagId: 0 clears the tag, -1 leaves the tag untouched (description-only update).
+  // rangeStart/rangeEnd (RFC3339, "" = ignore): if a tag is being set, any
+  // sub-intervals of the range not covered by a non-idle block in blockIds are
+  // filled with synthetic placeholder blocks. When the tag is cleared, any
+  // placeholder blocks among blockIds are deleted.
   assignTagAndDescription: (
     blockIds: number[],
     tagId: number,
     description: string,
+    rangeStart: string,
+    rangeEnd: string,
   ) =>
     bridge().AssignTagAndDescription(
       blockIds,
       tagId,
       description,
+      rangeStart,
+      rangeEnd,
     ) as Promise<void>,
 
   setBlockDescription: (id: number, description: string) =>

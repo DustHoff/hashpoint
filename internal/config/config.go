@@ -178,8 +178,8 @@ func NormalizeTenant(raw string) string {
 // composite error with all violations.
 func (c *Config) Validate() error {
 	var errs []string
-	if c.Tracking.PollIntervalSec < 1 || c.Tracking.PollIntervalSec > 30 {
-		errs = append(errs, "tracking.poll_interval_sec must be in [1,30]")
+	if c.Tracking.PollIntervalSec < 1 || c.Tracking.PollIntervalSec > 300 {
+		errs = append(errs, "tracking.poll_interval_sec must be in [1,300]")
 	}
 	if c.Tracking.IdleThresholdMin < 1 || c.Tracking.IdleThresholdMin > 240 {
 		errs = append(errs, "tracking.idle_threshold_min must be in [1,240]")

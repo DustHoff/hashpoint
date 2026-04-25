@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -145,7 +146,14 @@ func (a *App) AssignTag(blockIDs []int64, tagID int64) error {
 // it sets the same tag and description on every block in blockIDs. tagID == 0
 // clears the tag; description == "" clears the description. Setting only
 // description is supported by passing tagID == -1 (leave tag untouched).
-func (a *App) AssignTagAndDescription(blockIDs []int64, tagID int64, description string) error {
+//
+// rangeStartRFC3339 / rangeEndRFC3339 are optional ("" = ignore). When set
+// alongside a positive tagID, any portion of [rangeStart, rangeEnd) not
+// already covered by a non-idle block in blockIDs is filled with synthetic
+// "placeholder" blocks tagged with tagID — extending the period synced to
+// Personio past actually tracked activity. When tagID == 0 (clear), any
+// blockIDs that are placeholders are deleted again.
+func (a *App) AssignTagAndDescription(blockIDs []int64, tagID int64, description, rangeStartRFC3339, rangeEndRFC3339 string) error {
 	var (
 		tagPtr   *int64
 		setTag   = true
@@ -161,6 +169,82 @@ func (a *App) AssignTagAndDescription(blockIDs []int64, tagID int64, description
 	if descTrim != "" {
 		descPtr = &descTrim
 	}
+
+	// Path A: clearing the tag — placeholder blocks among the IDs are deleted
+	// rather than left behind as orphaned synthetic gaps.
+	if setTag && tagID == 0 {
+		for _, id := range blockIDs {
+			b, err := a.deps.Blocks.Get(a.ctx, id)
+			if err != nil {
+				return fmt.Errorf("get block %d: %w", id, err)
+			}
+			if b == nil {
+				continue
+			}
+			if b.IsPlaceholder {
+				if err := a.deps.Blocks.Delete(a.ctx, id); err != nil {
+					return fmt.Errorf("delete placeholder %d: %w", id, err)
+				}
+				continue
+			}
+			if err := a.deps.Blocks.SetTag(a.ctx, id, nil, false); err != nil {
+				return fmt.Errorf("clear tag for block %d: %w", id, err)
+			}
+			if err := a.deps.Blocks.SetDescription(a.ctx, id, descPtr); err != nil {
+				return fmt.Errorf("set description for block %d: %w", id, err)
+			}
+		}
+		return nil
+	}
+
+	// Path B: tag set with explicit range — fill uncovered portions with
+	// placeholder blocks before tagging the existing ones.
+	if setTag && tagID > 0 && rangeStartRFC3339 != "" && rangeEndRFC3339 != "" {
+		rs, err := time.Parse(time.RFC3339, rangeStartRFC3339)
+		if err != nil {
+			return fmt.Errorf("parse range_start: %w", err)
+		}
+		re, err := time.Parse(time.RFC3339, rangeEndRFC3339)
+		if err != nil {
+			return fmt.Errorf("parse range_end: %w", err)
+		}
+		rs = rs.UTC()
+		re = re.UTC()
+		if re.After(rs) {
+			covers := make([]storage.FocusBlock, 0, len(blockIDs))
+			for _, id := range blockIDs {
+				b, err := a.deps.Blocks.Get(a.ctx, id)
+				if err != nil {
+					return fmt.Errorf("get block %d: %w", id, err)
+				}
+				if b == nil || b.IsIdle || b.EndTime == nil {
+					continue
+				}
+				covers = append(covers, *b)
+			}
+			sort.Slice(covers, func(i, j int) bool {
+				return covers[i].StartTime.Before(covers[j].StartTime)
+			})
+			for _, gap := range computeRangeGaps(rs, re, covers) {
+				ph := &storage.FocusBlock{
+					ProcessName:   "",
+					WindowTitle:   "",
+					StartTime:     gap.start,
+					EndTime:       &gap.end,
+					DurationSec:   int64(gap.end.Sub(gap.start).Round(time.Second).Seconds()),
+					TagID:         tagPtr,
+					IsPlaceholder: true,
+					Description:   descPtr,
+				}
+				if err := a.deps.Blocks.Open(a.ctx, ph); err != nil {
+					return fmt.Errorf("create placeholder block: %w", err)
+				}
+			}
+		}
+	}
+
+	// Apply tag + description to the existing IDs (placeholders get re-tagged
+	// alongside real blocks if they were already in the selection).
 	for _, id := range blockIDs {
 		if setTag {
 			if err := a.deps.Blocks.SetTag(a.ctx, id, tagPtr, false); err != nil {
@@ -172,6 +256,46 @@ func (a *App) AssignTagAndDescription(blockIDs []int64, tagID int64, description
 		}
 	}
 	return nil
+}
+
+type rangeGap struct{ start, end time.Time }
+
+// computeRangeGaps returns the sub-intervals of [rs, re) that are not covered
+// by any block in covers. covers must be sorted ascending by StartTime and
+// contain only closed, non-idle blocks.
+func computeRangeGaps(rs, re time.Time, covers []storage.FocusBlock) []rangeGap {
+	var gaps []rangeGap
+	cursor := rs
+	for _, b := range covers {
+		if b.EndTime == nil {
+			continue
+		}
+		bs := b.StartTime
+		be := *b.EndTime
+		if !be.After(rs) || !bs.Before(re) {
+			continue
+		}
+		if bs.After(cursor) {
+			end := bs
+			if end.After(re) {
+				end = re
+			}
+			if end.After(cursor) {
+				gaps = append(gaps, rangeGap{start: cursor, end: end})
+			}
+		}
+		if be.After(cursor) {
+			cursor = be
+		}
+		if !cursor.Before(re) {
+			cursor = re
+			break
+		}
+	}
+	if cursor.Before(re) {
+		gaps = append(gaps, rangeGap{start: cursor, end: re})
+	}
+	return gaps
 }
 
 // SetBlockDescription updates the description on a single block.
