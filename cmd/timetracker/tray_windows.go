@@ -24,6 +24,7 @@ func runTray(ctx context.Context, a *app.App, version string) {
 }
 
 func onTrayReady(ctx context.Context, a *app.App, version string) {
+	systray.SetIcon(trayIcon())
 	systray.SetTitle("Hashpoint")
 	systray.SetTooltip("Hashpoint TimeTracker " + version)
 
