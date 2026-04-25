@@ -50,18 +50,26 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
-
       - name: Frontend install
         working-directory: frontend
         run: npm ci || npm install
 
-      - name: Build with embedded version
+      - name: Frontend build
+        working-directory: frontend
+        run: npm run build
+
+      - name: Build Go binary with embedded version
         shell: bash
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "0"
         run: |
           DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          wails build -clean -ldflags "-X main.version=${{ needs.bump-tag.outputs.new_tag }} -X main.commit=${{ github.sha }} -X main.buildDate=${DATE}"
+          mkdir -p build/bin
+          go build -trimpath -tags desktop,production \
+            -ldflags "-s -w -H windowsgui -X main.version=${{ needs.bump-tag.outputs.new_tag }} -X main.commit=${{ github.sha }} -X main.buildDate=${DATE}" \
+            -o build/bin/hashpoint.exe ./cmd/timetracker
 
       - name: Compute SHA-256 checksums
         shell: pwsh
