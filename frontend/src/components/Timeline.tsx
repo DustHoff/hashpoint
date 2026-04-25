@@ -159,6 +159,11 @@ export default function Timeline() {
   const [paused, setPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  // Independent of `error`: refresh() clears `error` on success, which would
+  // otherwise wipe the sync result a few hundred ms after the user clicks.
+  const [syncMessage, setSyncMessage] = useState<
+    { level: "success" | "info" | "error"; text: string } | null
+  >(null);
 
   // Visible window for the strip — wheel zoom narrows it; shift+wheel pans;
   // double-click resets to the full day.
@@ -367,12 +372,42 @@ export default function Timeline() {
 
   async function syncDay() {
     setSyncing(true);
+    setSyncMessage(null);
     try {
       const r = await api.syncDay(startOfDayUTCISO(day));
-      if (r.Errors && r.Errors.length > 0) setError(r.Errors.join("; "));
-      else setError(null);
+      if (!r) {
+        setSyncMessage({
+          level: "error",
+          text: "Sync fehlgeschlagen — keine Antwort vom Backend.",
+        });
+      } else if (r.Errors && r.Errors.length > 0) {
+        setSyncMessage({
+          level: "error",
+          text: `Sync fehlgeschlagen: ${r.Errors.join("; ")}`,
+        });
+      } else if (r.Periods > 0) {
+        setSyncMessage({
+          level: "success",
+          text: `Synchronisiert: ${r.Periods} Periode(n), ${r.BlocksProcessed} Block/Blöcke gebucht${
+            r.BlocksSkipped > 0 ? ` (${r.BlocksSkipped} übersprungen)` : ""
+          }.`,
+        });
+      } else if (r.BlocksSkipped > 0) {
+        setSyncMessage({
+          level: "info",
+          text: `Nichts an Personio gesendet — alle ${r.BlocksSkipped} Block/Blöcke übersprungen. Tags müssen "Zu Personio synchronisieren" aktiviert und eine Personio-Projekt-ID hinterlegt haben.`,
+        });
+      } else {
+        setSyncMessage({
+          level: "info",
+          text: "Keine getaggten Blöcke für diesen Tag — bitte zuerst Blöcke taggen.",
+        });
+      }
     } catch (e) {
-      setError(String(e));
+      setSyncMessage({
+        level: "error",
+        text: `Sync fehlgeschlagen: ${String(e)}`,
+      });
     } finally {
       setSyncing(false);
       refresh();
@@ -607,6 +642,27 @@ export default function Timeline() {
       {error && (
         <div className="rounded bg-red-900/40 px-3 py-2 text-sm text-red-200">
           {error}
+        </div>
+      )}
+
+      {syncMessage && (
+        <div
+          className={`flex items-start justify-between gap-3 rounded px-3 py-2 text-sm ${
+            syncMessage.level === "success"
+              ? "bg-emerald-900/40 text-emerald-200"
+              : syncMessage.level === "error"
+                ? "bg-red-900/40 text-red-200"
+                : "bg-amber-900/30 text-amber-200"
+          }`}
+        >
+          <span>{syncMessage.text}</span>
+          <button
+            onClick={() => setSyncMessage(null)}
+            className="text-xs opacity-70 hover:opacity-100"
+            aria-label="Meldung schließen"
+          >
+            ✕
+          </button>
         </div>
       )}
 
