@@ -4,6 +4,7 @@ import TagManager from "./components/TagManager";
 import RuleManager from "./components/RuleManager";
 import Settings from "./components/Settings";
 import About from "./components/About";
+import PersonioBadge from "./components/PersonioBadge";
 
 type Tab = "timeline" | "tags" | "rules" | "settings" | "about";
 
@@ -37,6 +38,7 @@ export default function App() {
             </button>
           ))}
         </nav>
+        <PersonioBadge />
       </header>
       <main className="flex-1 overflow-auto p-4">
         {tab === "timeline" && <Timeline />}

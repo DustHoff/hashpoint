@@ -118,6 +118,9 @@ export const api = {
 
   // Personio interactive login --------------------------------------------
   personioStatus: () => bridge().PersonioStatus() as Promise<PersonioStatus>,
+  // Live cookie probe — same metadata as personioStatus plus a fresh
+  // `valid` flag from a HEAD-equivalent call against the Personio app root.
+  personioCheck: () => bridge().PersonioCheck() as Promise<PersonioStatus>,
   personioLogin: () => bridge().PersonioLogin() as Promise<void>,
   personioLogout: () => bridge().PersonioLogout() as Promise<void>,
 

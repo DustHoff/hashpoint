@@ -570,24 +570,36 @@ func (a *App) SaveConfig(c config.Config) error {
 // ----- Personio -----------------------------------------------------------
 
 // PersonioSessionStatus reports whether a captured session exists and what
-// its tenant is.
+// its tenant is. Valid is filled by PersonioCheck (a cheap network probe);
+// PersonioStatus only inspects the persisted blob and leaves Valid==false.
 type PersonioSessionStatus struct {
 	HasSession bool      `json:"has_session"`
 	Tenant     string    `json:"tenant"`
 	EmployeeID int64     `json:"employee_id"`
 	CapturedAt time.Time `json:"captured_at"`
+	// Valid reflects the result of the most recent network probe — true
+	// when the cookies still authenticate against Personio. Always false
+	// from PersonioStatus(); true/false from PersonioCheck() depending on
+	// the probe outcome.
+	Valid bool `json:"valid"`
+	// CheckedAt is when Valid was last produced. Zero when Valid is unset.
+	CheckedAt time.Time `json:"checked_at,omitempty"`
+	// Reason is a short human-readable hint shown in the status badge when
+	// the session is missing or invalid (e.g. "kein Tenant", "Session
+	// abgelaufen"). Empty when Valid is true.
+	Reason string `json:"reason,omitempty"`
 }
 
-// PersonioStatus returns the current login state.
+// PersonioStatus returns the current login state without hitting the network.
 func (a *App) PersonioStatus() PersonioSessionStatus {
 	if a.deps.Sessions == nil {
 		a.logger.Debug("app: PersonioStatus — no session store wired")
-		return PersonioSessionStatus{}
+		return PersonioSessionStatus{Reason: "kein Session-Speicher"}
 	}
 	s, err := a.deps.Sessions.Get()
 	if err != nil || s == nil {
 		a.logger.Debug("app: PersonioStatus — no stored session", "err", err)
-		return PersonioSessionStatus{}
+		return PersonioSessionStatus{Reason: "nicht angemeldet"}
 	}
 	a.logger.Debug("app: PersonioStatus",
 		"tenant", s.Tenant, "employee_id", s.EmployeeID, "captured_at", s.CapturedAt)
@@ -597,6 +609,35 @@ func (a *App) PersonioStatus() PersonioSessionStatus {
 		EmployeeID: s.EmployeeID,
 		CapturedAt: s.CapturedAt,
 	}
+}
+
+// PersonioCheck probes the Personio app root with the stored cookies and
+// reports whether the session still authenticates. The result populates the
+// Valid / CheckedAt / Reason fields in addition to the metadata returned by
+// PersonioStatus(), so the UI badge can colour-code itself.
+func (a *App) PersonioCheck() PersonioSessionStatus {
+	st := a.PersonioStatus()
+	if !st.HasSession {
+		st.CheckedAt = time.Now().UTC()
+		return st
+	}
+	sess, err := a.deps.Sessions.Get()
+	if err != nil || sess == nil {
+		st.HasSession = false
+		st.Reason = "Session konnte nicht gelesen werden"
+		st.CheckedAt = time.Now().UTC()
+		return st
+	}
+	if err := personio.Validate(a.ctx, sess); err != nil {
+		a.logger.Info("app: PersonioCheck — session invalid", "err", err)
+		st.Valid = false
+		st.Reason = "Session abgelaufen"
+		st.CheckedAt = time.Now().UTC()
+		return st
+	}
+	st.Valid = true
+	st.CheckedAt = time.Now().UTC()
+	return st
 }
 
 // PersonioLogin launches an interactive Chrome session for the user to log

@@ -81,4 +81,7 @@ export interface PersonioStatus {
   tenant: string;
   employee_id: number;
   captured_at?: string;
+  valid: boolean;
+  checked_at?: string;
+  reason?: string;
 }
