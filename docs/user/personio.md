@@ -1,96 +1,137 @@
 # Personio-Synchronisation
 
-Der TimeTracker kann erfasste und getaggte Blöcke als **Anwesenheitsbuchungen** an Personio übertragen. Die Synchronisation wird ausschließlich **manuell** angestoßen – es gibt keinen Auto-Sync.
+Der TimeTracker kann erfasste und getaggte Blöcke als **Anwesenheitsbuchungen**
+direkt in Personio anlegen — und zwar über dieselbe interne API, die auch
+die Personio-Web-Oberfläche nutzt. Dafür brauchen wir keine
+Admin-/API-Tokens auf Unternehmensebene; der TimeTracker meldet sich mit
+**Ihrem** persönlichen Personio-Login an.
+
+## Wie die Anmeldung funktioniert
+
+Die Personio-Login-Seite kann auf MFA, SSO etc. zurückgreifen — wir starten
+deshalb einen **eigenen Chrome-Browser**, in dem Sie ganz normal interaktiv
+einloggen. Der TimeTracker hört per
+[Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/)
+mit, was passiert, übernimmt die nach dem Login gesetzten **Session-Cookies**
+und schließt das Fenster wieder. Anschließend werden die Cookies verschlüsselt
+im Windows Credential Manager hinterlegt.
+
+> Es werden **keine** Anmeldedaten (Benutzername/Passwort/MFA-Code) an den
+> TimeTracker übertragen. Er sieht nur die nach erfolgreicher Anmeldung
+> gesetzten Cookies und den CSRF-Token.
 
 ## Voraussetzungen
 
-1. Personio API-Zugangsdaten (vom Administrator):
-   - **Client ID**
-   - **Client Secret**
-   - **Eigene Mitarbeiter-ID (Employee ID)**
-2. In `%APPDATA%\TimeTracker\config.toml` eintragen:
-   ```toml
-   [personio]
-   client_id = "<Client ID>"
-   employee_id = "<Mitarbeiter-ID>"
-   base_url = "https://api.personio.de/v1"
-   ```
-3. Beim ersten Sync wird das **Client Secret** abgefragt und im Windows Credential Manager als `TimeTracker.Personio` hinterlegt.
-4. Mindestens ein **Tag mit Personio Project ID** muss existieren (siehe [Tags verwalten](tags.md)).
+- **Google Chrome** muss installiert sein (das System-Chrome, nicht die
+  Wails-WebView). Edge wird nicht unterstützt.
+- Sie müssen die Personio-**Tenant-Subdomain** kennen
+  (`https://<tenant>.personio.de`) — meist der Firmenkurzname.
 
-## Sync auslösen
+## Personio konfigurieren
 
-### Tag synchronisieren
+1. Im Hauptfenster auf den Tab **Einstellungen** wechseln.
+2. Im Bereich **Personio** den Tenant eintragen (z. B. `onesi`).
+3. Auf **Einstellungen speichern** klicken.
 
-1. Tab **Zeitachse** öffnen.
-2. Den gewünschten Tag wählen (Datum-Eingabe, Vortag/Folgetag).
-3. Auf **Sync zu Personio** klicken.
-4. Während der Übertragung steht der Button auf *Synchronisiere…*.
-5. Nach Abschluss erscheint eine Ergebnis-Zeile:
-   `Periode(n): X, Blöcke verarbeitet: Y, Blöcke übersprungen: Z`
+## Anmelden
 
-### Schnell-Sync via Tray
+1. Auf **Bei Personio anmelden** klicken.
+2. Es öffnet sich ein neues Chrome-Fenster auf
+   `https://<tenant>.personio.de/login/index`. Loggen Sie sich dort wie
+   gewohnt ein (E-Mail, Passwort, ggf. MFA, ggf. SSO).
+3. Sobald Personio Sie auf das Dashboard weiterleitet, übernimmt der
+   TimeTracker automatisch die Session und schließt das Browserfenster.
+4. Im Anschluss validiert der TimeTracker die Session, indem er einen
+   anonymen Aufruf gegen die Personio-App macht. Werden Sie auf `/login`
+   zurückgeleitet, schlägt die Validierung fehl — sonst gilt die Session als
+   gültig.
+5. Nach erfolgreicher Validierung wird die Mitarbeiter-ID einmalig über
+   `/api/v1/navigation/context` ermittelt und mit der Session gespeichert.
 
-Im Tray-Menü gibt es den Punkt **Sync zu Personio (heute)**. Damit wird der heutige Tag synchronisiert, ohne dass das Hauptfenster geöffnet werden muss. Fehler erscheinen nur im Log.
+Status und Zeitstempel der erfassten Sitzung sehen Sie jederzeit unten im
+Personio-Bereich der Einstellungen.
+
+## Erneut anmelden / abmelden
+
+- **Erneut anmelden:** öffnet wieder das Chrome-Fenster und überschreibt die
+  bestehende Session. Notwendig, wenn Personio die Sitzung beendet hat (z. B.
+  nach längerer Inaktivität oder Passwortwechsel).
+- **Session löschen:** entfernt die im Credential Manager hinterlegten
+  Cookies. Bis zur nächsten Anmeldung sind keine Synchronisationen möglich.
+
+## Synchronisation auslösen
+
+Der eigentliche Sync funktioniert wie zuvor:
+
+1. Tab **Zeitachse** öffnen, Datum wählen.
+2. Auf **Sync zu Personio** klicken (oder im Tray-Menü
+   **Sync zu Personio (heute)**).
+3. Der TimeTracker holt zunächst das **Timesheet** für den/die gewählten
+   Tag(e) (`GET /svc/attendance-bff/v1/timesheet/{employee_id}`), gruppiert
+   die getaggten Blöcke pro Tag und Personio-Projekt-ID, und schreibt pro Tag
+   ein `PUT /svc/attendance-api/v1/days/{day_id}?autoFix=true&usedInTimesheet=true`
+   mit den Perioden. Hat ein Tag noch keinen Personio-Datensatz, generiert
+   der Client eine UUID und legt den Tag damit an (Upsert).
+4. Die Antwort wird im Banner unter der Zeitachse angezeigt:
+   `Periode(n): X, Blöcke verarbeitet: Y, Blöcke übersprungen: Z`.
 
 ## Was wird übertragen?
 
-Der TimeTracker fasst Blöcke pro Tag und Personio-Mapping zu **Perioden** zusammen:
+Pro Tag bündelt der TimeTracker alle nicht-idlen, getaggten Blöcke nach
+**Personio-Projekt-ID** (Pflichtfeld) und Kommentar. Daraus entsteht je
+Bucket eine Periode mit:
 
-- Alle Blöcke mit identischer (Datum, Project ID, Activity ID) werden zu **einer** Personio-Anwesenheit zusammengefasst.
-- **Startzeit:** früheste Blockstart-Zeit der Gruppe (in lokaler Zeitzone).
-- **Endzeit:** späteste Blockend-Zeit der Gruppe (in lokaler Zeitzone).
-- **Datum:** lokaler Tag.
-- **Kommentar:** automatisch aus Tag-Namen und -Beschreibungen erzeugt.
-  Ist am Block zusätzlich eine **Tätigkeitsbeschreibung** hinterlegt
-  (siehe [Zeitachse](zeiterfassung.md)), wird sie mit ` — ` an den
-  Kommentar angehängt; identische Texte werden je Aggregations-Bucket
-  dedupliziert.
-- **Project ID / Activity ID:** aus dem Tag-Mapping (mit Vererbung Sub-Tag → Eltern-Tag).
+| Feld | Quelle |
+| --- | --- |
+| `period_type` | immer `"work"` |
+| `start` / `end` | früheste Block-Startzeit / späteste Block-Endzeit, formatiert als lokal-naive ISO-8601 (`YYYY-MM-DDTHH:MM:SS`, ohne Zeitzone) |
+| `project_id` | Personio-Projekt-ID des Tags (mit Vererbung Sub-Tag → Eltern-Tag) — `null` falls nicht gesetzt |
+| `comment` | aus Tag-Namen + ggf. Tag-Beschreibung erzeugt; je Block-Beschreibung mit ` — ` angehängt |
+| `auto_generated` | immer `false` |
 
-Nach erfolgreicher Übertragung werden die zugehörigen Blöcke in der lokalen Datenbank mit `synced_at` und der Personio-Record-ID markiert.
+> Personios UI-API kennt im Period-Modell **keine Activity-ID**. Das alte
+> Feld `personio_activity_id` an Tags bleibt als Legacy-Feld bestehen und
+> wird derzeit beim Sync **nicht** verwendet — Personio kann das in einer
+> späteren UI-Version wieder einführen.
 
 ## Welche Blöcke werden synchronisiert?
 
-Ein Block wird übertragen, wenn **alle** folgenden Bedingungen erfüllt sind:
+Ein Block wird übertragen, wenn alle folgenden Bedingungen gelten:
 
-- ✅ Block ist nicht als **Idle** markiert
+- ✅ kein Idle-Block
 - ✅ Block hat einen **Tag**
-- ✅ Block hat **Start- und Endzeit** (kein offener Block)
+- ✅ Block hat **Start- und Endzeit**
 - ✅ Tag hat **Zu Personio synchronisieren = an**
 - ✅ Tag hat (ggf. via Vererbung) eine **nicht-leere Project-ID**
 
-Andernfalls wird er in der Statistik unter **„übersprungen"** gezählt.
+Andere Blöcke landen in der **„Übersprungen"-Statistik**.
 
-## Fehler & Wiederholungen
+## Fehlerbehandlung
 
-### Automatische Wiederholung
+| Fehlermeldung | Ursache | Lösung |
+| --- | --- | --- |
+| *„session expired — please re-authenticate"* | Personio hat die Cookies invalidiert. | In den Einstellungen **Erneut anmelden** klicken. |
+| *„kein Timesheet-Eintrag — Personio betrachtet diesen Tag als nicht buchbar"* | Personio liefert für diesen Tag keinen Eintrag. | Datum prüfen, ggf. liegt Personios Mitarbeiterdatum außerhalb. |
+| *„Tag ist in Personio … und kann nicht beschrieben werden"* | Tag ist `non_trackable` / `locked` (Wochenende, Feiertag, gesperrter Zeitraum). | In Personio prüfen, ggf. Sperre durch HR aufheben lassen. |
+| *„fetch employee id"* | `/api/v1/navigation/context` antwortet nicht erwartungsgemäß. | Erneut anmelden. |
+| *„kein Personio-Tenant in den Einstellungen hinterlegt"* | Tenant in den Einstellungen leer. | Tenant eintragen, speichern. |
 
-Der HTTP-Client wiederholt fehlgeschlagene Requests automatisch:
+Authentifizierungs-Header werden niemals geloggt; Cookies liegen
+verschlüsselt im Windows Credential Manager (`TimeTracker.PersonioSession`).
 
-- Bis zu **3 Versuche** mit exponentiellem Backoff
-- Wiederholt bei `5xx` (Serverfehler) und `429` (Rate-Limit)
-- Bei `401` (nicht autorisiert) wird das OAuth-Token erneuert und der Request einmal wiederholt
-- Rate-Limit-Header (`X-RateLimit-*`) werden beachtet
+## Manuell prüfen
 
-### Fehleranzeige
+Wer das Cookie selber inspizieren möchte:
 
-Schlägt der Sync trotz Wiederholungen fehl, erscheint im Tab **Zeitachse** ein rotes Banner mit der Fehlermeldung. Häufige Ursachen:
-
-| Fehler | Ursache & Lösung |
-| --- | --- |
-| `unauthorized` / `401` | Client ID, Secret oder Employee ID falsch. In `config.toml` und Credential Manager prüfen. |
-| `connection refused` / Timeout | Keine Internet-Verbindung oder VPN benötigt. |
-| `forbidden` / `403` | API-Rechte fehlen. Personio-Administrator kontaktieren. |
-| `unprocessable entity` / `422` | Ungültige Project-/Activity-Kombination. Tag-Mappings prüfen. |
-| `Blöcke übersprungen: N` (alle) | Keine Blöcke erfüllen die Sync-Bedingungen. Tags und Idle-Status prüfen. |
-
-## Erneut synchronisieren
-
-Wird ein bereits synchronisierter Tag erneut synchronisiert, prüft der Client per Personio-Record-ID, welche Blöcke schon übertragen wurden. Doppelte Buchungen werden so vermieden. Korrekturen (z. B. Tag-Änderung an einem bereits synchronisierten Block) werden aktuell **nicht** automatisch nach Personio gespiegelt – in solchen Fällen die Buchung in Personio manuell anpassen.
+1. **Windows-Suche → „Anmeldeinformationsverwaltung"**.
+2. Reiter **Windows-Anmeldeinformationen** → Eintrag
+   `TimeTracker.PersonioSession`.
+3. Inhalt ist ein JSON-Blob (`tenant`, `employee_id`, `cookies[]`,
+   `captured_at`).
 
 ## Datenschutz
 
-- Authentifizierungs-Header werden **niemals** geloggt.
-- Logs enthalten keine Fenstertitel oberhalb von Debug-Level.
-- Das Client Secret liegt verschlüsselt im Windows Credential Manager und wird nicht im Klartext gespeichert.
+- Es wird **nur** mit der konfigurierten Personio-Subdomain kommuniziert.
+- Auth-Header (`X-CSRF-Token`, Cookie) erscheinen niemals im Log.
+- Beim Klick auf **Session löschen** wird der Credential-Manager-Eintrag
+  vollständig entfernt.

@@ -2,10 +2,12 @@
 // `window.go.*` directly.
 
 import type {
+  AppConfig,
   FocusBlock,
-  Tag,
+  PersonioStatus,
   Rule,
   SyncResult,
+  Tag,
   VersionInfo,
 } from "../types";
 
@@ -97,4 +99,13 @@ export const api = {
   syncDay: (dayISO: string) => bridge().SyncDay(dayISO) as Promise<SyncResult>,
   syncRange: (from: string, to: string) =>
     bridge().SyncRange(from, to) as Promise<SyncResult>,
+
+  // Settings ---------------------------------------------------------------
+  getConfig: () => bridge().GetConfig() as Promise<AppConfig>,
+  saveConfig: (c: AppConfig) => bridge().SaveConfig(c) as Promise<void>,
+
+  // Personio interactive login --------------------------------------------
+  personioStatus: () => bridge().PersonioStatus() as Promise<PersonioStatus>,
+  personioLogin: () => bridge().PersonioLogin() as Promise<void>,
+  personioLogout: () => bridge().PersonioLogout() as Promise<void>,
 };

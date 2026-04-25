@@ -8,9 +8,7 @@ func Default() *Config {
 			IdleThresholdMin: 5,
 		},
 		Personio: PersonioConfig{
-			ClientID:   "",
-			EmployeeID: "",
-			BaseURL:    "https://api.personio.de/v1",
+			Tenant: "",
 		},
 		UI: UIConfig{
 			Autostart: true,

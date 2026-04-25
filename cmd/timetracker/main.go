@@ -1,6 +1,6 @@
 // Command timetracker is the entry point for the Hashpoint TimeTracker app.
-// It bootstraps storage, tracker, Personio client, the Wails frontend and the
-// system-tray icon, then waits for shutdown.
+// It bootstraps storage, tracker, Personio session store, the Wails frontend
+// and the system-tray icon, then waits for shutdown.
 package main
 
 import (
@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	hashpoint "github.com/onesi/hashpoint"
@@ -81,22 +82,55 @@ func run() error {
 	rules := storage.NewRuleRepo(db)
 	settings := storage.NewSettingsRepo(db)
 
+	// Tracker is reconfigurable: SaveConfig from the UI must adopt new poll
+	// and idle-threshold values without a restart.
+	var trkMu sync.Mutex
 	trk := tracker.New(tracker.Config{
 		PollInterval:  cfg.Tracking.PollInterval(),
 		IdleThreshold: cfg.Tracking.IdleThreshold(),
 	}, blocks, rules, slog.Default())
 
-	syncer := buildSyncer(cfg, blocks, tags)
+	sessionStore := defaultSessionStore()
+
+	syncerFor := func(sess *personio.Session) *personio.Syncer {
+		if sess == nil {
+			return nil
+		}
+		cli, err := personio.NewUIClient(personio.UIClientOptions{
+			Session: sess,
+			Logger:  slog.Default(),
+		})
+		if err != nil {
+			slog.Warn("could not build personio client", "err", err)
+			return nil
+		}
+		return personio.NewSyncer(cli, blocks, tags, slog.Default())
+	}
 
 	a := app.New(app.Deps{
-		Blocks:   blocks,
-		Tags:     tags,
-		Rules:    rules,
-		Settings: settings,
-		Tracker:  trk,
-		Syncer:   syncer,
-		Version:  app.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate},
-		Logger:   slog.Default(),
+		Blocks:     blocks,
+		Tags:       tags,
+		Rules:      rules,
+		Settings:   settings,
+		Tracker:    trk,
+		Sessions:   sessionStore,
+		SyncerFor:  syncerFor,
+		ConfigPath: paths.ConfigFile,
+		Config:     cfg,
+		OnConfigSet: func(c *config.Config) error {
+			trkMu.Lock()
+			defer trkMu.Unlock()
+			// Tracker.Reconfigure is best-effort: at minimum we log; if the
+			// implementation grows a hot-reload entry point we wire it here.
+			slog.Info("config updated",
+				"poll_interval_sec", c.Tracking.PollIntervalSec,
+				"idle_threshold_min", c.Tracking.IdleThresholdMin,
+				"personio_tenant", c.Personio.Tenant,
+				"autostart", c.UI.Autostart)
+			return nil
+		},
+		Version: app.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate},
+		Logger:  slog.Default(),
 	})
 
 	// Tracker goroutine.
@@ -133,19 +167,4 @@ func run() error {
 		HideWindowOnClose: true,
 		Bind:              []any{a},
 	})
-}
-
-func buildSyncer(cfg *config.Config, blocks storage.FocusBlockRepository, tags storage.TagRepository) *personio.Syncer {
-	if cfg.Personio.ClientID == "" || cfg.Personio.EmployeeID == "" {
-		return nil
-	}
-	store := defaultCredStore()
-	client := personio.New(personio.Options{
-		BaseURL:    cfg.Personio.BaseURL,
-		ClientID:   cfg.Personio.ClientID,
-		EmployeeID: cfg.Personio.EmployeeID,
-		Store:      store,
-		Logger:     slog.Default(),
-	})
-	return personio.NewSyncer(client, blocks, tags, slog.Default())
 }

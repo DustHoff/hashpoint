@@ -15,8 +15,8 @@ import (
 	"github.com/onesi/hashpoint/internal/winapi"
 )
 
-func defaultCredStore() personio.CredentialStore {
-	return personio.NewWinCredStore()
+func defaultSessionStore() personio.SessionStore {
+	return personio.NewWinCredSessionStore()
 }
 
 func runTray(ctx context.Context, a *app.App, version string) {

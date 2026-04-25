@@ -1,8 +1,10 @@
 // Package config loads, validates and persists the user-configurable
 // TimeTracker settings stored as TOML in %APPDATA%\TimeTracker\config.toml.
 //
-// Personio Client Secret is intentionally NOT stored in this file; it lives
-// in the Windows Credential Manager (see internal/personio).
+// Personio authentication is cookie-based (session captured via the
+// CDP-driven login flow); cookies and the resolved employee id are
+// kept in the Windows Credential Manager — never in this file and
+// never logged.
 package config
 
 import (
@@ -10,6 +12,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -28,12 +32,12 @@ type TrackingConfig struct {
 	IdleThresholdMin int `toml:"idle_threshold_min"`
 }
 
-// PersonioConfig holds non-secret Personio API parameters.
-// The client secret is stored in Windows Credential Manager.
+// PersonioConfig holds the Personio tenant subdomain. The session cookies
+// captured via the CDP login flow live in the Windows Credential Manager.
 type PersonioConfig struct {
-	ClientID   string `toml:"client_id"`
-	EmployeeID string `toml:"employee_id"`
-	BaseURL    string `toml:"base_url"`
+	// Tenant is the Personio subdomain (e.g. "onesi" → https://onesi.personio.de).
+	// May be left empty on first start; populated via the in-app settings UI.
+	Tenant string `toml:"tenant"`
 }
 
 // UIConfig holds UI-related preferences.
@@ -57,6 +61,16 @@ func (t TrackingConfig) PollInterval() time.Duration {
 // IdleThreshold returns the idle threshold as a duration.
 func (t TrackingConfig) IdleThreshold() time.Duration {
 	return time.Duration(t.IdleThresholdMin) * time.Minute
+}
+
+// AppURL returns the Personio web app URL for the configured tenant. Returns
+// the empty string when no tenant is configured yet.
+func (p PersonioConfig) AppURL() string {
+	t := strings.TrimSpace(p.Tenant)
+	if t == "" {
+		return ""
+	}
+	return "https://" + t + ".personio.de"
 }
 
 // ResolvePaths returns OS-specific paths for data and config.
@@ -122,6 +136,8 @@ func Save(path string, cfg *Config) error {
 	return nil
 }
 
+var tenantRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
+
 // Validate checks the config for invalid combinations and ranges. It returns a
 // composite error with all violations.
 func (c *Config) Validate() error {
@@ -132,8 +148,12 @@ func (c *Config) Validate() error {
 	if c.Tracking.IdleThresholdMin < 1 || c.Tracking.IdleThresholdMin > 240 {
 		errs = append(errs, "tracking.idle_threshold_min must be in [1,240]")
 	}
-	if c.Personio.BaseURL == "" {
-		errs = append(errs, "personio.base_url must not be empty")
+	if t := strings.TrimSpace(c.Personio.Tenant); t != "" {
+		// Empty is allowed (user has not yet configured Personio); but if set,
+		// it must look like a subdomain label.
+		if !tenantRe.MatchString(strings.ToLower(t)) {
+			errs = append(errs, "personio.tenant must be a Personio subdomain (a-z, 0-9, hyphen)")
+		}
 	}
 	if len(errs) == 0 {
 		return nil

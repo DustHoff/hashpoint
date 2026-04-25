@@ -26,9 +26,30 @@ func TestValidate_RejectsOutOfRange(t *testing.T) {
 		t.Fatal("expected error for huge idle threshold")
 	}
 	c = Default()
-	c.Personio.BaseURL = ""
+	c.Personio.Tenant = "Has Spaces"
 	if err := c.Validate(); err == nil {
-		t.Fatal("expected error for empty base url")
+		t.Fatal("expected error for invalid tenant subdomain")
+	}
+}
+
+func TestValidate_AcceptsEmptyTenant(t *testing.T) {
+	t.Parallel()
+	c := Default()
+	c.Personio.Tenant = ""
+	if err := c.Validate(); err != nil {
+		t.Fatalf("expected empty tenant to be valid (pre-onboarding); got %v", err)
+	}
+}
+
+func TestPersonio_AppURL(t *testing.T) {
+	t.Parallel()
+	c := Default()
+	if got := c.Personio.AppURL(); got != "" {
+		t.Errorf("expected empty AppURL when tenant unset; got %q", got)
+	}
+	c.Personio.Tenant = "onesi"
+	if got, want := c.Personio.AppURL(), "https://onesi.personio.de"; got != want {
+		t.Errorf("AppURL=%q want %q", got, want)
 	}
 }
 
@@ -50,8 +71,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "config.toml")
 	c := Default()
-	c.Personio.ClientID = "abc"
-	c.Personio.EmployeeID = "42"
+	c.Personio.Tenant = "onesi"
 	if err := Save(p, c); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -59,7 +79,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if c2.Personio.ClientID != "abc" || c2.Personio.EmployeeID != "42" {
+	if c2.Personio.Tenant != "onesi" {
 		t.Errorf("round-trip lost data: %+v", c2.Personio)
 	}
 }

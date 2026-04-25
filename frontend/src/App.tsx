@@ -2,14 +2,16 @@ import { useState } from "react";
 import Timeline from "./components/Timeline";
 import TagManager from "./components/TagManager";
 import RuleManager from "./components/RuleManager";
+import Settings from "./components/Settings";
 import About from "./components/About";
 
-type Tab = "timeline" | "tags" | "rules" | "about";
+type Tab = "timeline" | "tags" | "rules" | "settings" | "about";
 
 const tabs: { id: Tab; label: string }[] = [
   { id: "timeline", label: "Zeitachse" },
   { id: "tags", label: "Tags" },
   { id: "rules", label: "Auto-Tagging" },
+  { id: "settings", label: "Einstellungen" },
   { id: "about", label: "Über" },
 ];
 
@@ -40,6 +42,7 @@ export default function App() {
         {tab === "timeline" && <Timeline />}
         {tab === "tags" && <TagManager />}
         {tab === "rules" && <RuleManager />}
+        {tab === "settings" && <Settings />}
         {tab === "about" && <About />}
       </main>
     </div>

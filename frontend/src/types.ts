@@ -55,3 +55,29 @@ export interface VersionInfo {
   commit: string;
   build_date: string;
 }
+
+export interface TrackingConfig {
+  poll_interval_sec: number;
+  idle_threshold_min: number;
+}
+
+export interface PersonioConfig {
+  tenant: string;
+}
+
+export interface UIConfig {
+  autostart: boolean;
+}
+
+export interface AppConfig {
+  tracking: TrackingConfig;
+  personio: PersonioConfig;
+  ui: UIConfig;
+}
+
+export interface PersonioStatus {
+  has_session: boolean;
+  tenant: string;
+  employee_id: number;
+  captured_at?: string;
+}

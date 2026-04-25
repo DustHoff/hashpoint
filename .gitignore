@@ -37,6 +37,11 @@ Thumbs.db
 *.log
 log/
 
+# HAR network captures — may contain real session cookies / CSRF tokens.
+# Keep these strictly local; they are reference material only.
+*.har
+docs/har-samples/
+
 # Local DB during development
 *.db
 *.db-journal

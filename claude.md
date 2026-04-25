@@ -111,11 +111,12 @@ Dieses Dokument legt verbindliche Konventionen für die Entwicklung des TimeTrac
 
 ## 8. Personio-Client
 
-- HTTP-Client mit Timeout (10s default), kein `http.DefaultClient`.
-- Retry mit exponentiellem Backoff für 5xx und 429, max. 3 Versuche.
-- Rate-Limit-Header (`X-RateLimit-*`) auswerten und respektieren.
-- Token-Refresh transparent im Client, nicht im Caller.
-- Request/Response-Bodies bei Fehlern auf `Debug`-Level loggen, **nie** Auth-Header.
+- Auth ist **cookie-basiert**: das `XSRF-TOKEN`-Cookie wird als `X-CSRF-Token`-Header gespiegelt; das eigentliche Session-Cookie wird per Cookie-Jar mitgeschickt. Die Cookies werden interaktiv per `chromedp`/CDP aus einer realen Chrome-Instanz übernommen (siehe `internal/personio/auth_cdp.go`).
+- HTTP-Client mit Timeout (15s default), kein `http.DefaultClient`. Redirects werden **nicht** automatisch verfolgt — `30x → /login` ist das Signal für eine abgelaufene Session.
+- `401`/`403` und Login-Redirects ⇒ `ErrSessionExpired`. Caller müssen den User zur erneuten Anmeldung schicken.
+- UI-API ≠ public API: relevant sind `GET /api/v1/navigation/context`, `GET /svc/attendance-bff/v1/timesheet/{employee_id}` und `PUT /svc/attendance-api/v1/days/{day_id}?autoFix=true&usedInTimesheet=true`. Der CSRF-Header heißt **`x-athena-xsrf-token`** und sein Wert ist das URL-dekodierte XSRF-Cookie. Body-Times sind lokal-naiv (`YYYY-MM-DDTHH:MM:SS`).
+- Host: `<tenant>.app.personio.com` (App-Shell). Beim CDP-Login wird der tatsächliche `window.location.host` als `Session.AppHost` erfasst und für alle API-Calls verwendet — Login-Subdomain (`<tenant>.personio.de`) und API-Host können verschieden sein.
+- Auth-Header (`X-CSRF-Token`, Cookie-Inhalte) **nie** loggen — nur Body-Snippets bei Fehlern auf `Debug`.
 - Mock-Server für Tests via `httptest.Server`, kein Hit gegen echte Personio-API in CI.
 
 ---

@@ -9,8 +9,8 @@ import (
 	"github.com/onesi/hashpoint/internal/personio"
 )
 
-func defaultCredStore() personio.CredentialStore {
-	return personio.EnvCredentialStore{}
+func defaultSessionStore() personio.SessionStore {
+	return personio.NewMemorySessionStore()
 }
 
 // runTray is a no-op on non-Windows builds — used only by linting on Linux CI.

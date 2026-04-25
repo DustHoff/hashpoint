@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/onesi/hashpoint/internal/config"
 	"github.com/onesi/hashpoint/internal/personio"
 	"github.com/onesi/hashpoint/internal/storage"
 	"github.com/onesi/hashpoint/internal/tagging"
@@ -31,9 +33,16 @@ type Deps struct {
 	Rules    storage.RuleRepository
 	Settings storage.SettingsRepository
 	Tracker  *tracker.Tracker
-	Syncer   *personio.Syncer
-	Version  VersionInfo
-	Logger   *slog.Logger
+	Sessions personio.SessionStore
+	// SyncerFor returns a Syncer wired against the given session, or nil if
+	// the session is not usable (e.g. tenant unset). Constructed lazily so
+	// session changes from the UI take effect immediately.
+	SyncerFor   func(*personio.Session) *personio.Syncer
+	ConfigPath  string
+	Config      *config.Config
+	OnConfigSet func(*config.Config) error
+	Version     VersionInfo
+	Logger      *slog.Logger
 }
 
 // App is the Wails-bound facade. Methods on *App must be safe to call from
@@ -42,6 +51,9 @@ type App struct {
 	ctx    context.Context
 	deps   Deps
 	logger *slog.Logger
+
+	mu  sync.Mutex
+	cfg *config.Config
 }
 
 // New constructs the app from its dependencies.
@@ -49,7 +61,7 @@ func New(deps Deps) *App {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
-	return &App{deps: deps, logger: deps.Logger}
+	return &App{deps: deps, logger: deps.Logger, cfg: deps.Config}
 }
 
 // Startup is invoked by Wails once the runtime is ready.
@@ -324,25 +336,136 @@ func (a *App) IsTrackingPaused() bool {
 	return a.deps.Tracker.Paused()
 }
 
+// ----- Settings -----------------------------------------------------------
+
+// GetConfig returns the current config (Personio session secrets are not
+// part of this struct).
+func (a *App) GetConfig() *config.Config {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cfg == nil {
+		return config.Default()
+	}
+	c := *a.cfg
+	return &c
+}
+
+// SaveConfig validates and persists a new config. The runtime adopts the new
+// values via the OnConfigSet callback supplied at construction time.
+func (a *App) SaveConfig(c config.Config) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if a.deps.ConfigPath != "" {
+		if err := config.Save(a.deps.ConfigPath, &c); err != nil {
+			return fmt.Errorf("save config: %w", err)
+		}
+	}
+	a.mu.Lock()
+	a.cfg = &c
+	a.mu.Unlock()
+	if a.deps.OnConfigSet != nil {
+		if err := a.deps.OnConfigSet(&c); err != nil {
+			a.logger.Warn("OnConfigSet returned error", "err", err)
+		}
+	}
+	return nil
+}
+
 // ----- Personio -----------------------------------------------------------
+
+// PersonioSessionStatus reports whether a captured session exists and what
+// its tenant is.
+type PersonioSessionStatus struct {
+	HasSession bool      `json:"has_session"`
+	Tenant     string    `json:"tenant"`
+	EmployeeID int64     `json:"employee_id"`
+	CapturedAt time.Time `json:"captured_at"`
+}
+
+// PersonioStatus returns the current login state.
+func (a *App) PersonioStatus() PersonioSessionStatus {
+	if a.deps.Sessions == nil {
+		return PersonioSessionStatus{}
+	}
+	s, err := a.deps.Sessions.Get()
+	if err != nil || s == nil {
+		return PersonioSessionStatus{}
+	}
+	return PersonioSessionStatus{
+		HasSession: true,
+		Tenant:     s.Tenant,
+		EmployeeID: s.EmployeeID,
+		CapturedAt: s.CapturedAt,
+	}
+}
+
+// PersonioLogin launches an interactive Chrome session for the user to log
+// into Personio, then captures and persists the resulting session cookies.
+// Returns once login is complete (or an error on timeout/cancel).
+func (a *App) PersonioLogin() error {
+	cfg := a.GetConfig()
+	tenant := strings.TrimSpace(cfg.Personio.Tenant)
+	if tenant == "" {
+		return errors.New("kein Personio-Tenant in den Einstellungen hinterlegt")
+	}
+	if a.deps.Sessions == nil {
+		return errors.New("session store nicht verfügbar")
+	}
+
+	res, err := personio.Login(a.ctx, personio.LoginConfig{
+		Tenant:  tenant,
+		Logger:  a.logger,
+		Timeout: 5 * time.Minute,
+	})
+	if err != nil {
+		return fmt.Errorf("personio login: %w", err)
+	}
+
+	if err := personio.Validate(a.ctx, res.Session); err != nil {
+		return fmt.Errorf("validierung der erfassten Session fehlgeschlagen: %w", err)
+	}
+
+	// Resolve employee id once so subsequent sync calls don't need to.
+	if cli, err := personio.NewUIClient(personio.UIClientOptions{Session: res.Session, Logger: a.logger}); err == nil {
+		if eid, err := cli.FetchEmployeeID(a.ctx); err == nil && eid != 0 {
+			res.Session.EmployeeID = eid
+		} else if err != nil {
+			a.logger.Warn("could not pre-resolve employee id", "err", err)
+		}
+	}
+
+	if err := a.deps.Sessions.Set(res.Session); err != nil {
+		return fmt.Errorf("session speichern: %w", err)
+	}
+	a.logger.Info("personio login: session stored",
+		"tenant", res.Session.Tenant, "employee_id", res.Session.EmployeeID)
+	return nil
+}
+
+// PersonioLogout deletes the persisted session.
+func (a *App) PersonioLogout() error {
+	if a.deps.Sessions == nil {
+		return nil
+	}
+	return a.deps.Sessions.Delete()
+}
 
 // SyncDay triggers a sync of the given UTC day.
 func (a *App) SyncDay(dayRFC3339 string) (*personio.Result, error) {
-	if a.deps.Syncer == nil {
-		return nil, errors.New("personio not configured")
-	}
 	day, err := time.Parse(time.RFC3339, dayRFC3339)
 	if err != nil {
 		return nil, fmt.Errorf("parse day: %w", err)
 	}
-	return a.deps.Syncer.SyncDay(a.ctx, day.UTC())
+	syncer, err := a.currentSyncer()
+	if err != nil {
+		return nil, err
+	}
+	return syncer.SyncDay(a.ctx, day.UTC())
 }
 
 // SyncRange triggers a sync of the given range.
 func (a *App) SyncRange(fromRFC3339, toRFC3339 string) (*personio.Result, error) {
-	if a.deps.Syncer == nil {
-		return nil, errors.New("personio not configured")
-	}
 	from, err := time.Parse(time.RFC3339, fromRFC3339)
 	if err != nil {
 		return nil, err
@@ -351,5 +474,24 @@ func (a *App) SyncRange(fromRFC3339, toRFC3339 string) (*personio.Result, error)
 	if err != nil {
 		return nil, err
 	}
-	return a.deps.Syncer.SyncRange(a.ctx, from.UTC(), to.UTC())
+	syncer, err := a.currentSyncer()
+	if err != nil {
+		return nil, err
+	}
+	return syncer.SyncRange(a.ctx, from.UTC(), to.UTC())
+}
+
+func (a *App) currentSyncer() (*personio.Syncer, error) {
+	if a.deps.Sessions == nil || a.deps.SyncerFor == nil {
+		return nil, errors.New("personio nicht konfiguriert")
+	}
+	sess, err := a.deps.Sessions.Get()
+	if err != nil {
+		return nil, fmt.Errorf("keine Session — bitte über Einstellungen anmelden: %w", err)
+	}
+	syncer := a.deps.SyncerFor(sess)
+	if syncer == nil {
+		return nil, errors.New("personio: Syncer konnte nicht aufgebaut werden (Tenant gesetzt?)")
+	}
+	return syncer, nil
 }

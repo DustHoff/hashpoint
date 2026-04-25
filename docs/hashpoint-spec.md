@@ -106,22 +106,77 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
 - Bulk-Apply: Regel rückwirkend auf bereits erfasste, ungetaggte Blöcke anwenden.
 
 ### 2.5 Personio-Synchronisation
-- Aggregation aller getaggten Blöcke eines Tages **pro effektivem Mapping**.
-- API-Aufruf an Personio Attendance API (`POST /v1/company/attendances`).
-- Auth via OAuth Client Credentials (Client ID / Secret aus Settings).
-- **Beschreibungs-Format** (`comment`-Feld in Personio): zusammengesetzt als
-  `"<parent_name> <sub_name> <sub_description>"`
-  Beispiel: Block mit Sub-Tag `#frontend` (Beschreibung „Refactoring Login-Flow") unter Parent `#projekta` →
-  `"#projekta #frontend Refactoring Login-Flow"`
-  - Bei Block direkt auf Parent-Tag: nur `"<parent_name>"`.
-  - Fehlt die Beschreibung: weglassen, kein Trennzeichen-Rest.
-  - Bei Aggregation mehrerer Blöcke mit unterschiedlichen Sub-Tags unter gleichem Mapping: Beschreibungen mit `; ` zusammengeführt und dedupliziert.
-  - Pro Block kann eine zusätzliche **Tätigkeitsbeschreibung** (`focus_blocks.description`) gesetzt sein. Existiert sie, wird sie mit `" — "` an den aus Tag/Sub-Tag generierten Kommentar angehängt; ist kein Tag-Kommentar vorhanden, ersetzt die Beschreibung diesen.
-- Sync-Modi:
-  - Einzelner Tag (Button im Hauptfenster)
-  - Zeitraum
-- Idempotenz: bereits synchronisierte Blöcke werden mit `personio_attendance_id` markiert; erneuter Sync erfordert Bestätigung (Update statt Create).
-- Fehlerbehandlung: HTTP-Fehler werden geloggt und im UI angezeigt.
+
+**Hintergrund:** Personios *öffentliche* Attendance-API (`POST /v1/company/attendances`) erlaubt nur **firmenweite** OAuth-Credentials, keine pro-Mitarbeiter-Auth. Da der TimeTracker für die Endanwender-Hand gedacht ist, wird stattdessen die **interne UI-API** angesprochen, die auch die Personio-Web-Oberfläche selbst verwendet. Der Auth-Flow ahmt einen normalen Browser-Login nach.
+
+#### 2.5.1 Auth-Flow (CDP-getriebenes Login)
+1. User trägt im **Einstellungen-Tab** seine **Tenant-Subdomain** ein (z. B. `onesi`).
+2. Klick auf „Bei Personio anmelden" startet eine **eigene Chrome-Instanz** (über `chromedp`/Chrome DevTools Protocol) auf `https://<tenant>.personio.de/login/index`.
+3. Der User loggt sich interaktiv ein (E-Mail, Passwort, ggf. MFA, ggf. SSO-Redirect).
+4. Der TimeTracker pollt die `Page.frameNavigated`-Events: sobald die URL nicht mehr unter `/login` liegt und auf `<tenant>.personio.de` verbleibt, gilt der Login als erfolgreich.
+5. Mittels `Network.GetCookies` werden alle Cookies der Domain ausgelesen, das Chrome-Fenster wird geschlossen.
+6. **Validierung:** anonymer GET-Request gegen `https://<tenant>.personio.de/` mit den erfassten Cookies. Folgt Personio mit `30x → /login`, ist die Session ungültig; sonst gültig.
+7. Persistenz: das Session-Blob (`tenant`, `employee_id`, `cookies[]`, `captured_at`) wird verschlüsselt im **Windows Credential Manager** unter `TimeTracker.PersonioSession` abgelegt. Die `config.toml` enthält **keine** Auth-Daten.
+8. Einmalig wird `GET /api/v1/navigation/context` aufgerufen, um die Mitarbeiter-ID des Users in die Session zu schreiben.
+
+#### 2.5.2 UI-API-Endpunkte (verifiziert per HAR-Capture)
+
+Personio betreibt zwei verschiedene Domains: `<tenant>.personio.de` ist die Login-/Marketing-Subdomain, `<tenant>.app.personio.com` ist die eigentliche App-Shell, gegen die alle UI-API-Calls laufen. Der TimeTracker erfasst beim Login den **AppHost** (z. B. `lmis.app.personio.com`) aus dem post-Login-`window.location.host` und persistiert ihn in der Session.
+
+Pro Request:
+- Cookies via `cookiejar` automatisch angehängt.
+- Header **`x-athena-xsrf-token`** wird aus dem XSRF-Cookie (URL-dekodiert) gespiegelt. Fallback: jedes Cookie, dessen Name `xsrf` oder `csrf` enthält.
+- `Origin` und `Referer` zeigen auf `https://<app_host>`.
+
+| Methode + Pfad | Zweck |
+| --- | --- |
+| `GET /api/v1/navigation/context` | Eigene Mitarbeiter-ID auflösen (`data.user.id`). |
+| `GET /svc/attendance-bff/v1/timesheet/{employee_id}?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&timezone=Europe%2FBerlin&source=OVERTIME_SERVICE` | Pro Tag im Zeitraum: `day_id`, `state` (`trackable` / `locked` / `non_trackable` / …), bestehende `periods`. |
+| `PUT /svc/attendance-api/v1/days/{day_id}?autoFix=true&usedInTimesheet=true` | Perioden eines Tages setzen (Upsert über UUID). |
+| `DELETE /svc/attendance-api/v1/days/{day_id}` | Tag löschen (aktuell nicht vom Sync verwendet). |
+
+**day_id-Auflösung:** Das Timesheet liefert pro Tag entweder eine bestehende `day_id` oder einen leeren Wert. Hat der Tag noch keinen Personio-Datensatz und ist `trackable`, **generiert der Client clientseitig eine UUID v4** und sendet damit den PUT — der Endpunkt erzeugt den Datensatz dann. Tage mit `state=non_trackable` (Wochenenden, Sperren) werden als „nicht buchbar" mit Fehler übersprungen.
+
+**Body von `PUT /svc/attendance-api/v1/days/{day_id}`:**
+```json
+{
+  "employee_id": 10076878,
+  "periods": [
+    {
+      "id":             "<uuidv4>",
+      "comment":        "#projekta #frontend — Refactoring Login-Flow",
+      "period_type":    "work",
+      "project_id":     4711,
+      "start":          "2026-04-25T08:00:00",
+      "end":            "2026-04-25T09:00:00",
+      "auto_generated": false
+    }
+  ],
+  "original_periods": [...same...],
+  "geolocation":      null,
+  "is_from_clock_out": false
+}
+```
+
+**Zeitformat:** lokal-naiv (`YYYY-MM-DDTHH:MM:SS`, kein `Z`/Offset). Timezone wird über den `timezone`-Parameter im Timesheet-Request gesetzt; Default `Europe/Berlin`.
+
+> Die UI-API kennt im Period-Modell **keine Activity-ID**. `tags.personio_activity_id` bleibt deshalb als **Legacy-Feld** im Schema/UI bestehen, wird aber beim Sync nicht verwendet. Sollte Personio das Feld in einer späteren UI-Version wieder einführen, kann der Syncer es ohne Schemaänderung berücksichtigen.
+
+#### 2.5.3 Aggregation
+- Blöcke werden pro **lokalem Datum** und **effektiver Personio-Project-ID** + **Kommentar** gruppiert.
+- Pro Gruppe entsteht **eine** Period; `start` = früheste Block-Startzeit, `end` = späteste Block-Endzeit (UTC, vom Server in lokale Zeit konvertiert).
+- `period_type` ist immer `"work"`. Pausen werden aktuell nicht synchronisiert.
+- Kommentar-Format: `"<parent_name> <sub_name> <sub_description>"` aus dem Tag-Mapping, plus optional ` — <block_description>` aus `focus_blocks.description`. Identische Kommentare werden je Bucket dedupliziert.
+
+#### 2.5.4 Fehlerbehandlung
+- Antwort `401`/`403` oder `30x → /login` ⇒ `ErrSessionExpired`. Im UI: rotes Banner mit Hinweis auf erneute Anmeldung; Tray-Sync schreibt nur ins Log.
+- Antwort `4xx` (z. B. Tag nicht buchbar) ⇒ Eintrag im `Result.Errors` mit Datum + Statusmeldung.
+- Auth-Header (`X-CSRF-Token`, Cookies) werden **nie** geloggt.
+
+#### 2.5.5 Sync-Modi & Idempotenz
+- Einzelner Tag (Timeline-Button + Tray-„Sync zu Personio (heute)").
+- Zeitraum (`SyncRange`) — aktuell intern, im UI nicht exponiert.
+- Personio's `PUT day` ist idempotent (ersetzt den Tag). Bereits synchronisierte Blöcke werden lokal mit `synced_at` und der `day_id` als `personio_id` markiert. Erneuter Sync überschreibt den Personio-Tag mit dem aktuellen Stand der Blöcke; manuelle Änderungen in Personio gehen dabei verloren.
 
 ---
 
@@ -154,7 +209,8 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
 - **SQLite:** `modernc.org/sqlite` (pure Go, kein CGO nötig → einfacher Build) ODER `mattn/go-sqlite3` falls Performance kritisch.
 - **Windows API:** `golang.org/x/sys/windows` für `GetForegroundWindow` etc.
 - **UI-Fenster:** **Wails v2** (Go-Backend + Web-Frontend). Frontend-Stack: **TypeScript + React + Vite**, Styling mit **Tailwind CSS**. Timeline via `vis-timeline` oder `react-calendar-timeline`.
-- **HTTP-Client:** Standard `net/http` mit Retry-Wrapper.
+- **HTTP-Client:** Standard `net/http` (Cookie-Jar über `net/http/cookiejar`).
+- **Personio-Login (CDP):** `github.com/chromedp/chromedp` steuert eine reale Chrome-Instanz für den interaktiven Login. Das System-Chrome auf dem Host muss installiert sein.
 - **Konfiguration:** TOML mit `BurntSushi/toml`.
 
 ### 4.3 Datenmodell (SQLite)

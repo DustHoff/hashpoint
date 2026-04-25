@@ -1,14 +1,63 @@
 # Einstellungen
 
-Aktuell besitzt der TimeTracker **kein** Einstellungs-Dialog im Hauptfenster. Alle technischen Einstellungen werden direkt in der Konfigurationsdatei vorgenommen. Personio-Zugangsdaten werden zusätzlich im Windows Credential Manager hinterlegt.
+Alle Einstellungen lassen sich direkt im **Hauptfenster** im Tab
+**Einstellungen** vornehmen. Geänderte Werte werden anschließend in
+`%APPDATA%\TimeTracker\config.toml` persistiert. Ein direktes Editieren der
+TOML-Datei ist weiterhin möglich, aber für den Normalbetrieb nicht mehr
+nötig.
 
-## Konfigurationsdatei `config.toml`
+## Aufbau des Tabs
 
-**Pfad:** `%APPDATA%\TimeTracker\config.toml`
+Der Tab ist in drei Abschnitte unterteilt:
 
-Beim ersten Start wird die Datei automatisch mit Standardwerten erzeugt. Sie kann mit jedem Texteditor (z. B. Notepad, VS Code, Notepad++) bearbeitet werden. Nach einer Änderung ist ein **Neustart der Anwendung** erforderlich.
+1. **Erfassung** — Polling-Intervall und Idle-Schwelle.
+2. **Oberfläche** — Autostart-Schalter.
+3. **Personio** — Tenant-Subdomain und interaktive Anmeldung.
 
-### Beispiel-Konfiguration
+Am unteren Rand befindet sich der Button **Einstellungen speichern**.
+Änderungen treten erst nach dem Speichern in Kraft. Erfolge und
+Validierungsfehler werden oben im Tab als Banner angezeigt.
+
+## Erfassung
+
+| Feld | Default | Bereich | Bedeutung |
+| --- | --- | --- | --- |
+| **Poll-Intervall (Sekunden)** | `2` | `1`–`30` | Wie oft prüft der TimeTracker, welches Fenster im Vordergrund ist. Niedriger = präziser, aber höhere CPU-Last. |
+| **Idle-Schwelle (Minuten)** | `5` | `1`–`240` | Nach wie vielen Minuten ohne Tastatur-/Maus-Eingabe der laufende Block beendet und als **Idle** markiert wird. |
+
+## Oberfläche
+
+| Feld | Default | Bedeutung |
+| --- | --- | --- |
+| **Mit Windows starten (Autostart)** | an | Trägt den TimeTracker als Autostart-Eintrag in die Windows-Registry ein bzw. entfernt ihn. Lässt sich auch über das Tray-Menü umschalten. |
+
+## Personio
+
+| Feld | Bedeutung |
+| --- | --- |
+| **Tenant (Subdomain)** | Subdomain Ihrer Personio-Instanz. Beispiel: `onesi` → `https://onesi.personio.de`. Erlaubt sind Kleinbuchstaben, Ziffern und Bindestriche. |
+
+Im Personio-Abschnitt sehen Sie zusätzlich den aktuellen Login-Status und
+können die Anmeldung anstoßen oder zurücksetzen:
+
+- **Bei Personio anmelden / Erneut anmelden** — startet den interaktiven
+  Login-Flow. Dabei öffnet sich ein eigenes Chrome-Fenster auf der
+  Personio-Login-Seite. Sobald die Anmeldung abgeschlossen ist, übernimmt
+  der TimeTracker die Session-Cookies und schließt den Browser.
+- **Session löschen** — entfernt die hinterlegten Cookies. Der Sync ist
+  danach erst nach erneutem Login wieder möglich.
+
+> Cookies werden verschlüsselt im **Windows Credential Manager** unter
+> `TimeTracker.PersonioSession` abgelegt; die `config.toml` enthält keine
+> sensiblen Daten.
+
+Details zum Login-Flow, zu Validierung und Fehlerbehandlung siehe
+[Personio-Synchronisation](personio.md).
+
+## `config.toml` — direkter Zugriff (optional)
+
+Wer den Editor lieber direkt verwendet, kann die Datei unter
+`%APPDATA%\TimeTracker\config.toml` öffnen. Beispielinhalt:
 
 ```toml
 [tracking]
@@ -16,66 +65,20 @@ poll_interval_sec = 2
 idle_threshold_min = 5
 
 [personio]
-client_id = ""
-employee_id = ""
-base_url = "https://api.personio.de/v1"
+tenant = "onesi"
 
 [ui]
 autostart = true
 ```
 
-### Abschnitt `[tracking]` – Erfassung
-
-| Feld | Typ | Default | Wertebereich | Bedeutung |
-| --- | --- | --- | --- | --- |
-| `poll_interval_sec` | Integer | `2` | `1`–`30` | Wie häufig (in Sekunden) der TimeTracker prüft, welches Fenster im Vordergrund ist. Niedrigere Werte = präzisere Erfassung, höhere CPU-Last. |
-| `idle_threshold_min` | Integer | `5` | `1`–`240` | Nach wie vielen Minuten ohne Tastatur- oder Maus-Eingabe der aktuelle Block als **Idle** markiert und beendet wird. |
-
-### Abschnitt `[personio]` – Personio-Anbindung
-
-| Feld | Typ | Default | Bedeutung |
-| --- | --- | --- | --- |
-| `client_id` | String | `""` | OAuth2-Client-ID für die Personio-API. Pflichtfeld für Sync. |
-| `employee_id` | String | `""` | Eigene Personio-Mitarbeiter-ID, für die Anwesenheiten gebucht werden. Pflichtfeld für Sync. |
-| `base_url` | String | `https://api.personio.de/v1` | Basis-URL der Personio-API. Nur ändern, wenn von Personio explizit eine andere URL vorgegeben wird. |
-
-> Das **Client Secret** liegt **nicht** in der Konfigurationsdatei, sondern verschlüsselt im Windows Credential Manager. Siehe Abschnitt unten.
-
-### Abschnitt `[ui]` – Oberfläche
-
-| Feld | Typ | Default | Bedeutung |
-| --- | --- | --- | --- |
-| `autostart` | Boolean | `true` | Startet die Anwendung automatisch beim Windows-Login. Lässt sich auch im Tray-Menü umschalten. |
-
-## Validierung
-
-Beim Laden der Konfiguration werden die Werte geprüft. Schlägt die Validierung fehl, startet der TimeTracker **nicht** und gibt eine klare Fehlermeldung im Log aus. Häufige Fehler:
-
-- `poll_interval_sec` außerhalb `[1, 30]`
-- `idle_threshold_min` außerhalb `[1, 240]`
-- `personio.base_url` ist leer
-
-In diesem Fall die Datei korrigieren oder vorübergehend löschen – die Anwendung legt beim nächsten Start eine neue Datei mit Standardwerten an.
-
-## Personio Client Secret
-
-Das Personio Client Secret wird **nicht** in der Klartext-Konfiguration abgelegt, sondern im **Windows Credential Manager** unter dem Eintrag `TimeTracker.Personio` gespeichert.
-
-### Secret hinterlegen
-
-1. Personio API-Credentials einholen (Client ID und Client Secret beim Administrator anfragen).
-2. `client_id` und `employee_id` in `config.toml` eintragen.
-3. Beim ersten Synchronisations-Versuch fragt die Anwendung nach dem Client Secret und speichert es im Credential Manager.
-
-### Secret prüfen oder ändern
-
-- **Windows-Suche → "Anmeldeinformationsverwaltung"** öffnen.
-- Reiter **Windows-Anmeldeinformationen** → Eintrag `TimeTracker.Personio` suchen.
-- Eintrag bearbeiten oder löschen. Beim nächsten Sync wird das Secret bei Bedarf erneut abgefragt.
+Nach manuellen Änderungen ist ein **Neustart** der Anwendung erforderlich,
+damit die neuen Werte greifen. Beim Speichern aus der UI heraus wird die
+Datei direkt aktualisiert; Werte werden zudem zur Laufzeit übernommen.
 
 ## Speicherorte (kurz)
 
 - **Konfiguration:** `%APPDATA%\TimeTracker\config.toml`
 - **Datenbank:** `%LOCALAPPDATA%\TimeTracker\data.db`
 - **Logs:** `%LOCALAPPDATA%\TimeTracker\log\`
-- **Personio-Secret:** Windows Credential Manager (`TimeTracker.Personio`)
+- **Personio-Session:** Windows Credential Manager
+  (`TimeTracker.PersonioSession`)
