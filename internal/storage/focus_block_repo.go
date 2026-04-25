@@ -20,12 +20,12 @@ func NewFocusBlockRepo(db *sql.DB) *FocusBlockRepo {
 
 const (
 	focusColumns = `id, process_name, process_path, window_title, start_time, end_time,
-		duration_sec, is_idle, tag_id, auto_tagged, personio_id, synced_at`
+		duration_sec, is_idle, tag_id, auto_tagged, description, personio_id, synced_at`
 
 	insertFocusBlock = `INSERT INTO focus_blocks (
 		process_name, process_path, window_title, start_time, end_time,
-		duration_sec, is_idle, tag_id, auto_tagged
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		duration_sec, is_idle, tag_id, auto_tagged, description
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	closeFocusBlock = `UPDATE focus_blocks
 		SET end_time = ?, duration_sec = ?
@@ -47,6 +47,8 @@ const (
 
 	updateTag = `UPDATE focus_blocks SET tag_id = ?, auto_tagged = ? WHERE id = ?`
 
+	updateDescription = `UPDATE focus_blocks SET description = ? WHERE id = ?`
+
 	markSynced = `UPDATE focus_blocks SET personio_id = ?, synced_at = ? WHERE id = ?`
 
 	deleteBlock = `DELETE FROM focus_blocks WHERE id = ?`
@@ -54,7 +56,7 @@ const (
 	updateBlock = `UPDATE focus_blocks
 		SET process_name = ?, process_path = ?, window_title = ?,
 		    start_time = ?, end_time = ?, duration_sec = ?,
-		    is_idle = ?, tag_id = ?, auto_tagged = ?
+		    is_idle = ?, tag_id = ?, auto_tagged = ?, description = ?
 		WHERE id = ?`
 )
 
@@ -70,6 +72,7 @@ func (r *FocusBlockRepo) Open(ctx context.Context, b *FocusBlock) error {
 		boolToInt(b.IsIdle),
 		nullableInt64(b.TagID),
 		boolToInt(b.AutoTagged),
+		nullableStringPtr(b.Description),
 	)
 	if err != nil {
 		return fmt.Errorf("insert block: %w", err)
@@ -164,6 +167,12 @@ func (r *FocusBlockRepo) SetTag(ctx context.Context, id int64, tagID *int64, aut
 	return err
 }
 
+// SetDescription writes the per-block activity description (nil/empty = clear).
+func (r *FocusBlockRepo) SetDescription(ctx context.Context, id int64, description *string) error {
+	_, err := r.db.ExecContext(ctx, updateDescription, nullableStringPtr(description), id)
+	return err
+}
+
 // MarkSynced records the Personio attendance ID for the block.
 func (r *FocusBlockRepo) MarkSynced(ctx context.Context, id int64, personioID string, at time.Time) error {
 	_, err := r.db.ExecContext(ctx, markSynced, personioID, at.UTC(), id)
@@ -222,6 +231,7 @@ func (r *FocusBlockRepo) Split(ctx context.Context, id int64, at time.Time) (*Fo
 		boolToInt(right.IsIdle),
 		nullableInt64(right.TagID),
 		boolToInt(right.AutoTagged),
+		nullableStringPtr(right.Description),
 	)
 	if err != nil {
 		return nil, err
@@ -250,6 +260,7 @@ func (r *FocusBlockRepo) Update(ctx context.Context, b *FocusBlock) error {
 		boolToInt(b.IsIdle),
 		nullableInt64(b.TagID),
 		boolToInt(b.AutoTagged),
+		nullableStringPtr(b.Description),
 		b.ID,
 	)
 	return err
@@ -277,6 +288,7 @@ func scanFocusBlock(row *sql.Row) (*FocusBlock, error) {
 		processPath sql.NullString
 		end         sql.NullTime
 		tagID       sql.NullInt64
+		description sql.NullString
 		personioID  sql.NullString
 		syncedAt    sql.NullTime
 		isIdle      int64
@@ -284,12 +296,12 @@ func scanFocusBlock(row *sql.Row) (*FocusBlock, error) {
 	)
 	err := row.Scan(
 		&b.ID, &b.ProcessName, &processPath, &b.WindowTitle, &b.StartTime, &end,
-		&b.DurationSec, &isIdle, &tagID, &autoTagged, &personioID, &syncedAt,
+		&b.DurationSec, &isIdle, &tagID, &autoTagged, &description, &personioID, &syncedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
-	hydrate(&b, processPath, end, tagID, personioID, syncedAt, isIdle, autoTagged)
+	hydrate(&b, processPath, end, tagID, description, personioID, syncedAt, isIdle, autoTagged)
 	return &b, nil
 }
 
@@ -299,6 +311,7 @@ func scanFocusBlockRows(rows *sql.Rows) (*FocusBlock, error) {
 		processPath sql.NullString
 		end         sql.NullTime
 		tagID       sql.NullInt64
+		description sql.NullString
 		personioID  sql.NullString
 		syncedAt    sql.NullTime
 		isIdle      int64
@@ -306,17 +319,17 @@ func scanFocusBlockRows(rows *sql.Rows) (*FocusBlock, error) {
 	)
 	err := rows.Scan(
 		&b.ID, &b.ProcessName, &processPath, &b.WindowTitle, &b.StartTime, &end,
-		&b.DurationSec, &isIdle, &tagID, &autoTagged, &personioID, &syncedAt,
+		&b.DurationSec, &isIdle, &tagID, &autoTagged, &description, &personioID, &syncedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
-	hydrate(&b, processPath, end, tagID, personioID, syncedAt, isIdle, autoTagged)
+	hydrate(&b, processPath, end, tagID, description, personioID, syncedAt, isIdle, autoTagged)
 	return &b, nil
 }
 
 func hydrate(b *FocusBlock, processPath sql.NullString, end sql.NullTime, tagID sql.NullInt64,
-	personioID sql.NullString, syncedAt sql.NullTime, isIdle, autoTagged int64) {
+	description, personioID sql.NullString, syncedAt sql.NullTime, isIdle, autoTagged int64) {
 	if processPath.Valid {
 		b.ProcessPath = processPath.String
 	}
@@ -327,6 +340,10 @@ func hydrate(b *FocusBlock, processPath sql.NullString, end sql.NullTime, tagID 
 	if tagID.Valid {
 		v := tagID.Int64
 		b.TagID = &v
+	}
+	if description.Valid {
+		v := description.String
+		b.Description = &v
 	}
 	if personioID.Valid {
 		v := personioID.String

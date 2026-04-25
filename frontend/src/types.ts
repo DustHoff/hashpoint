@@ -12,6 +12,7 @@ export interface FocusBlock {
   is_idle: boolean;
   tag_id?: number;
   auto_tagged: boolean;
+  description?: string;
   personio_id?: string;
   synced_at?: string;
 }

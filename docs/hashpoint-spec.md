@@ -36,16 +36,45 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
 - **Autostart**-Option (Registry-Eintrag unter `HKCU\...\Run`).
 
 ### 2.3 Hauptfenster (Zeitachse)
-- Tagesansicht mit horizontaler oder vertikaler Timeline.
+- Tagesansicht zweigeteilt: **horizontaler Zeitstrahl oben** (24-Stunden-Strip),
+  **Tabellenliste aller Programme/Erfassungen darunter**.
 - Datums-Navigation (Vor/Zurück, Datepicker).
-- Anzeige aller Fokus-Blöcke des Tages mit:
+- Tabellenliste je Block mit:
   - Programm-Icon/-Name
   - Fenstertitel
   - Start–Ende, Dauer
-- **Multi-Select** mehrerer aufeinanderfolgender Blöcke.
-- **Tag-Zuweisung** an die Auswahl (Dropdown vorhandener Tags + Neuanlage).
+  - Tätigkeitsbeschreibung (siehe 2.3.1)
+  - zugewiesener Tag (mit Auto-Tag-Indikator ⚙)
+- **Zeitstrahl-Strip** rendert den Tag von 00:00 bis 24:00 als horizontalen
+  Balken. Zusammenhängende Blöcke mit demselben Tag werden zu **einem
+  Tag-Segment** zusammengefasst und in der Tag-Farbe dargestellt; Idle-Blöcke
+  als blasser Streifen, ungetaggte Blöcke als grauer Streifen.
+- **Range-Selektion auf dem Strip:** Per Drag (linke Maustaste) wird eine
+  Zeitspanne aufgezogen; alle nicht-idlen Blöcke, die diesen Bereich schneiden,
+  werden in einem Schwung selektiert. `Shift+Drag` erweitert die bestehende
+  Auswahl additiv.
+- **Klick auf ein Tag-Segment** wählt alle Blöcke des Segments aus
+  (`Shift+Klick` = additiv).
+- **Hover-Highlight:** Mouse-Over auf einem Tag-Segment hebt die zugehörigen
+  Programmzeilen in der Tabelle hervor (und umgekehrt soll auf Hover über eine
+  Zeile das Segment im Strip betont werden).
+- **Multi-Select in der Tabelle:** Klick toggelt, `Shift+Klick` wählt einen
+  zusammenhängenden Bereich.
+- **Tag- & Beschreibungs-Zuweisung** an die Auswahl: Tag-Buttons + freies
+  Textfeld (siehe 2.3.1). Auswahl löschen ist explizit möglich.
 - Aggregierte Ansicht: Summen pro Tag.
 - Manuelles Editieren (Block teilen, Zeit anpassen, löschen).
+
+### 2.3.1 Tätigkeitsbeschreibung pro Block
+- Jeder Fokus-Block hat ein optionales freies Textfeld `description`.
+- Über die Selektion auf dem Strip oder in der Tabelle lassen sich beliebig
+  viele Blöcke auf einmal mit demselben Tag **und** derselben Beschreibung
+  versehen — typische Anwendung: ein zusammenhängender Tag-Block, in dem
+  mehrere Programme involviert waren (IDE + Browser + Terminal), bekommt
+  einen einzelnen Beschreibungstext (z. B. „Refactoring Login-Flow").
+- Beim Personio-Sync wird die Block-Beschreibung an den aus Tag/Sub-Tag
+  generierten Kommentar angehängt (Format: `"<tag-comment> — <description>"`);
+  Beschreibungen werden je Aggregations-Bucket dedupliziert.
 
 ### 2.4 Tags (mit Hierarchie)
 - Frei definierbare Tags in **zwei Ebenen**: Parent-Tag (z. B. `#projekta`) und Sub-Tag (z. B. `#frontend`, `#meeting`, `#review`).
@@ -87,6 +116,7 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
   - Bei Block direkt auf Parent-Tag: nur `"<parent_name>"`.
   - Fehlt die Beschreibung: weglassen, kein Trennzeichen-Rest.
   - Bei Aggregation mehrerer Blöcke mit unterschiedlichen Sub-Tags unter gleichem Mapping: Beschreibungen mit `; ` zusammengeführt und dedupliziert.
+  - Pro Block kann eine zusätzliche **Tätigkeitsbeschreibung** (`focus_blocks.description`) gesetzt sein. Existiert sie, wird sie mit `" — "` an den aus Tag/Sub-Tag generierten Kommentar angehängt; ist kein Tag-Kommentar vorhanden, ersetzt die Beschreibung diesen.
 - Sync-Modi:
   - Einzelner Tag (Button im Hauptfenster)
   - Zeitraum
@@ -140,6 +170,7 @@ CREATE TABLE focus_blocks (
   is_idle         BOOLEAN DEFAULT 0,
   tag_id          INTEGER,
   auto_tagged     BOOLEAN DEFAULT 0,
+  description     TEXT,                    -- freie Tätigkeitsbeschreibung pro Block
   personio_id     TEXT,
   synced_at       DATETIME,
   FOREIGN KEY (tag_id) REFERENCES tags(id)

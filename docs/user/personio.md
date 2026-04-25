@@ -42,6 +42,10 @@ Der TimeTracker fasst Blöcke pro Tag und Personio-Mapping zu **Perioden** zusam
 - **Endzeit:** späteste Blockend-Zeit der Gruppe (in lokaler Zeitzone).
 - **Datum:** lokaler Tag.
 - **Kommentar:** automatisch aus Tag-Namen und -Beschreibungen erzeugt.
+  Ist am Block zusätzlich eine **Tätigkeitsbeschreibung** hinterlegt
+  (siehe [Zeitachse](zeiterfassung.md)), wird sie mit ` — ` an den
+  Kommentar angehängt; identische Texte werden je Aggregations-Bucket
+  dedupliziert.
 - **Project ID / Activity ID:** aus dem Tag-Mapping (mit Vererbung Sub-Tag → Eltern-Tag).
 
 Nach erfolgreicher Übertragung werden die zugehörigen Blöcke in der lokalen Datenbank mit `synced_at` und der Personio-Record-ID markiert.

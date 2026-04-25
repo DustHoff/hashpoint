@@ -140,6 +140,15 @@ func buildPeriods(blocks []storage.FocusBlock, tags map[int64]storage.Tag) []Per
 		}
 		bk.blocks = append(bk.blocks, b)
 		c := m.BuildComment()
+		if b.Description != nil {
+			if d := strings.TrimSpace(*b.Description); d != "" {
+				if c == "" {
+					c = d
+				} else {
+					c = c + " — " + d
+				}
+			}
+		}
 		if c != "" {
 			if _, dup := bk.seen[c]; !dup {
 				bk.seen[c] = struct{}{}

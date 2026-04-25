@@ -22,6 +22,8 @@ type FocusBlockRepository interface {
 	// SetTag assigns or clears the tag of a block. autoTagged flags whether the
 	// assignment came from the rules engine.
 	SetTag(ctx context.Context, id int64, tagID *int64, autoTagged bool) error
+	// SetDescription writes the per-block activity description (nil/empty clears it).
+	SetDescription(ctx context.Context, id int64, description *string) error
 	// MarkSynced records the Personio attendance ID for the block.
 	MarkSynced(ctx context.Context, id int64, personioID string, at time.Time) error
 	// Split splits a block at the given UTC time. Returns the new (right) block.

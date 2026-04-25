@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/onesi/hashpoint/internal/personio"
@@ -100,6 +101,49 @@ func (a *App) AssignTag(blockIDs []int64, tagID int64) error {
 		}
 	}
 	return nil
+}
+
+// AssignTagAndDescription is the bulk-tagging primitive used by the Timeline:
+// it sets the same tag and description on every block in blockIDs. tagID == 0
+// clears the tag; description == "" clears the description. Setting only
+// description is supported by passing tagID == -1 (leave tag untouched).
+func (a *App) AssignTagAndDescription(blockIDs []int64, tagID int64, description string) error {
+	var (
+		tagPtr   *int64
+		setTag   = true
+		descPtr  *string
+		descTrim = strings.TrimSpace(description)
+	)
+	switch {
+	case tagID < 0:
+		setTag = false
+	case tagID > 0:
+		tagPtr = &tagID
+	}
+	if descTrim != "" {
+		descPtr = &descTrim
+	}
+	for _, id := range blockIDs {
+		if setTag {
+			if err := a.deps.Blocks.SetTag(a.ctx, id, tagPtr, false); err != nil {
+				return fmt.Errorf("set tag for block %d: %w", id, err)
+			}
+		}
+		if err := a.deps.Blocks.SetDescription(a.ctx, id, descPtr); err != nil {
+			return fmt.Errorf("set description for block %d: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// SetBlockDescription updates the description on a single block.
+func (a *App) SetBlockDescription(id int64, description string) error {
+	d := strings.TrimSpace(description)
+	var ptr *string
+	if d != "" {
+		ptr = &d
+	}
+	return a.deps.Blocks.SetDescription(a.ctx, id, ptr)
 }
 
 // SplitBlock splits a block at the given UTC time.

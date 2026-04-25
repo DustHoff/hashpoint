@@ -44,6 +44,21 @@ export const api = {
   assignTag: (blockIds: number[], tagId: number) =>
     bridge().AssignTag(blockIds, tagId) as Promise<void>,
 
+  // tagId: 0 clears the tag, -1 leaves the tag untouched (description-only update).
+  assignTagAndDescription: (
+    blockIds: number[],
+    tagId: number,
+    description: string,
+  ) =>
+    bridge().AssignTagAndDescription(
+      blockIds,
+      tagId,
+      description,
+    ) as Promise<void>,
+
+  setBlockDescription: (id: number, description: string) =>
+    bridge().SetBlockDescription(id, description) as Promise<void>,
+
   splitBlock: (id: number, atISO: string) =>
     bridge().SplitBlock(id, atISO) as Promise<FocusBlock>,
 

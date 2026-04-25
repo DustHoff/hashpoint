@@ -19,6 +19,7 @@ type FocusBlock struct {
 	IsIdle      bool       `json:"is_idle"`
 	TagID       *int64     `json:"tag_id,omitempty"`
 	AutoTagged  bool       `json:"auto_tagged"`
+	Description *string    `json:"description,omitempty"`
 	PersonioID  *string    `json:"personio_id,omitempty"`
 	SyncedAt    *time.Time `json:"synced_at,omitempty"`
 }
