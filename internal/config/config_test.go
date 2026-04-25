@@ -41,6 +41,30 @@ func TestValidate_AcceptsEmptyTenant(t *testing.T) {
 	}
 }
 
+func TestNormalizeTenant(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"  example  ", "example"},
+		{"EXAMPLE", "example"},
+		{"example.personio.de", "example"},
+		{"example.app.personio.com", "example"},
+		{"https://example.app.personio.com/", "example"},
+		{"https://example.personio.de/dashboard", "example"},
+		{"http://EXAMPLE.PERSONIO.DE", "example"},
+		// Unrecognised host: keep verbatim so the validator surfaces it.
+		{"example.other.com", "example.other.com"},
+	}
+	for _, tc := range cases {
+		if got := NormalizeTenant(tc.in); got != tc.want {
+			t.Errorf("NormalizeTenant(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestPersonio_AppURL(t *testing.T) {
 	t.Parallel()
 	c := Default()

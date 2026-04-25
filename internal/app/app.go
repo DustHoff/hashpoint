@@ -385,9 +385,12 @@ func (a *App) GetConfig() *config.Config {
 // SaveConfig validates and persists a new config. The runtime adopts the new
 // values via the OnConfigSet callback supplied at construction time.
 func (a *App) SaveConfig(c config.Config) error {
+	rawTenant := c.Personio.Tenant
+	c.Personio.Tenant = config.NormalizeTenant(rawTenant)
 	a.logger.Debug("app: SaveConfig requested",
 		"poll_interval_sec", c.Tracking.PollIntervalSec,
 		"idle_threshold_min", c.Tracking.IdleThresholdMin,
+		"personio_tenant_raw", rawTenant,
 		"personio_tenant", c.Personio.Tenant,
 		"autostart", c.UI.Autostart)
 	if err := c.Validate(); err != nil {

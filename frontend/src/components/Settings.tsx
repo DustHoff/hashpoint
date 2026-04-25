@@ -170,8 +170,8 @@ export default function Settings() {
       <section className="space-y-3 rounded bg-surface p-4">
         <h3 className="text-sm font-semibold text-slate-200">Personio</h3>
         <Field
-          label="Tenant (Subdomain)"
-          help='z. B. "onesi" → https://onesi.personio.de'
+          label="Tenant (Subdomain-Slug)"
+          help='Nur den Slug eingeben — z. B. "example" für https://example.app.personio.com. Volle URLs werden beim Speichern automatisch auf den Slug gekürzt.'
         >
           <input
             type="text"
@@ -179,7 +179,7 @@ export default function Settings() {
             onChange={(e) =>
               update("personio", { ...config.personio, tenant: e.target.value })
             }
-            placeholder="z. B. onesi"
+            placeholder="z. B. example"
             className="w-64 rounded bg-slate-900/60 px-2 py-1 text-sm"
           />
         </Field>

@@ -10,6 +10,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,6 +19,10 @@ import (
 
 	"github.com/BurntSushi/toml"
 )
+
+// urlParse is a thin alias kept so the rest of the package can call it
+// without importing net/url at the top.
+func urlParse(s string) (*url.URL, error) { return url.Parse(s) }
 
 // Config is the persisted user configuration.
 //
@@ -143,6 +148,32 @@ func Save(path string, cfg *Config) error {
 
 var tenantRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
 
+// NormalizeTenant accepts the variety of inputs a user might paste into the
+// settings UI ("example", "example.app.personio.com", "https://example.personio.de/")
+// and returns the bare tenant slug ("example"). Returns the trimmed input
+// if it already looks like a slug. Returns "" for empty/whitespace input.
+func NormalizeTenant(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	// Strip a scheme so url.Parse below sees a fully-qualified URL.
+	if !strings.Contains(s, "://") && (strings.Contains(s, ".personio.") || strings.HasPrefix(s, "//")) {
+		s = "https://" + strings.TrimPrefix(s, "//")
+	}
+	if u, err := urlParse(s); err == nil && u != nil && u.Host != "" {
+		s = u.Host
+	}
+	s = strings.ToLower(s)
+	s = strings.TrimSuffix(s, ".personio.de")
+	s = strings.TrimSuffix(s, ".personio.com")
+	s = strings.TrimSuffix(s, ".app")
+	// Anything still containing a dot is a hostname we can't simplify
+	// (e.g. "example.other.com" — likely a typo). Leave it as-is so the
+	// validator surfaces the problem.
+	return s
+}
+
 // Validate checks the config for invalid combinations and ranges. It returns a
 // composite error with all violations.
 func (c *Config) Validate() error {
@@ -154,10 +185,9 @@ func (c *Config) Validate() error {
 		errs = append(errs, "tracking.idle_threshold_min must be in [1,240]")
 	}
 	if t := strings.TrimSpace(c.Personio.Tenant); t != "" {
-		// Empty is allowed (user has not yet configured Personio); but if set,
-		// it must look like a subdomain label.
 		if !tenantRe.MatchString(strings.ToLower(t)) {
-			errs = append(errs, "personio.tenant must be a Personio subdomain (a-z, 0-9, hyphen)")
+			errs = append(errs,
+				"personio.tenant erwartet den Subdomain-Slug (z. B. \"example\"), nicht eine vollständige URL — bekommen: "+t)
 		}
 	}
 	if len(errs) == 0 {

@@ -24,11 +24,11 @@ func urlPathUnescape(s string) (string, error) { return url.QueryUnescape(s) }
 // Session captures everything we need to talk to the Personio UI API on
 // behalf of an interactively-authenticated user.
 type Session struct {
-	// Tenant is the Personio subdomain slug (e.g. "lmis"). Used as the entry
-	// point for the interactive login.
+	// Tenant is the Personio subdomain slug (e.g. "example"). Used as the
+	// entry point for the interactive login.
 	Tenant string `json:"tenant"`
 	// AppHost is the actual host the user landed on after authentication
-	// (e.g. "lmis.app.personio.com"). All UI-API calls are dispatched
+	// (e.g. "example.app.personio.com"). All UI-API calls are dispatched
 	// against this host — Personio splits the marketing/login domain
 	// (personio.de / app.personio.com) and the per-tenant app shell.
 	AppHost string `json:"app_host"`

@@ -121,7 +121,7 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
 
 #### 2.5.2 UI-API-Endpunkte (verifiziert per HAR-Capture)
 
-Personio betreibt zwei verschiedene Domains: `<tenant>.personio.de` ist die Login-/Marketing-Subdomain, `<tenant>.app.personio.com` ist die eigentliche App-Shell, gegen die alle UI-API-Calls laufen. Der TimeTracker erfasst beim Login den **AppHost** (z. B. `lmis.app.personio.com`) aus dem post-Login-`window.location.host` und persistiert ihn in der Session.
+Personio betreibt zwei verschiedene Domains: `<tenant>.personio.de` ist die Login-/Marketing-Subdomain, `<tenant>.app.personio.com` ist die eigentliche App-Shell, gegen die alle UI-API-Calls laufen. Der TimeTracker erfasst beim Login den **AppHost** (z. B. `example.app.personio.com`) aus dem post-Login-`window.location.host` und persistiert ihn in der Session.
 
 Pro Request:
 - Cookies via `cookiejar` automatisch angehängt.

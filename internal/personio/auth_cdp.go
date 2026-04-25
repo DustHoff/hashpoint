@@ -118,7 +118,7 @@ func Login(ctx context.Context, cfg LoginConfig) (*LoginResult, error) {
 // the login flow. We accept "authenticated" when the browser is on either a
 // .personio.de or .app.personio.com hostname AND not on a /login path. The
 // returned host is the Personio app host the browser ended up on (e.g.
-// "lmis.app.personio.com") — Personio splits per-tenant SPAs onto a
+// "example.app.personio.com") — Personio splits per-tenant SPAs onto a
 // dedicated subdomain that we then use as the API base.
 func waitForAuthenticated(ctx context.Context, tenant string, logger *slog.Logger) (string, error) {
 	deadline := time.Now().Add(5 * time.Minute)
