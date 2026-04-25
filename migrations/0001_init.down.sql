@@ -1,0 +1,5 @@
+DROP TABLE IF EXISTS settings;
+DROP TABLE IF EXISTS tagging_rules;
+DROP TABLE IF EXISTS focus_blocks;
+DROP TABLE IF EXISTS tags;
+DROP TABLE IF EXISTS schema_migrations;

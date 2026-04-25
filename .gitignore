@@ -1,0 +1,44 @@
+# Build artefacts
+/build/
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Wails
+frontend/dist/
+frontend/node_modules/
+frontend/.vite/
+frontend/wailsjs/
+
+# Test
+*.test
+*.out
+coverage.out
+coverage.html
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Local config / secrets
+*.local.toml
+.env
+.env.local
+
+# Logs
+*.log
+log/
+
+# Local DB during development
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3

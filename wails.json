@@ -1,0 +1,19 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "hashpoint",
+  "outputfilename": "hashpoint",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "onesi GmbH"
+  },
+  "info": {
+    "companyName": "onesi GmbH",
+    "productName": "Hashpoint TimeTracker",
+    "productIdentifier": "de.onesi.hashpoint",
+    "fileAssociations": [],
+    "comments": "Windows-Zeiterfassung mit Personio-Sync"
+  }
+}
