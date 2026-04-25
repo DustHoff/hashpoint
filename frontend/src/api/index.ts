@@ -77,6 +77,10 @@ export const api = {
 
   deleteBlock: (id: number) => bridge().DeleteBlock(id) as Promise<void>,
 
+  // Bulk-delete: removes every block in `ids` (real and placeholder alike).
+  // Returns the number of rows actually deleted.
+  deleteBlocks: (ids: number[]) => bridge().DeleteBlocks(ids) as Promise<number>,
+
   listTags: () => bridge().ListTags() as Promise<Tag[]>,
   createTag: (t: Partial<Tag>) => bridge().CreateTag(t) as Promise<Tag>,
   updateTag: (t: Tag) => bridge().UpdateTag(t) as Promise<void>,

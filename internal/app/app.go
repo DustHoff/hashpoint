@@ -322,9 +322,37 @@ func (a *App) UpdateBlock(b storage.FocusBlock) error {
 	return a.deps.Blocks.Update(a.ctx, &b)
 }
 
-// DeleteBlock removes a block.
+// DeleteBlock removes a single block.
 func (a *App) DeleteBlock(id int64) error {
-	return a.deps.Blocks.Delete(a.ctx, id)
+	a.logger.Info("app: DeleteBlock", "id", id)
+	if err := a.deps.Blocks.Delete(a.ctx, id); err != nil {
+		a.logger.Warn("app: DeleteBlock failed", "id", id, "err", err)
+		return err
+	}
+	return nil
+}
+
+// DeleteBlocks removes a batch of blocks. Real blocks are dropped from the
+// table together with any placeholder blocks in the same set — the timeline
+// "Löschen" button uses this to wipe the user's selection in one shot. Returns
+// the number of rows actually removed (rows that were already gone are
+// silently ignored).
+func (a *App) DeleteBlocks(ids []int64) (int, error) {
+	a.logger.Info("app: DeleteBlocks requested", "count", len(ids), "ids", ids)
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	deleted := 0
+	for _, id := range ids {
+		if err := a.deps.Blocks.Delete(a.ctx, id); err != nil {
+			a.logger.Warn("app: DeleteBlocks delete failed",
+				"id", id, "deleted_before_failure", deleted, "err", err)
+			return deleted, fmt.Errorf("delete block %d: %w", id, err)
+		}
+		deleted++
+	}
+	a.logger.Info("app: DeleteBlocks done", "requested", len(ids), "deleted", deleted)
+	return deleted, nil
 }
 
 // ----- Tags ---------------------------------------------------------------

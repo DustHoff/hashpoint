@@ -337,14 +337,20 @@ export default function Timeline() {
   }
 
   async function deleteSelectedBlocks() {
-    if (selected.size === 0) return;
+    const ids = [...selected];
+    if (ids.length === 0) return;
     const ok = window.confirm(
-      `${selected.size} Eintrag/Einträge wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.`,
+      `${ids.length} Eintrag/Einträge wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.`,
     );
     if (!ok) return;
     try {
-      for (const id of selected) {
-        await api.deleteBlock(id);
+      const removed = await api.deleteBlocks(ids);
+      if (removed !== ids.length) {
+        setError(
+          `Es wurden nur ${removed} von ${ids.length} Einträgen gelöscht — bitte Logfile prüfen.`,
+        );
+      } else {
+        setError(null);
       }
       clearSelection();
       await refresh();
