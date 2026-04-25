@@ -77,6 +77,32 @@ func (a *App) Shutdown(_ context.Context) {}
 // Version returns build metadata for the "About" dialog.
 func (a *App) Version() VersionInfo { return a.deps.Version }
 
+// LogFrontend ships a log record from the React layer into the same slog
+// pipeline as the rest of the app. Used by window.onerror, unhandledrejection
+// handlers and a thin console.error/warn forwarder. Levels are kept loose:
+// anything not matching error/warn/info/debug lands at INFO.
+func (a *App) LogFrontend(level, message string, fields map[string]any) {
+	logger := a.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	attrs := make([]any, 0, len(fields)*2+2)
+	attrs = append(attrs, "src", "frontend")
+	for k, v := range fields {
+		attrs = append(attrs, k, v)
+	}
+	switch strings.ToLower(level) {
+	case "error":
+		logger.Error(message, attrs...)
+	case "warn", "warning":
+		logger.Warn(message, attrs...)
+	case "debug":
+		logger.Debug(message, attrs...)
+	default:
+		logger.Info(message, attrs...)
+	}
+}
+
 // ----- Blocks -------------------------------------------------------------
 
 // BlocksByDay returns all focus blocks on the given UTC day (RFC3339).
@@ -343,21 +369,34 @@ func (a *App) IsTrackingPaused() bool {
 func (a *App) GetConfig() *config.Config {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.cfg == nil {
-		return config.Default()
+	c := config.Default()
+	if a.cfg != nil {
+		v := *a.cfg
+		c = &v
 	}
-	c := *a.cfg
-	return &c
+	a.logger.Debug("app: GetConfig",
+		"poll_interval_sec", c.Tracking.PollIntervalSec,
+		"idle_threshold_min", c.Tracking.IdleThresholdMin,
+		"personio_tenant", c.Personio.Tenant,
+		"autostart", c.UI.Autostart)
+	return c
 }
 
 // SaveConfig validates and persists a new config. The runtime adopts the new
 // values via the OnConfigSet callback supplied at construction time.
 func (a *App) SaveConfig(c config.Config) error {
+	a.logger.Debug("app: SaveConfig requested",
+		"poll_interval_sec", c.Tracking.PollIntervalSec,
+		"idle_threshold_min", c.Tracking.IdleThresholdMin,
+		"personio_tenant", c.Personio.Tenant,
+		"autostart", c.UI.Autostart)
 	if err := c.Validate(); err != nil {
+		a.logger.Warn("app: SaveConfig validation failed", "err", err)
 		return err
 	}
 	if a.deps.ConfigPath != "" {
 		if err := config.Save(a.deps.ConfigPath, &c); err != nil {
+			a.logger.Error("app: SaveConfig persist failed", "err", err, "path", a.deps.ConfigPath)
 			return fmt.Errorf("save config: %w", err)
 		}
 	}
@@ -369,6 +408,7 @@ func (a *App) SaveConfig(c config.Config) error {
 			a.logger.Warn("OnConfigSet returned error", "err", err)
 		}
 	}
+	a.logger.Info("app: config saved", "path", a.deps.ConfigPath)
 	return nil
 }
 
@@ -386,12 +426,16 @@ type PersonioSessionStatus struct {
 // PersonioStatus returns the current login state.
 func (a *App) PersonioStatus() PersonioSessionStatus {
 	if a.deps.Sessions == nil {
+		a.logger.Debug("app: PersonioStatus — no session store wired")
 		return PersonioSessionStatus{}
 	}
 	s, err := a.deps.Sessions.Get()
 	if err != nil || s == nil {
+		a.logger.Debug("app: PersonioStatus — no stored session", "err", err)
 		return PersonioSessionStatus{}
 	}
+	a.logger.Debug("app: PersonioStatus",
+		"tenant", s.Tenant, "employee_id", s.EmployeeID, "captured_at", s.CapturedAt)
 	return PersonioSessionStatus{
 		HasSession: true,
 		Tenant:     s.Tenant,
@@ -406,6 +450,7 @@ func (a *App) PersonioStatus() PersonioSessionStatus {
 func (a *App) PersonioLogin() error {
 	cfg := a.GetConfig()
 	tenant := strings.TrimSpace(cfg.Personio.Tenant)
+	a.logger.Info("app: PersonioLogin started", "tenant", tenant)
 	if tenant == "" {
 		return errors.New("kein Personio-Tenant in den Einstellungen hinterlegt")
 	}
@@ -419,10 +464,17 @@ func (a *App) PersonioLogin() error {
 		Timeout: 5 * time.Minute,
 	})
 	if err != nil {
+		a.logger.Warn("app: PersonioLogin failed", "tenant", tenant, "err", err)
 		return fmt.Errorf("personio login: %w", err)
 	}
 
+	a.logger.Info("app: PersonioLogin captured cookies",
+		"tenant", res.Session.Tenant,
+		"app_host", res.Session.AppHost,
+		"cookie_count", len(res.Session.Cookies))
+
 	if err := personio.Validate(a.ctx, res.Session); err != nil {
+		a.logger.Warn("app: PersonioLogin validation failed", "err", err)
 		return fmt.Errorf("validierung der erfassten Session fehlgeschlagen: %w", err)
 	}
 
@@ -439,7 +491,9 @@ func (a *App) PersonioLogin() error {
 		return fmt.Errorf("session speichern: %w", err)
 	}
 	a.logger.Info("personio login: session stored",
-		"tenant", res.Session.Tenant, "employee_id", res.Session.EmployeeID)
+		"tenant", res.Session.Tenant,
+		"app_host", res.Session.AppHost,
+		"employee_id", res.Session.EmployeeID)
 	return nil
 }
 
@@ -455,13 +509,24 @@ func (a *App) PersonioLogout() error {
 func (a *App) SyncDay(dayRFC3339 string) (*personio.Result, error) {
 	day, err := time.Parse(time.RFC3339, dayRFC3339)
 	if err != nil {
+		a.logger.Warn("app: SyncDay parse failed", "input", dayRFC3339, "err", err)
 		return nil, fmt.Errorf("parse day: %w", err)
 	}
+	a.logger.Info("app: SyncDay", "day", day.Format("2006-01-02"))
 	syncer, err := a.currentSyncer()
 	if err != nil {
+		a.logger.Warn("app: SyncDay no syncer", "err", err)
 		return nil, err
 	}
-	return syncer.SyncDay(a.ctx, day.UTC())
+	res, err := syncer.SyncDay(a.ctx, day.UTC())
+	if err != nil {
+		a.logger.Error("app: SyncDay failed", "err", err)
+		return res, err
+	}
+	a.logger.Info("app: SyncDay done",
+		"periods", res.Periods, "blocks", res.BlocksProcessed,
+		"skipped", res.BlocksSkipped, "errors", len(res.Errors))
+	return res, nil
 }
 
 // SyncRange triggers a sync of the given range.

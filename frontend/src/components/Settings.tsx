@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { log } from "../lib/log";
 import type { AppConfig, PersonioStatus } from "../types";
 
 const emptyConfig: AppConfig = {
@@ -7,6 +8,21 @@ const emptyConfig: AppConfig = {
   personio: { tenant: "" },
   ui: { autostart: true },
 };
+
+// normalize defends against backends that omit (or rename) sub-objects so a
+// single missing field doesn't blow up the whole render with a TypeError.
+function normalize(c: Partial<AppConfig> | null | undefined): AppConfig {
+  return {
+    tracking: {
+      poll_interval_sec:
+        c?.tracking?.poll_interval_sec ?? emptyConfig.tracking.poll_interval_sec,
+      idle_threshold_min:
+        c?.tracking?.idle_threshold_min ?? emptyConfig.tracking.idle_threshold_min,
+    },
+    personio: { tenant: c?.personio?.tenant ?? "" },
+    ui: { autostart: c?.ui?.autostart ?? emptyConfig.ui.autostart },
+  };
+}
 
 export default function Settings() {
   const [config, setConfig] = useState<AppConfig>(emptyConfig);
@@ -19,9 +35,11 @@ export default function Settings() {
   async function refresh() {
     try {
       const [c, s] = await Promise.all([api.getConfig(), api.personioStatus()]);
-      setConfig(c);
+      log.debug("settings: loaded", { config: c, status: s });
+      setConfig(normalize(c as Partial<AppConfig>));
       setStatus(s);
     } catch (e) {
+      log.error("settings: refresh failed", { err: String(e) });
       setError(String(e));
     }
   }

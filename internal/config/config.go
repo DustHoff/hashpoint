@@ -20,16 +20,21 @@ import (
 )
 
 // Config is the persisted user configuration.
+//
+// JSON tags are required because Wails marshals bound-method return values
+// via encoding/json — without them the React layer would receive Go's
+// PascalCase field names instead of the snake_case keys it expects, and
+// nested property access would throw at render time.
 type Config struct {
-	Tracking TrackingConfig `toml:"tracking"`
-	Personio PersonioConfig `toml:"personio"`
-	UI       UIConfig       `toml:"ui"`
+	Tracking TrackingConfig `toml:"tracking" json:"tracking"`
+	Personio PersonioConfig `toml:"personio" json:"personio"`
+	UI       UIConfig       `toml:"ui"       json:"ui"`
 }
 
 // TrackingConfig holds polling/idle parameters.
 type TrackingConfig struct {
-	PollIntervalSec  int `toml:"poll_interval_sec"`
-	IdleThresholdMin int `toml:"idle_threshold_min"`
+	PollIntervalSec  int `toml:"poll_interval_sec"  json:"poll_interval_sec"`
+	IdleThresholdMin int `toml:"idle_threshold_min" json:"idle_threshold_min"`
 }
 
 // PersonioConfig holds the Personio tenant subdomain. The session cookies
@@ -37,12 +42,12 @@ type TrackingConfig struct {
 type PersonioConfig struct {
 	// Tenant is the Personio subdomain (e.g. "onesi" → https://onesi.personio.de).
 	// May be left empty on first start; populated via the in-app settings UI.
-	Tenant string `toml:"tenant"`
+	Tenant string `toml:"tenant" json:"tenant"`
 }
 
 // UIConfig holds UI-related preferences.
 type UIConfig struct {
-	Autostart bool `toml:"autostart"`
+	Autostart bool `toml:"autostart" json:"autostart"`
 }
 
 // Paths bundles resolved on-disk locations.

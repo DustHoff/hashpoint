@@ -51,9 +51,18 @@ func run() error {
 		return fmt.Errorf("create data dir: %w", err)
 	}
 
+	logLevel := slog.LevelInfo
+	switch os.Getenv("HASHPOINT_LOG_LEVEL") {
+	case "DEBUG", "debug":
+		logLevel = slog.LevelDebug
+	case "WARN", "warn":
+		logLevel = slog.LevelWarn
+	case "ERROR", "error":
+		logLevel = slog.LevelError
+	}
 	logCloser, err := logging.Setup(logging.Options{
 		Mode:    logging.ModeProd,
-		Level:   slog.LevelInfo,
+		Level:   logLevel,
 		LogDir:  paths.LogDir,
 		Console: false,
 	})

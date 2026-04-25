@@ -108,4 +108,12 @@ export const api = {
   personioStatus: () => bridge().PersonioStatus() as Promise<PersonioStatus>,
   personioLogin: () => bridge().PersonioLogin() as Promise<void>,
   personioLogout: () => bridge().PersonioLogout() as Promise<void>,
+
+  // Log forwarding --------------------------------------------------------
+  logFrontend: (
+    level: "debug" | "info" | "warn" | "error",
+    message: string,
+    fields?: Record<string, unknown>,
+  ) =>
+    bridge().LogFrontend(level, message, fields ?? {}) as Promise<void>,
 };
