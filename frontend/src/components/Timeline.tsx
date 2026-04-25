@@ -183,16 +183,6 @@ export default function Timeline() {
     return m;
   }, [tags]);
 
-  // Tags assignable from the toolbar: leaves only — parents with sub-tags are
-  // organizational containers and shouldn't be picked directly.
-  const assignableTags = useMemo(() => {
-    const hasChild = new Set<number>();
-    tags.forEach((t) => {
-      if (t.parent_id != null) hasChild.add(t.parent_id);
-    });
-    return tags.filter((t) => !hasChild.has(t.id));
-  }, [tags]);
-
   const segments = useMemo(() => buildSegments(blocks), [blocks]);
   const { from: dayFromMs, to: dayToMs } = useMemo(() => dayBounds(day), [day]);
 
@@ -700,7 +690,7 @@ export default function Timeline() {
                 )}
                 <span className="ml-1">→</span>
               </span>
-              {assignableTags.map((t) => (
+              {tags.map((t) => (
                 <button
                   key={t.id}
                   onClick={() => assignTag(t.id)}
