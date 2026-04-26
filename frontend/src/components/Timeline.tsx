@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { FocusBlock, Tag } from "../types";
 import {
@@ -101,6 +101,9 @@ interface BlockGroup {
   isIdle: boolean;
   isPlaceholder: boolean;
   autoTagged: boolean;
+  // Original blocks the group was built from — used to expand a collapsed
+  // row and show the individual window titles inline.
+  members: FocusBlock[];
 }
 
 function groupBlocksForTable(blocks: FocusBlock[]): BlockGroup[] {
@@ -120,6 +123,7 @@ function groupBlocksForTable(blocks: FocusBlock[]): BlockGroup[] {
       last.endMs = Math.max(last.endMs, end);
       last.durationSec += b.duration_sec;
       last.autoTagged = last.autoTagged || b.auto_tagged;
+      last.members.push(b);
     } else {
       out.push({
         blockIDs: [b.id],
@@ -133,6 +137,7 @@ function groupBlocksForTable(blocks: FocusBlock[]): BlockGroup[] {
         isIdle: b.is_idle,
         isPlaceholder: b.is_placeholder,
         autoTagged: b.auto_tagged,
+        members: [b],
       });
     }
   }
@@ -155,6 +160,10 @@ export default function Timeline() {
   // gap between the dragged time window and actual tracked blocks is filled
   // with placeholder blocks (which then sync as a contiguous Personio period).
   const [selectedRange, setSelectedRange] = useState<MsRange | null>(null);
+  // Groups whose individual block titles are currently revealed in the table.
+  // Keyed by the first block ID of the group (stable across refreshes for
+  // an unchanged block sequence).
+  const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
   const [description, setDescription] = useState<string>("");
   const [paused, setPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -288,6 +297,26 @@ export default function Timeline() {
       }
     }
     setSelected(next);
+  }
+
+  function toggleExpandGroup(g: BlockGroup) {
+    const key = g.blockIDs[0];
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function toggleSingleBlock(id: number) {
+    setSelectedRange(null);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
   function selectSegment(seg: Segment, additive: boolean) {
@@ -901,61 +930,112 @@ export default function Timeline() {
           const isSel = g.blockIDs.every((id) => selected.has(id));
           const startISO = new Date(g.startMs).toISOString();
           const endISO = new Date(g.endMs).toISOString();
+          const expandable = g.blockIDs.length > 1;
+          const expanded = expandable && expandedGroups.has(g.blockIDs[0]);
           return (
-            <li
-              key={g.blockIDs[0]}
-              onClick={(e) => toggleGroup(g, e.shiftKey)}
-              className={`cursor-pointer px-3 py-2 text-sm transition-colors ${
-                isSel ? "bg-accent/20" : "hover:bg-slate-700/40"
-              } ${g.isIdle ? "opacity-50" : ""} ${
-                g.isPlaceholder ? "italic" : ""
-              }`}
-            >
-              <div className="flex items-center gap-3">
-                <span className="w-24 font-mono text-xs text-slate-400">
-                  {formatHHMM(startISO)}–{formatHHMM(endISO)}
-                </span>
-                <span className="w-16 text-xs text-slate-500">
-                  {formatDuration(g.durationSec)}
-                </span>
-                <span className="w-40 truncate text-slate-300">
-                  {g.isPlaceholder ? "(Manueller Eintrag)" : g.processName}
-                </span>
-                <span className="flex-1 truncate text-slate-400">
-                  {g.isPlaceholder ? "—" : g.windowTitle}
-                </span>
-                {g.blockIDs.length > 1 && (
-                  <span className="text-[10px] text-slate-500">
-                    ×{g.blockIDs.length}
-                  </span>
-                )}
-                {g.description && (
-                  <span
-                    className="max-w-[20%] truncate text-xs italic text-slate-500"
-                    title={g.description}
+            <Fragment key={g.blockIDs[0]}>
+              <li
+                onClick={(e) => toggleGroup(g, e.shiftKey)}
+                className={`cursor-pointer px-3 py-2 text-sm transition-colors ${
+                  isSel ? "bg-accent/20" : "hover:bg-slate-700/40"
+                } ${g.isIdle ? "opacity-50" : ""} ${
+                  g.isPlaceholder ? "italic" : ""
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (expandable) toggleExpandGroup(g);
+                    }}
+                    aria-label={expanded ? "Einklappen" : "Ausklappen"}
+                    className={`w-3 text-[10px] text-slate-500 ${
+                      expandable
+                        ? "cursor-pointer hover:text-slate-300"
+                        : "invisible"
+                    }`}
+                    tabIndex={expandable ? 0 : -1}
                   >
-                    📝 {g.description}
+                    {expanded ? "▾" : "▸"}
+                  </button>
+                  <span className="w-24 font-mono text-xs text-slate-400">
+                    {formatHHMM(startISO)}–{formatHHMM(endISO)}
                   </span>
-                )}
-                {parentTag && (
-                  <span
-                    className="rounded px-2 py-0.5 text-xs"
-                    style={{ background: parentTag.color ?? "#4f8cff" }}
-                  >
-                    {parentTag.name}
+                  <span className="w-16 text-xs text-slate-500">
+                    {formatDuration(g.durationSec)}
                   </span>
-                )}
-                {tag && (
-                  <span
-                    className="rounded px-2 py-0.5 text-xs"
-                    style={{ background: tag.color ?? "#4f8cff" }}
-                  >
-                    {tag.name}
-                    {g.autoTagged ? " ⚙" : ""}
+                  <span className="w-40 truncate text-slate-300">
+                    {g.isPlaceholder ? "(Manueller Eintrag)" : g.processName}
                   </span>
-                )}
-              </div>
-            </li>
+                  <span className="flex-1 truncate text-slate-400">
+                    {g.isPlaceholder ? "—" : g.windowTitle}
+                  </span>
+                  {expandable && (
+                    <span className="text-[10px] text-slate-500">
+                      ×{g.blockIDs.length}
+                    </span>
+                  )}
+                  {g.description && (
+                    <span
+                      className="max-w-[20%] truncate text-xs italic text-slate-500"
+                      title={g.description}
+                    >
+                      📝 {g.description}
+                    </span>
+                  )}
+                  {parentTag && (
+                    <span
+                      className="rounded px-2 py-0.5 text-xs"
+                      style={{ background: parentTag.color ?? "#4f8cff" }}
+                    >
+                      {parentTag.name}
+                    </span>
+                  )}
+                  {tag && (
+                    <span
+                      className="rounded px-2 py-0.5 text-xs"
+                      style={{ background: tag.color ?? "#4f8cff" }}
+                    >
+                      {tag.name}
+                      {g.autoTagged ? " ⚙" : ""}
+                    </span>
+                  )}
+                </div>
+              </li>
+              {expanded &&
+                g.members.map((m) => {
+                  const mb = blockBounds(m);
+                  const childSel = selected.has(m.id);
+                  return (
+                    <li
+                      key={`m-${m.id}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleSingleBlock(m.id);
+                      }}
+                      className={`cursor-pointer px-3 py-1 pl-12 text-xs transition-colors ${
+                        childSel
+                          ? "bg-accent/10"
+                          : "bg-slate-900/40 hover:bg-slate-700/30"
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="w-24 font-mono text-[11px] text-slate-500">
+                          {formatHHMM(new Date(mb.start).toISOString())}–
+                          {formatHHMM(new Date(mb.end).toISOString())}
+                        </span>
+                        <span className="w-16 text-[11px] text-slate-600">
+                          {formatDuration(m.duration_sec)}
+                        </span>
+                        <span className="flex-1 truncate text-slate-400">
+                          {m.window_title || "—"}
+                        </span>
+                      </div>
+                    </li>
+                  );
+                })}
+            </Fragment>
           );
         })}
       </ul>
