@@ -783,10 +783,37 @@ export default function Timeline() {
 
       {/* --- Timeline strip ------------------------------------------------ */}
       <div className="rounded bg-surface px-3 py-3">
-        <div className="mb-1 flex justify-between text-[10px] text-slate-500">
+        {/* Axis labels — overlaid by a precise time-range readout while
+            hovering a segment or dragging, so the user sees the exact span
+            being targeted before committing a tag. */}
+        <div className="relative mb-1 flex justify-between text-[10px] text-slate-500">
           {axisLabels.map((l, i) => (
             <span key={i}>{l}</span>
           ))}
+          {hoverRange &&
+            (() => {
+              const { start, end } = hoverRange;
+              const visStart = Math.max(start, viewStart);
+              const visEnd = Math.min(end, viewEnd);
+              const midPct = pctOfMs((visStart + visEnd) / 2);
+              const durSec = Math.round((end - start) / 1000);
+              return (
+                <div
+                  className="pointer-events-none absolute -top-0.5 z-10 -translate-x-1/2 whitespace-nowrap rounded bg-slate-900/95 px-2 py-0.5 font-medium text-slate-100 shadow ring-1 ring-slate-700"
+                  style={{
+                    left: `${Math.max(0.06, Math.min(0.94, midPct)) * 100}%`,
+                  }}
+                >
+                  {formatHHMM(new Date(start).toISOString())}–
+                  {formatHHMM(new Date(end).toISOString())}
+                  {end - start > 500 && (
+                    <span className="ml-1 text-slate-400">
+                      · {formatDuration(durSec)}
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
         </div>
         <div
           ref={stripRef}
@@ -865,6 +892,7 @@ export default function Timeline() {
                   background: bg,
                 }}
                 title={
+                  `${formatHHMM(new Date(seg.start).toISOString())}–${formatHHMM(new Date(seg.end).toISOString())} · ${formatDuration(Math.round((seg.end - seg.start) / 1000))}\n` +
                   `${seg.processName || "(Platzhalter)"} · ${tag ? tag.name : "ohne Tag"}` +
                   (seg.allPlaceholder ? " · manuelle Zeitspanne" : "") +
                   (seg.description
