@@ -105,6 +105,161 @@ func TestBuildDayPeriods_PerProjectAndCommentBuckets(t *testing.T) {
 	}
 }
 
+func TestBuildDayPeriods_MergesOnlyConsecutiveRuns(t *testing.T) {
+	t.Parallel()
+
+	parent := storage.Tag{
+		ID:                1,
+		Name:              "#projekta",
+		PersonioProjectID: ptr("4711"),
+		SyncToPersonio:    true,
+	}
+	sub := storage.Tag{
+		ID:             2,
+		ParentID:       ptr(int64(1)),
+		Name:           "#frontend",
+		SyncToPersonio: true,
+	}
+	other := storage.Tag{
+		ID:                3,
+		Name:              "#projektb",
+		PersonioProjectID: ptr("4712"),
+		SyncToPersonio:    true,
+	}
+	tags := map[int64]storage.Tag{1: parent, 2: sub, 3: other}
+
+	// Anchor at noon local so all subtest times stay on the same calendar
+	// date regardless of the host timezone.
+	day := time.Date(2026, 4, 25, 12, 0, 0, 0, time.Local)
+	at := func(h, m int) time.Time {
+		return day.Add(time.Duration(h-12)*time.Hour + time.Duration(m)*time.Minute)
+	}
+	end := func(h, m int) *time.Time { v := at(h, m); return &v }
+	dateKey := day.Local().Format("2006-01-02")
+
+	t.Run("contiguous same-tag+desc collapse to one period", func(t *testing.T) {
+		blocks := []storage.FocusBlock{
+			{ID: 1, ProcessName: "code", StartTime: at(9, 0), EndTime: end(9, 15), TagID: ptr(int64(2)), Description: ptr("Login")},
+			{ID: 2, ProcessName: "chrome", StartTime: at(9, 15), EndTime: end(9, 45), TagID: ptr(int64(2)), Description: ptr("Login")},
+			{ID: 3, ProcessName: "code", StartTime: at(9, 45), EndTime: end(10, 0), TagID: ptr(int64(2)), Description: ptr("Login")},
+		}
+		dp := buildDayPeriods(blocks, tags)[dateKey]
+		if dp == nil || len(dp.list) != 1 {
+			t.Fatalf("expected 1 merged period, got %+v", dp)
+		}
+		wantStart := blocks[0].StartTime.Local().Format("2006-01-02T15:04:05")
+		wantEnd := blocks[len(blocks)-1].EndTime.Local().Format("2006-01-02T15:04:05")
+		if dp.list[0].Start != wantStart {
+			t.Errorf("merged period start = %q, want %q", dp.list[0].Start, wantStart)
+		}
+		if dp.list[0].End != wantEnd {
+			t.Errorf("merged period end = %q, want %q", dp.list[0].End, wantEnd)
+		}
+		if got := len(dp.blockIDs); got != 3 {
+			t.Errorf("expected 3 block ids on the merged period, got %d", got)
+		}
+	})
+
+	t.Run("idle between same-tag blocks splits the run", func(t *testing.T) {
+		blocks := []storage.FocusBlock{
+			{ID: 1, StartTime: at(9, 0), EndTime: end(9, 30), TagID: ptr(int64(2)), Description: ptr("Login")},
+			{ID: 2, StartTime: at(9, 30), EndTime: end(10, 0), IsIdle: true},
+			{ID: 3, StartTime: at(10, 0), EndTime: end(10, 30), TagID: ptr(int64(2)), Description: ptr("Login")},
+		}
+		dp := buildDayPeriods(blocks, tags)[dateKey]
+		if dp == nil || len(dp.list) != 2 {
+			t.Fatalf("expected 2 periods (idle splits the run), got %+v", dp)
+		}
+	})
+
+	t.Run("different description breaks the run", func(t *testing.T) {
+		blocks := []storage.FocusBlock{
+			{ID: 1, StartTime: at(9, 0), EndTime: end(9, 30), TagID: ptr(int64(2)), Description: ptr("Login")},
+			{ID: 2, StartTime: at(9, 30), EndTime: end(10, 0), TagID: ptr(int64(2)), Description: ptr("Logout")},
+		}
+		dp := buildDayPeriods(blocks, tags)[dateKey]
+		if dp == nil || len(dp.list) != 2 {
+			t.Fatalf("expected 2 periods (different descriptions), got %+v", dp)
+		}
+	})
+
+	t.Run("different-tag block between same-tag blocks produces three periods", func(t *testing.T) {
+		blocks := []storage.FocusBlock{
+			{ID: 1, StartTime: at(9, 0), EndTime: end(9, 30), TagID: ptr(int64(2)), Description: ptr("Login")},
+			{ID: 2, StartTime: at(9, 30), EndTime: end(9, 45), TagID: ptr(int64(3))},
+			{ID: 3, StartTime: at(9, 45), EndTime: end(10, 30), TagID: ptr(int64(2)), Description: ptr("Login")},
+		}
+		dp := buildDayPeriods(blocks, tags)[dateKey]
+		if dp == nil || len(dp.list) != 3 {
+			t.Fatalf("expected 3 periods (A | B | A), got %+v", dp)
+		}
+		// First A period must stop at 09:30 (before B starts), not run through
+		// to 10:30 — that would mean B's slot got swallowed.
+		firstAStart := blocks[0].StartTime.Local().Format("2006-01-02T15:04:05")
+		firstAEnd := blocks[0].EndTime.Local().Format("2006-01-02T15:04:05")
+		for _, p := range dp.list {
+			if p.Start == firstAStart && p.End != firstAEnd {
+				t.Errorf("first A period must end at %q (before B), got %q", firstAEnd, p.End)
+			}
+		}
+	})
+
+	t.Run("time gap with no intervening block still splits the run", func(t *testing.T) {
+		blocks := []storage.FocusBlock{
+			{ID: 1, StartTime: at(9, 0), EndTime: end(10, 0), TagID: ptr(int64(2)), Description: ptr("Login")},
+			// 1-hour gap with no recorded block — likely the laptop was closed.
+			{ID: 2, StartTime: at(11, 0), EndTime: end(12, 0), TagID: ptr(int64(2)), Description: ptr("Login")},
+		}
+		dp := buildDayPeriods(blocks, tags)[dateKey]
+		if dp == nil || len(dp.list) != 2 {
+			t.Fatalf("expected 2 periods (time gap > tolerance), got %+v", dp)
+		}
+	})
+
+	t.Run("morning run merges then lunch gap starts a fresh period", func(t *testing.T) {
+		// Concrete example from the user: 09–10, 10–12, 13–15 with the same
+		// tag/desc must collapse to 09–12 and 13–15 — never to a single 09–15
+		// span that swallows the lunch break.
+		blocks := []storage.FocusBlock{
+			{ID: 1, StartTime: at(9, 0), EndTime: end(10, 0), TagID: ptr(int64(2)), Description: ptr("Login")},
+			{ID: 2, StartTime: at(10, 0), EndTime: end(12, 0), TagID: ptr(int64(2)), Description: ptr("Login")},
+			{ID: 3, StartTime: at(13, 0), EndTime: end(15, 0), TagID: ptr(int64(2)), Description: ptr("Login")},
+		}
+		dp := buildDayPeriods(blocks, tags)[dateKey]
+		if dp == nil || len(dp.list) != 2 {
+			t.Fatalf("expected 2 periods (09-12, 13-15), got %+v", dp)
+		}
+		want := [][2]string{
+			{
+				blocks[0].StartTime.Local().Format("2006-01-02T15:04:05"),
+				blocks[1].EndTime.Local().Format("2006-01-02T15:04:05"),
+			},
+			{
+				blocks[2].StartTime.Local().Format("2006-01-02T15:04:05"),
+				blocks[2].EndTime.Local().Format("2006-01-02T15:04:05"),
+			},
+		}
+		for i, p := range dp.list {
+			if p.Start != want[i][0] || p.End != want[i][1] {
+				t.Errorf("period[%d] = %s..%s, want %s..%s", i, p.Start, p.End, want[i][0], want[i][1])
+			}
+		}
+	})
+
+	t.Run("sub-second jitter still merges", func(t *testing.T) {
+		// Tracker can produce a tiny gap when a focus event is delivered late;
+		// staying inside the contiguity tolerance must still merge.
+		blocks := []storage.FocusBlock{
+			{ID: 1, StartTime: at(9, 0), EndTime: end(9, 30), TagID: ptr(int64(2)), Description: ptr("Login")},
+			{ID: 2, StartTime: at(9, 30).Add(2 * time.Second), EndTime: end(10, 0), TagID: ptr(int64(2)), Description: ptr("Login")},
+		}
+		dp := buildDayPeriods(blocks, tags)[dateKey]
+		if dp == nil || len(dp.list) != 1 {
+			t.Fatalf("expected 1 merged period across 2s jitter, got %+v", dp)
+		}
+	})
+}
+
 func TestShouldSkip(t *testing.T) {
 	t.Parallel()
 	parent := storage.Tag{ID: 1, Name: "#x", PersonioProjectID: ptr("4711"), SyncToPersonio: true}
