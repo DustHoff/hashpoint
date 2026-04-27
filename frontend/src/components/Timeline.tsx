@@ -185,6 +185,14 @@ export default function Timeline() {
   const [dragRange, setDragRange] = useState<{ a: number; b: number } | null>(
     null,
   );
+  // Cursor position over the strip (0..1) — drives the time readout when
+  // hovering empty (untagged) areas where there is no segment to anchor to.
+  const [cursorPctX, setCursorPctX] = useState<number | null>(null);
+  // Active edge while the user is resizing the committed selected-range from
+  // either of its edge handles. Null when no resize is in progress. The range
+  // can only be resized while it is still untagged — once a tag is assigned,
+  // `clearSelection()` drops `selectedRange` and the handles disappear.
+  const resizeEdgeRef = useRef<"start" | "end" | null>(null);
 
   const tagsByID = useMemo(() => {
     const m: Record<number, Tag> = {};
@@ -535,7 +543,16 @@ export default function Timeline() {
     dragStartPctRef.current = pct;
     setDragRange({ a: pct, b: pct });
     setHoverRange(pctRangeToMs(pct, pct));
+    setCursorPctX(pct);
     e.preventDefault();
+  }
+
+  function onStripMouseMove(e: React.MouseEvent) {
+    setCursorPctX(pctFromEvent(e));
+  }
+
+  function onStripMouseLeave() {
+    if (dragStartPctRef.current == null) setCursorPctX(null);
   }
 
   useEffect(() => {
@@ -544,6 +561,7 @@ export default function Timeline() {
       const pct = pctFromEvent(e);
       setDragRange({ a: dragStartPctRef.current, b: pct });
       setHoverRange(pctRangeToMs(dragStartPctRef.current, pct));
+      setCursorPctX(pct);
     }
     function onUp(e: MouseEvent) {
       if (dragStartPctRef.current == null) return;
@@ -570,6 +588,54 @@ export default function Timeline() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blocks, selected, viewStart, viewEnd]);
+
+  // Resize the still-untagged committed range by dragging one of its edge
+  // handles. Selection is rebuilt from the new range so the editor panel
+  // stays consistent with the visible bounds.
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      const edge = resizeEdgeRef.current;
+      if (edge == null || !selectedRange) return;
+      const pct = pctFromEvent(e);
+      let ms = viewStart + pct * (viewEnd - viewStart);
+      ms = Math.max(dayFromMs, Math.min(dayToMs, ms));
+      let start = selectedRange.start;
+      let end = selectedRange.end;
+      if (edge === "start") start = ms;
+      else end = ms;
+      if (start > end) {
+        const t = start;
+        start = end;
+        end = t;
+        resizeEdgeRef.current = edge === "start" ? "end" : "start";
+      }
+      const newRange = { start, end };
+      setSelectedRange(newRange);
+      const matched = blocksInMsRange(newRange);
+      setSelected(new Set(matched.map((b) => b.id)));
+    }
+    function onUp() {
+      resizeEdgeRef.current = null;
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRange, viewStart, viewEnd, dayFromMs, dayToMs, blocks]);
+
+  function onResizeHandleDown(
+    e: React.MouseEvent,
+    edge: "start" | "end",
+  ) {
+    // Stop the strip's drag-select from also kicking in; the handle owns this
+    // gesture from now until mouseup.
+    e.stopPropagation();
+    e.preventDefault();
+    resizeEdgeRef.current = edge;
+  }
 
   function onSegmentMouseEnter(seg: Segment) {
     if (dragStartPctRef.current != null) return;
@@ -790,34 +856,53 @@ export default function Timeline() {
           {axisLabels.map((l, i) => (
             <span key={i}>{l}</span>
           ))}
-          {hoverRange &&
-            (() => {
-              const { start, end } = hoverRange;
-              const visStart = Math.max(start, viewStart);
-              const visEnd = Math.min(end, viewEnd);
-              const midPct = pctOfMs((visStart + visEnd) / 2);
-              const durSec = Math.round((end - start) / 1000);
-              return (
-                <div
-                  className="pointer-events-none absolute -top-0.5 z-10 -translate-x-1/2 whitespace-nowrap rounded bg-slate-900/95 px-2 py-0.5 font-medium text-slate-100 shadow ring-1 ring-slate-700"
-                  style={{
-                    left: `${Math.max(0.06, Math.min(0.94, midPct)) * 100}%`,
-                  }}
-                >
-                  {formatHHMM(new Date(start).toISOString())}–
-                  {formatHHMM(new Date(end).toISOString())}
-                  {end - start > 500 && (
-                    <span className="ml-1 text-slate-400">
-                      · {formatDuration(durSec)}
-                    </span>
-                  )}
-                </div>
-              );
-            })()}
+          {hoverRange
+            ? (() => {
+                const { start, end } = hoverRange;
+                const visStart = Math.max(start, viewStart);
+                const visEnd = Math.min(end, viewEnd);
+                const midPct = pctOfMs((visStart + visEnd) / 2);
+                const durSec = Math.round((end - start) / 1000);
+                return (
+                  <div
+                    className="pointer-events-none absolute -top-0.5 z-10 -translate-x-1/2 whitespace-nowrap rounded bg-slate-900/95 px-2 py-0.5 font-medium text-slate-100 shadow ring-1 ring-slate-700"
+                    style={{
+                      left: `${Math.max(0.06, Math.min(0.94, midPct)) * 100}%`,
+                    }}
+                  >
+                    {formatHHMM(new Date(start).toISOString())}–
+                    {formatHHMM(new Date(end).toISOString())}
+                    {end - start > 500 && (
+                      <span className="ml-1 text-slate-400">
+                        · {formatDuration(durSec)}
+                      </span>
+                    )}
+                  </div>
+                );
+              })()
+            : cursorPctX != null &&
+              (() => {
+                // No segment under the cursor — show the precise time at the
+                // cursor instead, so the user can still judge where to start a
+                // drag-select on an untagged area of the strip.
+                const ms = viewStart + cursorPctX * (viewEnd - viewStart);
+                return (
+                  <div
+                    className="pointer-events-none absolute -top-0.5 z-10 -translate-x-1/2 whitespace-nowrap rounded bg-slate-900/95 px-2 py-0.5 font-medium text-slate-100 shadow ring-1 ring-slate-700"
+                    style={{
+                      left: `${Math.max(0.04, Math.min(0.96, cursorPctX)) * 100}%`,
+                    }}
+                  >
+                    {formatHHMM(new Date(ms).toISOString())}
+                  </div>
+                );
+              })()}
         </div>
         <div
           ref={stripRef}
           onMouseDown={onStripMouseDown}
+          onMouseMove={onStripMouseMove}
+          onMouseLeave={onStripMouseLeave}
           onDoubleClick={resetZoom}
           className="relative h-10 cursor-crosshair select-none rounded bg-slate-900/60"
           title="Zeitspanne ziehen, um Blöcke zu markieren · Mausrad: zoom · Shift+Mausrad: schwenken · Doppelklick: Reset"
@@ -914,15 +999,35 @@ export default function Timeline() {
             />
           )}
 
-          {/* Committed selected-range marker (after mouse-up) */}
+          {/* Committed selected-range marker (after mouse-up). Edge handles
+              let the user fine-tune the bounds before tagging — once a tag is
+              assigned, `selectedRange` clears and the handles disappear. */}
           {!dragRange && selectedRange && (
-            <div
-              className="pointer-events-none absolute inset-y-0 rounded outline outline-1 outline-accent/70"
-              style={{
-                left: `${pctOfMs(selectedRange.start) * 100}%`,
-                width: `${(pctOfMs(selectedRange.end) - pctOfMs(selectedRange.start)) * 100}%`,
-              }}
-            />
+            <>
+              <div
+                className="pointer-events-none absolute inset-y-0 rounded outline outline-1 outline-accent/70"
+                style={{
+                  left: `${pctOfMs(selectedRange.start) * 100}%`,
+                  width: `${(pctOfMs(selectedRange.end) - pctOfMs(selectedRange.start)) * 100}%`,
+                }}
+              />
+              <div
+                onMouseDown={(e) => onResizeHandleDown(e, "start")}
+                className="absolute inset-y-0 z-20 w-1.5 cursor-ew-resize rounded-l bg-accent hover:bg-white"
+                style={{
+                  left: `calc(${pctOfMs(selectedRange.start) * 100}% - 3px)`,
+                }}
+                title="Bereich-Anfang ziehen"
+              />
+              <div
+                onMouseDown={(e) => onResizeHandleDown(e, "end")}
+                className="absolute inset-y-0 z-20 w-1.5 cursor-ew-resize rounded-r bg-accent hover:bg-white"
+                style={{
+                  left: `calc(${pctOfMs(selectedRange.end) * 100}% - 3px)`,
+                }}
+                title="Bereich-Ende ziehen"
+              />
+            </>
           )}
         </div>
         <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
