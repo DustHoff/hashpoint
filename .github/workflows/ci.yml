@@ -82,6 +82,9 @@ jobs:
         with:
           node-version: 20
 
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.1
+
       - name: Frontend install
         working-directory: frontend
         run: npm ci || npm install
@@ -90,17 +93,19 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      - name: Build Go binary
+      - name: Build with Wails (embed icon, manifest, VERSIONINFO)
         shell: bash
         env:
-          GOOS: windows
-          GOARCH: amd64
           CGO_ENABLED: "0"
         run: |
-          mkdir -p build/bin
-          go build -trimpath -tags desktop,production \
-            -ldflags "-s -w -H windowsgui" \
-            -o build/bin/hashpoint.exe ./cmd/timetracker
+          # Mirror release.yml: wails build embeds PE resources (icon, manifest,
+          # VERSIONINFO) via .syso so PR binaries match the release shape.
+          wails build \
+            -platform windows/amd64 \
+            -s \
+            -trimpath \
+            -tags desktop,production \
+            -ldflags "-s -w -buildid="
 
       - name: Upload artefact
         uses: actions/upload-artifact@v4

@@ -41,35 +41,67 @@ jobs:
         with:
           ref: ${{ needs.bump-tag.outputs.new_tag }}
 
+      # Pinned toolchain versions — re-runs of the same tag must produce a
+      # byte-identical hashpoint.exe so SmartScreen reputation accumulates on
+      # a single hash instead of resetting every release. Bump explicitly when
+      # upgrading; do not move to floating versions.
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: 1.26.2
           cache: true
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 20.18.1
+
+      - name: Install Wails CLI
+        # Pin to the same version as the wailsapp/wails/v2 module dependency
+        # in go.mod — the CLI generates the .syso for icon/manifest/VERSIONINFO
+        # so it must stay in sync with the runtime API the binary links against.
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.1
 
       - name: Frontend install
         working-directory: frontend
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Frontend build
         working-directory: frontend
         run: npm run build
 
-      - name: Build Go binary with embedded version
+      - name: Resolve deterministic build date
+        id: builddate
+        shell: bash
+        run: |
+          # Use the tag commit's committer date so the embedded buildDate is a
+          # function of source state, not wall-clock time.
+          ISO=$(git show -s --format=%cI "${{ github.sha }}")
+          EPOCH=$(git show -s --format=%ct "${{ github.sha }}")
+          echo "iso=${ISO}" >> "$GITHUB_OUTPUT"
+          echo "epoch=${EPOCH}" >> "$GITHUB_OUTPUT"
+
+      - name: Build with Wails (embed icon, manifest, VERSIONINFO)
         shell: bash
         env:
-          GOOS: windows
-          GOARCH: amd64
           CGO_ENABLED: "0"
+          # Generic reproducible-build hint. Wails' resource generator
+          # (tc-hib/winres) writes the .syso with TimeDateStamp=0 unconditionally,
+          # so it does not actually depend on this — but we set it anyway because
+          # other tooling that may join the chain (rsrc, goversioninfo, custom
+          # post-processors) does honour it.
+          SOURCE_DATE_EPOCH: ${{ steps.builddate.outputs.epoch }}
         run: |
-          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          mkdir -p build/bin
-          go build -trimpath -tags desktop,production \
-            -ldflags "-s -w -H windowsgui -X main.version=${{ needs.bump-tag.outputs.new_tag }} -X main.commit=${{ github.sha }} -X main.buildDate=${DATE}" \
-            -o build/bin/hashpoint.exe ./cmd/timetracker
+          # `wails build` writes a .syso next to main.go from build/appicon.png
+          # + build/windows/{info.json,wails.exe.manifest,icon.ico}, then runs
+          # `go build` with the flags we pass through.
+          #   -s            skip frontend install/build (we did it explicitly above)
+          #   -trimpath     strip absolute filesystem paths
+          #   -ldflags      reproducibility (-buildid=, -s, -w) + version metadata
+          wails build \
+            -platform windows/amd64 \
+            -s \
+            -trimpath \
+            -tags desktop,production \
+            -ldflags "-s -w -buildid= -X main.version=${{ needs.bump-tag.outputs.new_tag }} -X main.commit=${{ github.sha }} -X main.buildDate=${{ steps.builddate.outputs.iso }}"
 
       - name: Compute SHA-256 checksums
         shell: pwsh
