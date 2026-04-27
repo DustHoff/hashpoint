@@ -60,6 +60,7 @@ export interface VersionInfo {
 export interface TrackingConfig {
   poll_interval_sec: number;
   idle_threshold_min: number;
+  enabled: boolean;
 }
 
 export interface PersonioConfig {

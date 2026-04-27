@@ -6,6 +6,7 @@ func Default() *Config {
 		Tracking: TrackingConfig{
 			PollIntervalSec:  2,
 			IdleThresholdMin: 5,
+			Enabled:          true,
 		},
 		Personio: PersonioConfig{
 			Tenant: "",

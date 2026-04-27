@@ -38,8 +38,12 @@ type Config struct {
 
 // TrackingConfig holds polling/idle parameters.
 type TrackingConfig struct {
-	PollIntervalSec  int `toml:"poll_interval_sec"  json:"poll_interval_sec"`
-	IdleThresholdMin int `toml:"idle_threshold_min" json:"idle_threshold_min"`
+	PollIntervalSec  int  `toml:"poll_interval_sec"  json:"poll_interval_sec"`
+	IdleThresholdMin int  `toml:"idle_threshold_min" json:"idle_threshold_min"`
+	// Enabled controls whether the foreground-window polling loop runs. When
+	// false the tracker stays paused (no focus blocks are created); the tray
+	// "Pause Tracking" toggle is a transient runtime override on top of this.
+	Enabled bool `toml:"enabled" json:"enabled"`
 }
 
 // PersonioConfig holds the Personio tenant subdomain. The session cookies

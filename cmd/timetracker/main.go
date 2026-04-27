@@ -134,13 +134,27 @@ func run() error {
 			slog.Info("config updated",
 				"poll_interval_sec", c.Tracking.PollIntervalSec,
 				"idle_threshold_min", c.Tracking.IdleThresholdMin,
+				"tracking_enabled", c.Tracking.Enabled,
 				"personio_tenant", c.Personio.Tenant,
 				"autostart", c.UI.Autostart)
+			// The persistent enabled flag is applied directly to the tracker
+			// so the toggle in Settings takes effect without a restart.
+			if c.Tracking.Enabled {
+				trk.Resume()
+			} else {
+				trk.Pause(ctx)
+			}
 			return nil
 		},
 		Version: app.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate},
 		Logger:  slog.Default(),
 	})
+
+	// Honour the persistent Enabled flag at startup so the user's last choice
+	// in Settings survives across restarts.
+	if !cfg.Tracking.Enabled {
+		trk.Pause(ctx)
+	}
 
 	// Tracker goroutine.
 	go func() {

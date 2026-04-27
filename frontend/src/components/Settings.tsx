@@ -4,7 +4,7 @@ import { log } from "../lib/log";
 import type { AppConfig, PersonioStatus } from "../types";
 
 const emptyConfig: AppConfig = {
-  tracking: { poll_interval_sec: 2, idle_threshold_min: 5 },
+  tracking: { poll_interval_sec: 2, idle_threshold_min: 5, enabled: true },
   personio: { tenant: "" },
   ui: { autostart: true },
 };
@@ -18,6 +18,7 @@ function normalize(c: Partial<AppConfig> | null | undefined): AppConfig {
         c?.tracking?.poll_interval_sec ?? emptyConfig.tracking.poll_interval_sec,
       idle_threshold_min:
         c?.tracking?.idle_threshold_min ?? emptyConfig.tracking.idle_threshold_min,
+      enabled: c?.tracking?.enabled ?? emptyConfig.tracking.enabled,
     },
     personio: { tenant: c?.personio?.tenant ?? "" },
     ui: { autostart: c?.ui?.autostart ?? emptyConfig.ui.autostart },
@@ -112,6 +113,26 @@ export default function Settings() {
       {/* Tracking section ------------------------------------------------ */}
       <section className="space-y-3 rounded bg-surface p-4">
         <h3 className="text-sm font-semibold text-slate-200">Erfassung</h3>
+        <label className="flex items-start gap-3 text-sm text-slate-300">
+          <input
+            type="checkbox"
+            checked={config.tracking.enabled}
+            onChange={(e) =>
+              update("tracking", {
+                ...config.tracking,
+                enabled: e.target.checked,
+              })
+            }
+            className="mt-0.5 h-4 w-4"
+          />
+          <span className="flex flex-col">
+            <span>Erfassung der fokussierten Anwendung aktiv</span>
+            <span className="text-[11px] text-slate-500">
+              Wenn deaktiviert, werden keine Fokus-Blöcke mehr automatisch
+              erfasst — manuelles Tagging über das Tray-Menü bleibt möglich.
+            </span>
+          </span>
+        </label>
         <Field
           label="Poll-Intervall (Sekunden)"
           help="Wie oft der TimeTracker den fokussierten Prozess prüft. 1–300."
