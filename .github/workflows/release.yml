@@ -54,11 +54,11 @@ jobs:
         with:
           node-version: 20.18.1
 
-      - name: Install Wails CLI
-        # Pin to the same version as the wailsapp/wails/v2 module dependency
-        # in go.mod — the CLI generates the .syso for icon/manifest/VERSIONINFO
-        # so it must stay in sync with the runtime API the binary links against.
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.1
+      - name: Install go-winres
+        # Generates the .syso resource object that the Go linker picks up
+        # automatically, embedding icon, manifest, and VERSIONINFO into
+        # hashpoint.exe. Pinned for build reproducibility.
+        run: go install github.com/tc-hib/go-winres@v0.3.3
 
       - name: Frontend install
         working-directory: frontend
@@ -79,29 +79,42 @@ jobs:
           echo "iso=${ISO}" >> "$GITHUB_OUTPUT"
           echo "epoch=${EPOCH}" >> "$GITHUB_OUTPUT"
 
-      - name: Build with Wails (embed icon, manifest, VERSIONINFO)
+      - name: Generate Windows resource (.syso)
+        shell: bash
+        run: |
+          # Reads winres/winres.json (icon, manifest, VERSIONINFO config),
+          # writes cmd/timetracker/hashpoint_windows_amd64.syso. The Go linker
+          # picks the .syso up automatically when building ./cmd/timetracker.
+          # tc-hib/winres writes TimeDateStamp=0 unconditionally → deterministic.
+          go-winres make \
+            --in winres/winres.json \
+            --arch amd64 \
+            --out cmd/timetracker/hashpoint \
+            --product-version "${{ needs.bump-tag.outputs.new_tag }}" \
+            --file-version "${{ needs.bump-tag.outputs.new_tag }}"
+
+      - name: Build Go binary with embedded resources
         shell: bash
         env:
+          GOOS: windows
+          GOARCH: amd64
           CGO_ENABLED: "0"
-          # Generic reproducible-build hint. Wails' resource generator
-          # (tc-hib/winres) writes the .syso with TimeDateStamp=0 unconditionally,
-          # so it does not actually depend on this — but we set it anyway because
-          # other tooling that may join the chain (rsrc, goversioninfo, custom
-          # post-processors) does honour it.
+          # Generic reproducible-build hint; go-winres writes
+          # TimeDateStamp=0 unconditionally and does not read this, but we
+          # set it for any other tooling that might join the chain.
           SOURCE_DATE_EPOCH: ${{ steps.builddate.outputs.epoch }}
         run: |
-          # `wails build` writes a .syso next to main.go from build/appicon.png
-          # + build/windows/{info.json,wails.exe.manifest,icon.ico}, then runs
-          # `go build` with the flags we pass through.
-          #   -s            skip frontend install/build (we did it explicitly above)
+          mkdir -p build/bin
+          # Reproducibility flags:
           #   -trimpath     strip absolute filesystem paths
-          #   -ldflags      reproducibility (-buildid=, -s, -w) + version metadata
-          wails build \
-            -platform windows/amd64 \
-            -s \
-            -trimpath \
-            -tags desktop,production \
-            -ldflags "-s -w -buildid= -X main.version=${{ needs.bump-tag.outputs.new_tag }} -X main.commit=${{ github.sha }} -X main.buildDate=${{ steps.builddate.outputs.iso }}"
+          #   -buildid=     drop randomised PE BuildID
+          #   -s -w         strip symbol/debug tables
+          #   -H windowsgui no console window for GUI app
+          # Combined with pinned toolchain + commit-derived buildDate +
+          # deterministic .syso, two runs of this tag produce the same SHA-256.
+          go build -trimpath -tags desktop,production \
+            -ldflags "-s -w -buildid= -H windowsgui -X main.version=${{ needs.bump-tag.outputs.new_tag }} -X main.commit=${{ github.sha }} -X main.buildDate=${{ steps.builddate.outputs.iso }}" \
+            -o build/bin/hashpoint.exe ./cmd/timetracker
 
       - name: Compute SHA-256 checksums
         shell: pwsh

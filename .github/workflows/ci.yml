@@ -82,8 +82,8 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.1
+      - name: Install go-winres
+        run: go install github.com/tc-hib/go-winres@v0.3.3
 
       - name: Frontend install
         working-directory: frontend
@@ -93,19 +93,27 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      - name: Build with Wails (embed icon, manifest, VERSIONINFO)
+      - name: Generate Windows resource (.syso)
+        shell: bash
+        run: |
+          go-winres make \
+            --in winres/winres.json \
+            --arch amd64 \
+            --out cmd/timetracker/hashpoint
+
+      - name: Build Go binary with embedded resources
         shell: bash
         env:
+          GOOS: windows
+          GOARCH: amd64
           CGO_ENABLED: "0"
         run: |
-          # Mirror release.yml: wails build embeds PE resources (icon, manifest,
-          # VERSIONINFO) via .syso so PR binaries match the release shape.
-          wails build \
-            -platform windows/amd64 \
-            -s \
-            -trimpath \
-            -tags desktop,production \
-            -ldflags "-s -w -buildid="
+          mkdir -p build/bin
+          # Mirror release.yml: same reproducibility flags + .syso embed,
+          # only without the version metadata X-flags.
+          go build -trimpath -tags desktop,production \
+            -ldflags "-s -w -buildid= -H windowsgui" \
+            -o build/bin/hashpoint.exe ./cmd/timetracker
 
       - name: Upload artefact
         uses: actions/upload-artifact@v4

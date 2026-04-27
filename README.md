@@ -45,11 +45,16 @@ Stimmt er nicht, wurde die Datei beim Download verändert — **nicht ausführen
 Voraussetzungen:
 - Go 1.26.2
 - Node.js 20.18.1
-- [Wails CLI](https://wails.io/docs/gettingstarted/installation) v2.10+
+- [`go-winres`](https://github.com/tc-hib/go-winres) (für eingebettetes Icon
+  + Manifest + Versionsinfo): `go install github.com/tc-hib/go-winres@v0.3.3`
 
 ```bash
-cd frontend && npm ci && cd ..
-wails build -trimpath -ldflags="-s -w -buildid= -H windowsgui"
+cd frontend && npm ci && npm run build && cd ..
+go-winres make --in winres/winres.json --arch amd64 --out cmd/timetracker/hashpoint
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
+  go build -trimpath -tags desktop,production \
+    -ldflags "-s -w -buildid= -H windowsgui" \
+    -o build/bin/hashpoint.exe ./cmd/timetracker
 ```
 
 Die fertige `.exe` liegt unter `build/bin/hashpoint.exe`.
