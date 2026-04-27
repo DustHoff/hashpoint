@@ -1,0 +1,17 @@
+{
+  "fixed": {
+    "file_version": "0.1.0.0"
+  },
+  "info": {
+    "0000": {
+      "ProductVersion": "0.1.0",
+      "CompanyName": "onesi GmbH",
+      "FileDescription": "Hashpoint TimeTracker",
+      "LegalCopyright": "Copyright (c) 2026 onesi GmbH",
+      "ProductName": "Hashpoint TimeTracker",
+      "Comments": "Windows-Zeiterfassung mit Personio-Sync",
+      "OriginalFilename": "hashpoint.exe",
+      "InternalName": "hashpoint"
+    }
+  }
+}

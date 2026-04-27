@@ -1,5 +1,8 @@
-# Build artefacts
-/build/
+# Build artefacts — only the output dir + Wails cache; keep
+# build/appicon.png and build/windows/{info.json,manifest,icon.*}
+# tracked so wails build can embed them in CI.
+/build/bin/
+/build/.wails/
 /bin/
 *.exe
 *.exe~
