@@ -16,17 +16,45 @@ Windows Defender beim ersten Start einen heuristischen Treffer melden
 ist ein bekannter False Positive bei nicht-signierten Go-/Wails-Binaries mit
 Window-Tracking-Funktionalität.
 
-### Mark-of-the-Web entfernen
+### Wenn Defender die Datei in Quarantäne verschiebt
 
-Nach dem Download in PowerShell ausführen:
+Bei aktiver Wacatac-Detection wird die `.exe` direkt nach dem Download nach
+`C:\ProgramData\Microsoft\Windows Defender\Quarantine\` verschoben — sie
+liegt dann nicht mehr im Downloads-Ordner und `Unblock-File` greift ins
+Leere. Empfohlene Reihenfolge:
+
+**1. Ordner-Ausnahme setzen, *bevor* erneut heruntergeladen wird** (PowerShell
+als Administrator):
+
+```powershell
+Add-MpPreference -ExclusionPath "$HOME\Downloads\hashpoint.exe"
+```
+
+Alternativ den ganzen Downloads-Ordner: `Add-MpPreference -ExclusionPath
+"$HOME\Downloads"`. Defender ignoriert dann diesen Pfad und quarantäniert
+nicht mehr.
+
+**2. Datei aus Quarantäne wiederherstellen** (falls Schritt 1 zu spät kam) —
+über die Windows-Security-GUI: *Einstellungen → Datenschutz & Sicherheit →
+Windows-Sicherheit → Viren- & Bedrohungsschutz → Schutzverlauf* → den
+Hashpoint-Eintrag öffnen → *Aktion → Auf Gerät zulassen* (oder
+*Wiederherstellen*).
+
+Per CLI (Administrator-Konsole):
+
+```powershell
+& "C:\Program Files\Windows Defender\MpCmdRun.exe" -Restore -Name "Trojan:Win32/Wacatac.H!ml" -All
+```
+
+**3. Mark-of-the-Web entfernen** (sobald die Datei wieder im Downloads-Ordner
+liegt):
 
 ```powershell
 Unblock-File .\hashpoint.exe
 ```
 
-Das entfernt den `Zone.Identifier`-Stream, den Windows beim Download aus dem
-Internet anhängt. Defender wendet dann die strengeren Internet-Zone-Heuristiken
-nicht mehr an.
+`Unblock-File` allein reicht nur, wenn Defender die Datei nicht aktiv
+quarantäniert, sondern lediglich SmartScreen-Hinweise zeigt.
 
 ### SHA-256 verifizieren
 
