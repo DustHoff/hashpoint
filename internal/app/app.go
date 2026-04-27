@@ -69,7 +69,11 @@ func New(deps Deps) *App {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
-	return &App{deps: deps, logger: deps.Logger, cfg: deps.Config}
+	// Seed `ctx` with a non-nil background context so methods invoked before
+	// Wails calls Startup (notably the tray goroutine, which lists tags to
+	// build its submenu) don't dereference a nil ctx in database/sql and
+	// crash the whole process.
+	return &App{deps: deps, logger: deps.Logger, cfg: deps.Config, ctx: context.Background()}
 }
 
 // Startup is invoked by Wails once the runtime is ready.
