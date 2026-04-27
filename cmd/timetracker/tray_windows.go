@@ -32,6 +32,40 @@ func onTrayReady(ctx context.Context, a *app.App, version string) {
 	mPause := systray.AddMenuItemCheckbox("Pause Tracking", "Tracking pausieren", false)
 	mSync := systray.AddMenuItem("Sync zu Personio (heute)", "Heutigen Tag synchronisieren")
 	systray.AddSeparator()
+
+	// Manual-tag submenu — clicking a tag closes any currently open manual
+	// block and opens a new placeholder block under that tag from "now".
+	// "Kein Tag" closes the active manual block. The tag list is snapshotted
+	// at tray startup; tags added later require an app restart to appear.
+	mManualTag := systray.AddMenuItem("Manueller Tag", "Zeit manuell einem Tag zuordnen")
+	mManualNone := mManualTag.AddSubMenuItem("Kein Tag (Stop)", "Manuelle Zuordnung beenden")
+	go func() {
+		for range mManualNone.ClickedCh {
+			if err := a.StopManualTag(); err != nil {
+				slog.Warn("tray: stop manual tag failed", "err", err)
+			}
+		}
+	}()
+	if tags, err := a.ListTags(); err != nil {
+		slog.Warn("tray: list tags for manual menu failed", "err", err)
+	} else {
+		for _, t := range tags {
+			if t.Name == "" {
+				continue
+			}
+			item := mManualTag.AddSubMenuItem(t.Name, "Zeit dem Tag '"+t.Name+"' zuordnen")
+			tagID := t.ID
+			go func() {
+				for range item.ClickedCh {
+					if err := a.StartManualTag(tagID); err != nil {
+						slog.Warn("tray: start manual tag failed", "tag_id", tagID, "err", err)
+					}
+				}
+			}()
+		}
+	}
+
+	systray.AddSeparator()
 	mAutostart := systray.AddMenuItemCheckbox("Autostart", "Mit Windows starten", false)
 	mAbout := systray.AddMenuItem(fmt.Sprintf("Über (%s)", version), "Versionsinfo")
 	systray.AddSeparator()

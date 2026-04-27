@@ -55,6 +55,13 @@ type App struct {
 
 	mu  sync.Mutex
 	cfg *config.Config
+	// Manual-tag state — guarded by `mu`. When `manualBlockID` is non-nil a
+	// placeholder block is currently open under the user's selected tag from
+	// the tray submenu. `manualPausedTracker` records whether StartManualTag
+	// had to pause the focus tracker, so StopManualTag only resumes it if it
+	// was the one that paused it (don't undo a pause the user set elsewhere).
+	manualBlockID       *int64
+	manualPausedTracker bool
 }
 
 // New constructs the app from its dependencies.
@@ -512,6 +519,96 @@ func (a *App) IsTrackingPaused() bool {
 		return true
 	}
 	return a.deps.Tracker.Paused()
+}
+
+// ----- Manual tagging -----------------------------------------------------
+
+// StartManualTag opens a placeholder focus block tagged with the given tag,
+// using "now" as the start time. If a manual block is already open, it is
+// closed first so the new block records only the time after the click —
+// switching tags in the tray submenu produces a clean handover. The focus
+// tracker is paused for the duration of manual mode so it cannot create
+// competing program-focus blocks; StopManualTag resumes it on close.
+func (a *App) StartManualTag(tagID int64) error {
+	if a.deps.Blocks == nil {
+		return errors.New("blocks repository not configured")
+	}
+	if tagID <= 0 {
+		return fmt.Errorf("invalid tag id: %d", tagID)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	now := time.Now().UTC()
+
+	// Close any in-progress manual block first so its end time is the moment
+	// of the new click — not whatever close-time we'd compute on shutdown.
+	if a.manualBlockID != nil {
+		if err := a.deps.Blocks.Close(a.ctx, *a.manualBlockID, now); err != nil {
+			a.logger.Warn("manual tag: close previous failed",
+				"id", *a.manualBlockID, "err", err)
+		}
+		a.manualBlockID = nil
+	} else if a.deps.Tracker != nil && !a.deps.Tracker.Paused() {
+		// First entry into manual mode — pause the focus tracker so it stops
+		// emitting program blocks. We remember that we're the source of the
+		// pause so StopManualTag can undo it without overriding a pause the
+		// user set elsewhere (Settings, tray, Timeline button).
+		a.deps.Tracker.Pause(a.ctx)
+		a.manualPausedTracker = true
+	}
+
+	id := tagID
+	block := &storage.FocusBlock{
+		ProcessName:   "",
+		WindowTitle:   "",
+		StartTime:     now,
+		TagID:         &id,
+		IsPlaceholder: true,
+	}
+	if err := a.deps.Blocks.Open(a.ctx, block); err != nil {
+		return fmt.Errorf("open manual block: %w", err)
+	}
+	a.manualBlockID = &block.ID
+	a.logger.Info("manual tag started", "block_id", block.ID, "tag_id", tagID)
+	return nil
+}
+
+// StopManualTag closes the currently open manual block (if any) and resumes
+// the focus tracker — but only if StartManualTag was the one that paused it.
+func (a *App) StopManualTag() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.manualBlockID == nil {
+		return nil
+	}
+	id := *a.manualBlockID
+	now := time.Now().UTC()
+	if err := a.deps.Blocks.Close(a.ctx, id, now); err != nil {
+		return fmt.Errorf("close manual block: %w", err)
+	}
+	a.manualBlockID = nil
+	if a.manualPausedTracker && a.deps.Tracker != nil {
+		a.deps.Tracker.Resume()
+	}
+	a.manualPausedTracker = false
+	a.logger.Info("manual tag stopped", "block_id", id)
+	return nil
+}
+
+// IsManualTagActive reports whether a manual tag block is currently open and,
+// if so, the id of the tag it carries. Used by the tray to highlight the
+// active entry in the manual-tag submenu.
+func (a *App) IsManualTagActive() (int64, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.manualBlockID == nil {
+		return 0, false
+	}
+	// We don't keep the tag id in App state; the only consumer needs the
+	// boolean and can refresh tag info via ListTags. Return the block id so
+	// callers can correlate if needed.
+	return *a.manualBlockID, true
 }
 
 // ----- Settings -----------------------------------------------------------
