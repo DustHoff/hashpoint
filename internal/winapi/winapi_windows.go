@@ -5,24 +5,25 @@ package winapi
 import (
 	"fmt"
 	"path/filepath"
-	"syscall"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
+// The bulk of the Win32 surface is reached via golang.org/x/sys/windows
+// (GetForegroundWindow, GetWindowThreadProcessId, OpenProcess,
+// QueryFullProcessImageName, CloseHandle). The four calls below have no typed
+// wrapper in x/sys/windows yet, so we resolve them once at init via the
+// (lazy) procedure table x/sys/windows itself maintains for those DLLs.
 var (
-	user32   = windows.NewLazySystemDLL("user32.dll")
-	kernel32 = windows.NewLazySystemDLL("kernel32.dll")
+	modUser32   = windows.NewLazySystemDLL("user32.dll")
+	modKernel32 = windows.NewLazySystemDLL("kernel32.dll")
 
-	procGetForegroundWindow     = user32.NewProc("GetForegroundWindow")
-	procGetWindowTextW          = user32.NewProc("GetWindowTextW")
-	procGetWindowTextLengthW    = user32.NewProc("GetWindowTextLengthW")
-	procGetWindowThreadProcID   = user32.NewProc("GetWindowThreadProcessId")
-	procGetLastInputInfo        = user32.NewProc("GetLastInputInfo")
-	procGetTickCount            = kernel32.NewProc("GetTickCount")
-	procQueryFullProcessImageNW = kernel32.NewProc("QueryFullProcessImageNameW")
+	procGetWindowTextW       = modUser32.NewProc("GetWindowTextW")
+	procGetWindowTextLengthW = modUser32.NewProc("GetWindowTextLengthW")
+	procGetLastInputInfo     = modUser32.NewProc("GetLastInputInfo")
+	procGetTickCount         = modKernel32.NewProc("GetTickCount")
 )
 
 type lastInputInfo struct {
@@ -31,7 +32,7 @@ type lastInputInfo struct {
 }
 
 func foregroundImpl() (FocusInfo, error) {
-	hwnd, _, _ := procGetForegroundWindow.Call()
+	hwnd := windows.GetForegroundWindow()
 	if hwnd == 0 {
 		return FocusInfo{}, nil
 	}
@@ -46,7 +47,7 @@ func foregroundImpl() (FocusInfo, error) {
 	path := processPath(pid)
 	name := filepath.Base(path)
 	return FocusInfo{
-		HWND:        hwnd,
+		HWND:        uintptr(hwnd),
 		PID:         pid,
 		Title:       title,
 		ProcessPath: path,
@@ -54,27 +55,24 @@ func foregroundImpl() (FocusInfo, error) {
 	}, nil
 }
 
-func windowText(hwnd uintptr) (string, error) {
-	n, _, _ := procGetWindowTextLengthW.Call(hwnd)
+func windowText(hwnd windows.HWND) (string, error) {
+	n, _, _ := procGetWindowTextLengthW.Call(uintptr(hwnd))
 	if n == 0 {
 		return "", nil
 	}
 	buf := make([]uint16, int(n)+1)
-	r, _, e := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	r, _, _ := procGetWindowTextW.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
 	if r == 0 {
-		// Empty title is not an error; fall through with empty string.
-		if e == nil || e.(syscall.Errno) == 0 {
-			return "", nil
-		}
+		// Empty/unreadable title is not an error — return empty string.
+		return "", nil
 	}
 	return windows.UTF16ToString(buf), nil
 }
 
-func windowProcessID(hwnd uintptr) (uint32, error) {
+func windowProcessID(hwnd windows.HWND) (uint32, error) {
 	var pid uint32
-	r, _, e := procGetWindowThreadProcID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
-	if r == 0 {
-		return 0, fmt.Errorf("GetWindowThreadProcessId: %v", e)
+	if _, err := windows.GetWindowThreadProcessId(hwnd, &pid); err != nil {
+		return 0, fmt.Errorf("GetWindowThreadProcessId: %w", err)
 	}
 	return pid, nil
 }
@@ -92,8 +90,7 @@ func processPath(pid uint32) string {
 
 	buf := make([]uint16, windows.MAX_PATH)
 	size := uint32(len(buf))
-	r, _, _ := procQueryFullProcessImageNW.Call(uintptr(h), 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)))
-	if r == 0 {
+	if err := windows.QueryFullProcessImageName(h, 0, &buf[0], &size); err != nil {
 		return ""
 	}
 	return windows.UTF16ToString(buf[:size])
