@@ -12,9 +12,15 @@ type MemorySessionStore struct {
 // NewMemorySessionStore returns an in-memory session store.
 func NewMemorySessionStore() *MemorySessionStore { return &MemorySessionStore{} }
 
-// Get returns the stored session or ErrNoSession.
+// Get returns the stored session or ErrNoSession. Sessions older than
+// MaxSessionAge are dropped and reported as missing so the caller is
+// pushed through a fresh interactive login.
 func (m *MemorySessionStore) Get() (*Session, error) {
 	if m.s == nil {
+		return nil, ErrNoSession
+	}
+	if m.s.Expired() {
+		m.s = nil
 		return nil, ErrNoSession
 	}
 	return m.s, nil

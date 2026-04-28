@@ -4,6 +4,7 @@ package personio
 
 import (
 	"errors"
+	"log/slog"
 
 	"github.com/danieljoos/wincred"
 )
@@ -20,6 +21,11 @@ func NewWinCredSessionStore() *WinCredSessionStore {
 }
 
 // Get reads and decodes the stored session, or returns ErrNoSession.
+//
+// Sessions older than MaxSessionAge are treated as if they did not exist
+// and the underlying credential entry is purged on the way out — so callers
+// (UI status, sync) consistently see "no session" and trigger a fresh
+// interactive login instead of replaying stale cookies.
 func (s *WinCredSessionStore) Get() (*Session, error) {
 	c, err := wincred.GetGenericCredential(s.target())
 	if err != nil {
@@ -28,7 +34,17 @@ func (s *WinCredSessionStore) Get() (*Session, error) {
 	if len(c.CredentialBlob) == 0 {
 		return nil, ErrNoSession
 	}
-	return UnmarshalSession(c.CredentialBlob)
+	sess, err := UnmarshalSession(c.CredentialBlob)
+	if err != nil {
+		return nil, err
+	}
+	if sess.Expired() {
+		slog.Default().Info("personio: stored session exceeded max age — purging",
+			"max_age", MaxSessionAge, "captured_at", sess.CapturedAt)
+		_ = c.Delete()
+		return nil, ErrNoSession
+	}
+	return sess, nil
 }
 
 // Set persists the session to wincred.

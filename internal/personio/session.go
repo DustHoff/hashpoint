@@ -129,6 +129,24 @@ func urlDecode(s string) (string, error) {
 // been deleted).
 var ErrNoSession = errors.New("personio: no session stored")
 
+// MaxSessionAge caps how long a captured Personio session may be reused.
+// Personio's own SSO cookies live much longer, but reusing a single
+// browser-harvested cookie set for days makes the traffic look unlike a
+// real user and risks the session being flagged. After this window the
+// stored session is treated as if it did not exist and the user has to
+// re-authenticate interactively.
+const MaxSessionAge = 24 * time.Hour
+
+// Expired reports whether the session was captured more than MaxSessionAge
+// ago. Sessions with a zero CapturedAt are treated as expired so legacy
+// blobs without that field are forced through a fresh login.
+func (s Session) Expired() bool {
+	if s.CapturedAt.IsZero() {
+		return true
+	}
+	return time.Since(s.CapturedAt) >= MaxSessionAge
+}
+
 // SessionStore abstracts session persistence. The Windows implementation in
 // session_windows.go uses the Windows Credential Manager.
 type SessionStore interface {
