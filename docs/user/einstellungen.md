@@ -22,7 +22,8 @@ Validierungsfehler werden oben im Tab als Banner angezeigt.
 
 | Feld | Default | Bereich | Bedeutung |
 | --- | --- | --- | --- |
-| **Poll-Intervall (Sekunden)** | `2` | `1`–`30` | Wie oft prüft der TimeTracker, welches Fenster im Vordergrund ist. Niedriger = präziser, aber höhere CPU-Last. |
+| **Erfassung der fokussierten Anwendung aktiv** | an | Checkbox | Globaler Schalter für das automatische Fokus-Tracking. Deaktiviert: keine neuen Programm-Blöcke und keine Auto-Tagging-Regeln greifen mehr — manuelles Tagging über das Tray-Submenü bleibt möglich. Der Wert wird persistiert; wirkt sich sofort und auch über Anwendungs-Neustarts hinweg aus. Identisch mit dem Tray-Eintrag „Pause Tracking". |
+| **Poll-Intervall (Sekunden)** | `2` | `1`–`300` | Wie oft prüft der TimeTracker, welches Fenster im Vordergrund ist. Niedriger = präziser, aber höhere CPU-Last. |
 | **Idle-Schwelle (Minuten)** | `5` | `1`–`240` | Nach wie vielen Minuten ohne Tastatur-/Maus-Eingabe der laufende Block beendet und als **Idle** markiert wird. |
 
 ## Oberfläche
@@ -61,7 +62,8 @@ Wer den Editor lieber direkt verwendet, kann die Datei unter
 
 ```toml
 [tracking]
-poll_interval_sec = 2
+enabled            = true   # globaler Schalter für Fokus-Tracking + Auto-Tagging
+poll_interval_sec  = 2
 idle_threshold_min = 5
 
 [personio]

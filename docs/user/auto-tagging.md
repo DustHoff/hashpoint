@@ -41,6 +41,22 @@ Der Tab **Auto-Tagging** ist zweispaltig:
 
 > **Faustregel:** Spezifischere Regeln bekommen höhere Priorität, allgemeine Fallback-Regeln eine niedrigere.
 
+### Zusammenspiel mit dem Tracking-Schalter und dem manuellen Tagging
+
+- **Tracking deaktiviert** (Tray „Pause Tracking" oder Einstellungen
+  *„Erfassung der fokussierten Anwendung aktiv"*): Der TimeTracker erfasst
+  keine neuen Fokus-Blöcke, also greifen die Auto-Tagging-Regeln nicht. Der
+  Tab **Auto-Tagging** bleibt aber jederzeit erreichbar — Regeln lassen
+  sich auch im pausierten Zustand anlegen, bearbeiten, testen und über
+  „Auf Historie anwenden" rückwirkend einsetzen.
+- **Manuelles Tagging aktiv** (Tray-Submenü „Manueller Tag"): Solange ein
+  Manual-Block offen ist, **überspringt der TimeTracker die Regel-Engine**
+  für neu geöffnete Programm-Blöcke und vergibt stattdessen den manuell
+  gewählten Tag. Die Blöcke werden dabei nicht als „auto_tagged" markiert,
+  damit Sie sie in der Zeitachse von regelbasierten Treffern unterscheiden
+  können. Sobald „Kein Tag (Stop)" geklickt oder ein anderer manueller Tag
+  ausgewählt wird, übernimmt die Regel-Engine wieder.
+
 ## Live-Test (vor dem Speichern)
 
 Vor dem Speichern können Sie eine Regel gegen reale Daten testen:

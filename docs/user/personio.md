@@ -59,6 +59,20 @@ Personio-Bereich der Einstellungen.
 - **Session löschen:** entfernt die im Credential Manager hinterlegten
   Cookies. Bis zur nächsten Anmeldung sind keine Synchronisationen möglich.
 
+## Status-Badge im Hauptfenster
+
+Oben rechts im Hauptfenster sitzt ein **Personio-Status-Badge**, der die
+Cookies regelmäßig (alle 60 s) gegen die Personio-Instanz prüft:
+
+- **Grün** – Session ist gültig, Tenant wird im Tooltip angezeigt.
+- **Rot** – keine Session vorhanden oder Cookies abgelaufen. Klick auf den
+  Badge startet direkt den interaktiven Login (entspricht dem Button in
+  den Einstellungen).
+- **Grau / Pulsierend** – aktuelle Prüfung oder laufender Login.
+
+So merken Sie sofort, wenn Personio Sie ausgeloggt hat — auch ohne in die
+Einstellungen zu wechseln.
+
 ## Synchronisation auslösen
 
 Der eigentliche Sync funktioniert wie zuvor:

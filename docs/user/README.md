@@ -11,12 +11,12 @@ Der TimeTracker ist eine Windows-Desktop-Anwendung, die im Hintergrund automatis
 | Kapitel | Inhalt |
 | --- | --- |
 | [Installation & Erste Schritte](installation.md) | Speicherorte, Autostart, erster Start |
-| [Einstellungen](einstellungen.md) | Konfiguration via `config.toml` und Credential Manager |
-| [Zeitachse & Zeiterfassung](zeiterfassung.md) | Tagesansicht, Blöcke bearbeiten, Pause/Fortsetzen |
+| [Einstellungen](einstellungen.md) | Konfiguration via Settings-Tab, `config.toml` und Credential Manager |
+| [Zeitachse & Zeiterfassung](zeiterfassung.md) | Tagesansicht, Blöcke bearbeiten, Pause/Fortsetzen, Bereichs-Tagging |
 | [Tags verwalten](tags.md) | Tag-Hierarchie, Farben, Personio-Mappings |
 | [Auto-Tagging-Regeln](auto-tagging.md) | Regeln definieren, testen und auf Historie anwenden |
 | [Personio-Synchronisation](personio.md) | Voraussetzungen, Sync-Logik, Fehlerbehandlung |
-| [Systemtray](tray.md) | Tray-Menü, Pause, Autostart, Beenden |
+| [Systemtray](tray.md) | Tray-Menü, Pause, manuelles Tagging, Autostart, Beenden |
 
 ## Schnellstart in fünf Schritten
 
@@ -28,7 +28,11 @@ Der TimeTracker ist eine Windows-Desktop-Anwendung, die im Hintergrund automatis
 
 ## Wo finde ich was?
 
-- **Tray-Icon (rechts unten):** Pause umschalten, Autostart, Beenden
-- **Hauptfenster:** Vier Tabs – Zeitachse, Tags, Auto-Tagging, Über
+- **Tray-Icon (rechts unten):** Pause umschalten, manuelles Tagging,
+  Sync zu Personio, Autostart, Beenden
+- **Hauptfenster:** Fünf Tabs – Zeitachse, Tags, Auto-Tagging,
+  Einstellungen, Über; oben rechts der Personio-Status-Badge
 - **Konfigurationsdatei:** `%APPDATA%\TimeTracker\config.toml`
 - **Datenbank & Logs:** `%LOCALAPPDATA%\TimeTracker\`
+- **Personio-Session:** Windows Credential Manager
+  (`TimeTracker.PersonioSession`)

@@ -43,6 +43,11 @@ Direkt unter dem Kopfbereich liegt ein horizontaler **Zeitstrahl** vom Tagesanfa
 - **Idle-Blöcke** erscheinen als blasser, ausgegrauter Streifen.
 - **Ungetaggte Blöcke** werden grau dargestellt.
 - **Stundenraster:** feine Trennlinien alle 60 Minuten, Beschriftung 00 / 06 / 12 / 18 / 24.
+- **Zeit-Anzeige beim Hover/Drag:** Über dem Strip blendet sich beim
+  Überfahren eines Segments oder beim Aufziehen eines Bereichs eine kleine
+  Zeit-Box ein (`HH:MM–HH:MM · Dauer`). Auf leeren Strip-Bereichen zeigt sie
+  die exakte Uhrzeit unter dem Cursor — praktisch, um einen Drag punktgenau
+  zu starten.
 
 #### Selektion via Strip
 
@@ -50,8 +55,9 @@ Direkt unter dem Kopfbereich liegt ein horizontaler **Zeitstrahl** vom Tagesanfa
 | --- | --- |
 | **Klick auf ein Tag-Segment** | Selektiert alle Blöcke des Segments. |
 | **Shift+Klick auf ein Segment** | Erweitert die bestehende Auswahl additiv. |
-| **Drag (linke Maustaste)** | Zieht eine Zeitspanne auf. Beim Loslassen werden alle Blöcke, die diesen Bereich schneiden, ausgewählt. |
+| **Drag (linke Maustaste)** | Zieht eine Zeitspanne auf. Beim Loslassen werden alle Blöcke, die diesen Bereich schneiden, ausgewählt. Liegt der Bereich (teilweise) auf nicht-erfasster Zeit, wird beim Taggen automatisch ein **Platzhalter-Block** erzeugt, der die Lücke füllt — sinnvoll für Tätigkeiten ohne Bildschirmkontakt (Meetings, Telefonate). |
 | **Shift+Drag** | Wie Drag, aber additiv zur bestehenden Auswahl. |
+| **Drag-Range an den Kanten ziehen** | Die Auswahl-Markierung lässt sich nachträglich an den blauen Kanten greifen und in der Breite verändern. So passen Sie die getaggte Zeitspanne präzise an, ohne neu zu ziehen. |
 
 Der aktive Auswahlbereich wird während des Ziehens als blaues Overlay
 hervorgehoben.
@@ -65,14 +71,20 @@ mehrere Anwendungen (z. B. IDE, Browser, Terminal) ineinandergreifen.
 
 ### Block-Liste
 
-Jeder Block in der Liste zeigt:
+Jeder Eintrag in der Liste fasst aufeinanderfolgende Blöcke mit gleichem
+Programm, Tag und gleicher Beschreibung zu einer Zeile zusammen. Sie zeigt:
 
 - **Zeitraum:** `HH:MM–HH:MM` (oder nur Startzeit bei laufendem Block)
-- **Dauer:** `X m Y s`
-- **Prozessname:** z. B. `code.exe`
+- **Dauer:** `X m Y s` (Summe der zusammengefassten Blöcke)
+- **Prozessname:** z. B. `code.exe`. Bei Manual-Tag-Blöcken steht hier
+  *(Manueller Eintrag)* in kursiv.
 - **Fenstertitel:** abgeschnitten, vollständig im Tooltip
 - **Beschreibung:** sofern vergeben, mit Stift-Symbol 📝 abgekürzt eingeblendet
-- **Tag:** Farb-Chip mit Tag-Name; **⚙** kennzeichnet automatisch zugewiesene Tags
+- **Tag:** Farb-Chip mit Tag-Name. Bei Sub-Tags wird zusätzlich der Eltern-Tag
+  als Chip daneben dargestellt. **⚙** kennzeichnet automatisch zugewiesene Tags.
+- **Gruppen aufklappen:** Klick auf den kleinen Pfeil in der zusammengefassten
+  Zeile zeigt jeden einzelnen ursprünglichen Fenstertitel — nützlich, wenn
+  man lange Browser-Sitzungen mit vielen Tabs nachvollziehen will.
 - **Idle-Blöcke:** abgeblendet (50 % Deckkraft)
 - **Hover aus dem Strip:** wird die zugehörige Zeile leicht hervorgehoben
 
@@ -83,18 +95,28 @@ Die Zeitachse aktualisiert sich automatisch alle 5 Sekunden, solange der Tab ge�
 1. Auswahl treffen – wahlweise:
    - In der Tabelle einen Block anklicken (Shift-Klick = Bereich)
    - Im Strip ein Tag-Segment klicken (Shift-Klick = additiv)
-   - Im Strip mit der Maus eine Zeitspanne ziehen (Shift-Drag = additiv)
-2. Sobald mindestens ein Block markiert ist, erscheint das Panel
-   *„N Block(s) markiert →"* mit den verfügbaren Tags und einem Textfeld für
-   die **Tätigkeitsbeschreibung**.
+   - Im Strip mit der Maus eine Zeitspanne ziehen (Shift-Drag = additiv) —
+     auch über nicht erfasste Bereiche hinweg
+2. Sobald mindestens ein Block oder ein Bereich markiert ist, erscheint das
+   Panel *„N Block(s) markiert →"* mit den verfügbaren Tags und einem
+   Textfeld für die **Tätigkeitsbeschreibung**. Bei einem reinen
+   Zeitbereich ohne Programme steht zusätzlich „· Bereich HH:MM–HH:MM
+   (ohne Programme)" im Header.
 3. Optional eine Beschreibung tippen.
 4. Auf einen Tag-Button klicken → Tag **und** Beschreibung werden in einem
-   Schritt allen markierten Blöcken zugewiesen.
+   Schritt allen markierten Blöcken zugewiesen. Liegt die Auswahl auf
+   nicht erfasster Zeit, wird ein Platzhalter-Block erzeugt, der die Lücke
+   füllt und mit dem gewählten Tag versehen wird (so entsteht ein
+   zusammenhängender Sync-Eintrag in Personio).
 5. Soll nur die Beschreibung geändert werden, ohne den Tag anzufassen,
-   die Beschreibung tippen und **Beschreibung speichern** klicken.
+   die Beschreibung tippen und **Speichern** klicken.
 6. **Tag entfernen** → entfernt das Tagging der ausgewählten Blöcke (die
-   Beschreibung bleibt erhalten).
-7. **Auswahl aufheben** → leert die Markierung.
+   Beschreibung bleibt erhalten). Reine Platzhalter-Blöcke werden dabei
+   gelöscht.
+7. **Löschen** → entfernt die markierten Blöcke endgültig aus der
+   Datenbank. Wird vor allem genutzt, um versehentlich erfasste oder
+   irrelevante Einträge zu bereinigen.
+8. **Auswahl aufheben** → leert die Markierung.
 
 > Manuell vergebene Tags überschreiben Auto-Tags und werden bei späterem Lauf der Auto-Tagging-Engine **nicht** überschrieben.
 
@@ -109,7 +131,8 @@ Beschreibungstext geben möchten:
 1. Auf dem Strip das Tag-Segment anklicken oder die Zeitspanne aufziehen.
 2. Im Auswahlpanel die Beschreibung tippen.
 3. **Tag-Button** drücken (überschreibt Tag + Beschreibung) oder
-   **Beschreibung speichern** (lässt vorhandenes Tagging unverändert).
+   **Speichern** (lässt vorhandenes Tagging unverändert, schreibt nur die
+   Beschreibung).
 
 Bei der Personio-Synchronisation wird die Beschreibung an den aus den
 Tag-Namen erzeugten Kommentar angehängt:
@@ -117,10 +140,21 @@ Tag-Namen erzeugten Kommentar angehängt:
 
 ## Pause & Fortsetzen
 
-- **Pausieren:** Schließt den aktuell laufenden Block sofort und beendet die Hintergrund-Erfassung. Während der Pause werden keine neuen Blöcke geöffnet.
-- **Fortsetzen:** Aktiviert die Erfassung wieder. Der nächste Fensterwechsel öffnet einen neuen Block.
+- **Pausieren:** Schließt den aktuell laufenden Block sofort und beendet die
+  Hintergrund-Erfassung. Während der Pause werden keine neuen Programm-Blöcke
+  geöffnet und auch keine Auto-Tagging-Regeln ausgeführt.
+- **Fortsetzen:** Aktiviert die Erfassung wieder. Der nächste Fensterwechsel
+  öffnet einen neuen Block.
 
-Pausieren ist nützlich, wenn Sie an etwas Privatem oder nicht erfasswürdigem arbeiten. Der Status lässt sich auch über das Tray-Menü umschalten.
+Pausieren ist nützlich, wenn Sie an etwas Privatem oder nicht erfasswürdigem
+arbeiten. Der Status lässt sich auch über das Tray-Menü („Pause Tracking")
+oder die Einstellungen umschalten und wird persistiert — nach einem Neustart
+bleibt die letzte Wahl erhalten.
+
+> **Manuelles Tagging über das Tray-Submenü** funktioniert in beiden
+> Zuständen (siehe [Systemtray](tray.md)). Bei aktiver Erfassung erbt jeder
+> neu erfasste Programm-Block den manuellen Tag; bei pausierter Erfassung
+> bleibt nur der Platzhalter-Block der manuellen Sitzung.
 
 ## Bestehende Blöcke korrigieren
 

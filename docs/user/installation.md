@@ -4,7 +4,13 @@
 
 - Windows 10 oder Windows 11 (x64)
 - Schreibrechte auf das eigene Benutzerprofil (`%APPDATA%` und `%LOCALAPPDATA%`)
-- Für Personio-Sync: gültige Personio-API-Zugangsdaten (Client ID, Client Secret, Employee ID)
+- Für Personio-Sync:
+  - Eigenes Personio-Login (E-Mail/Passwort, ggf. MFA/SSO) — der TimeTracker
+    benötigt **keine** firmenweiten API-Credentials.
+  - Lokal installierter **Google Chrome**, da die Anmeldung über das
+    Chrome DevTools Protocol (CDP) läuft. Edge oder die Wails-WebView
+    werden nicht unterstützt.
+  - Tenant-Subdomain (z. B. `onesi` für `https://onesi.personio.de`).
 
 ## Erster Start
 
@@ -25,7 +31,7 @@ Sobald die Anwendung läuft, erfasst sie automatisch jede Sekunde, welches Fenst
 | `%APPDATA%\TimeTracker\config.toml` | Konfigurationsdatei (TOML) |
 | `%LOCALAPPDATA%\TimeTracker\data.db` | SQLite-Datenbank mit Blöcken, Tags und Regeln |
 | `%LOCALAPPDATA%\TimeTracker\log\*.log` | Strukturierte JSON-Logs |
-| Windows Credential Manager | Personio Client Secret (verschlüsselt) |
+| Windows Credential Manager (`TimeTracker.PersonioSession`) | Personio-Session-Cookies (verschlüsselt) |
 
 > Die Verzeichnisse werden mit Benutzer-only-Rechten (`0o700`) angelegt. Andere Benutzer am Gerät haben keinen Zugriff.
 
@@ -53,4 +59,6 @@ Zur Sicherung Ihrer Erfassung genügt es, folgende Pfade zu kopieren:
 - `%LOCALAPPDATA%\TimeTracker\` – komplette Datenbank inklusive Tags und Regeln
 - `%APPDATA%\TimeTracker\config.toml` – Konfiguration
 
-Das Personio Client Secret liegt im Windows Credential Manager und wird durch eine Datei-Sicherung **nicht** mit übertragen. Bei einem Geräte-Wechsel muss es einmal neu hinterlegt werden.
+Die Personio-Session-Cookies liegen im Windows Credential Manager und werden
+durch eine Datei-Sicherung **nicht** mit übertragen. Bei einem Geräte-Wechsel
+genügt eine erneute interaktive Anmeldung im Personio-Bereich der Einstellungen.

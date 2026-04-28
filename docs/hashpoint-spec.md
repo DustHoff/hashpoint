@@ -29,11 +29,16 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
 - **Linksklick** auf Icon → öffnet Hauptfenster mit Zeitachse.
 - **Rechtsklick** → Kontextmenü mit:
   - Öffnen
-  - Pause / Resume Tracking
-  - Sync zu Personio
-  - Einstellungen
+  - Pause Tracking (Checkbox; spiegelt `tracking.enabled` wider)
+  - Sync zu Personio (heute)
+  - **Manueller Tag** (Submenü mit „Kein Tag (Stop)" + einem Eintrag pro
+    konfiguriertem Tag, siehe 2.4.2)
+  - Autostart (Checkbox)
+  - Über `<version>`
   - Beenden
 - **Autostart**-Option (Registry-Eintrag unter `HKCU\...\Run`).
+- Die Tag-Liste im Submenü wird beim Tray-Start erfasst — neu angelegte
+  Tags erscheinen erst nach Neustart der Anwendung.
 
 ### 2.3 Hauptfenster (Zeitachse)
 - Tagesansicht zweigeteilt: **horizontaler Zeitstrahl oben** (24-Stunden-Strip),
@@ -104,6 +109,29 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
 - Manuell gesetzte Tags werden **nicht überschrieben** (Flag `auto_tagged` in `focus_blocks`).
 - UI: eigener Bereich „Auto-Tagging-Regeln" mit Test-Funktion gegen vorhandene Blöcke.
 - Bulk-Apply: Regel rückwirkend auf bereits erfasste, ungetaggte Blöcke anwenden.
+- **Vorrang manueller Tags:** Solange eine manuelle Tagging-Sitzung läuft
+  (siehe 2.4.2), erbt jeder neu geöffnete Tracker-Block den manuellen Tag und
+  läuft **nicht** durch die Regel-Engine — `auto_tagged` bleibt dabei `false`,
+  damit Auswertungen den manuellen Override von Regelmatches unterscheiden
+  können.
+
+### 2.4.2 Manuelles Tagging (Tray-Submenü)
+- Über das Tray-Submenü „Manueller Tag" kann der User die laufende Zeit einer
+  Kategorie zuordnen, ohne sie vorher zu erfassen — typisch für Telefonate,
+  Meetings ohne Bildschirm-Aktivität oder Pausen.
+- Klick auf einen Tag im Submenü öffnet einen Platzhalter-Block
+  (`is_placeholder = true`, leerer `process_name`/`window_title`,
+  `start_time = now`) mit dem gewählten Tag und teilt dem Tracker den aktiven
+  Manual-Tag mit.
+- Ein bereits offener Manual-Block wird beim Wechsel auf einen anderen Tag
+  sauber geschlossen, bevor der neue Block geöffnet wird.
+- „Kein Tag (Stop)" beendet den aktuellen Manual-Block. Wiederholtes Klicken
+  ohne aktiven Block ist ein No-Op.
+- **Parallelität:** Manuelles Tagging stoppt das Fokus-Polling **nicht**.
+  Solange `tracking.enabled = true` ist, läuft das Programm-Tracking weiter
+  und die Tracker-Blöcke übernehmen den manuellen Tag (Override über die
+  Auto-Tagging-Engine, siehe 2.4.1). Ist `tracking.enabled = false`, bleibt
+  nur der Platzhalter-Block bestehen.
 
 ### 2.5 Personio-Synchronisation
 
@@ -302,18 +330,20 @@ loop:
 ### 4.6 Konfiguration (Beispiel `config.toml`)
 ```toml
 [tracking]
-poll_interval_sec = 2
+enabled            = true   # globaler Schalter: false pausiert Polling + Auto-Tagging
+poll_interval_sec  = 2
 idle_threshold_min = 5
 
 [personio]
-client_id     = ""
-client_secret = ""
-employee_id   = ""
-base_url      = "https://api.personio.de/v1"
+tenant = "onesi"            # Subdomain, der Login läuft via CDP — keine API-Tokens
 
 [ui]
 autostart = true
 ```
+
+> Auth-Daten (Personio-Cookies, XSRF-Token) liegen **nicht** in `config.toml`,
+> sondern verschlüsselt im Windows Credential Manager unter
+> `TimeTracker.PersonioSession`.
 
 ---
 
