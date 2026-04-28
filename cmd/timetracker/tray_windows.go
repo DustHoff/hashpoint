@@ -7,13 +7,27 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/getlantern/systray"
 	"github.com/onesi/hashpoint/internal/app"
 	"github.com/onesi/hashpoint/internal/personio"
+	"github.com/onesi/hashpoint/internal/storage"
 	"github.com/onesi/hashpoint/internal/winapi"
 )
+
+// manualTagSlotCount caps how many tags we can show in the manual-tag
+// submenu. systray has no API for removing menu items at runtime, so we
+// pre-allocate a fixed pool of slots and re-bind them as the tag list
+// changes. 64 is well above the realistic number of tags a single user
+// keeps around.
+const manualTagSlotCount = 64
+
+// manualTagRefreshInterval controls how often the tray rescans the tag
+// list. Tags are typically edited from the main UI, so a few seconds is
+// imperceptible to the user yet keeps the menu fresh without wasting CPU.
+const manualTagRefreshInterval = 3 * time.Second
 
 func defaultSessionStore() personio.SessionStore {
 	return personio.NewWinCredSessionStore()
@@ -35,8 +49,9 @@ func onTrayReady(ctx context.Context, a *app.App, version string) {
 
 	// Manual-tag submenu — clicking a tag closes any currently open manual
 	// block and opens a new placeholder block under that tag from "now".
-	// "Kein Tag" closes the active manual block. The tag list is snapshotted
-	// at tray startup; tags added later require an app restart to appear.
+	// "Kein Tag" closes the active manual block. systray has no remove-item
+	// API, so we pre-allocate a pool of slots and rebind them as tags come
+	// and go (see refreshManualTagSlots).
 	mManualTag := systray.AddMenuItem("Manueller Tag", "Zeit manuell einem Tag zuordnen")
 	mManualNone := mManualTag.AddSubMenuItem("Kein Tag (Stop)", "Manuelle Zuordnung beenden")
 	go func() {
@@ -46,24 +61,10 @@ func onTrayReady(ctx context.Context, a *app.App, version string) {
 			}
 		}
 	}()
-	if tags, err := a.ListTags(); err != nil {
-		slog.Warn("tray: list tags for manual menu failed", "err", err)
-	} else {
-		for _, t := range tags {
-			if t.Name == "" {
-				continue
-			}
-			item := mManualTag.AddSubMenuItem(t.Name, "Zeit dem Tag '"+t.Name+"' zuordnen")
-			tagID := t.ID
-			go func() {
-				for range item.ClickedCh {
-					if err := a.StartManualTag(tagID); err != nil {
-						slog.Warn("tray: start manual tag failed", "tag_id", tagID, "err", err)
-					}
-				}
-			}()
-		}
-	}
+
+	slots := newManualTagSlots(ctx, a, mManualTag)
+	slots.refresh()
+	go slots.runRefreshLoop(ctx)
 
 	systray.AddSeparator()
 	mAutostart := systray.AddMenuItemCheckbox("Autostart", "Mit Windows starten", false)
@@ -119,4 +120,126 @@ func onTrayReady(ctx context.Context, a *app.App, version string) {
 			os.Exit(0)
 		}
 	}
+}
+
+// manualTagSlots backs the dynamic Manual-Tag submenu. systray exposes
+// only Show/Hide/SetTitle on existing items — no removal — so we keep a
+// fixed pool of slots and rewire them whenever the underlying tag list
+// changes. Each slot has one click handler goroutine; the goroutine
+// reads the slot's current tag id under mu, so updates are race-free.
+type manualTagSlots struct {
+	a      *app.App
+	parent *systray.MenuItem
+
+	mu    sync.RWMutex
+	tagID []int64 // index → tag id, 0 means slot is hidden/unused
+	last  []storage.Tag
+
+	items []*systray.MenuItem
+}
+
+func newManualTagSlots(ctx context.Context, a *app.App, parent *systray.MenuItem) *manualTagSlots {
+	s := &manualTagSlots{
+		a:      a,
+		parent: parent,
+		tagID:  make([]int64, manualTagSlotCount),
+		items:  make([]*systray.MenuItem, manualTagSlotCount),
+	}
+	for i := 0; i < manualTagSlotCount; i++ {
+		item := parent.AddSubMenuItem("", "")
+		item.Hide()
+		s.items[i] = item
+		idx := i
+		go s.handleClicks(ctx, idx, item)
+	}
+	return s
+}
+
+func (s *manualTagSlots) handleClicks(ctx context.Context, idx int, item *systray.MenuItem) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-item.ClickedCh:
+			s.mu.RLock()
+			tagID := s.tagID[idx]
+			s.mu.RUnlock()
+			if tagID == 0 {
+				continue
+			}
+			if err := s.a.StartManualTag(tagID); err != nil {
+				slog.Warn("tray: start manual tag failed", "tag_id", tagID, "err", err)
+			}
+		}
+	}
+}
+
+func (s *manualTagSlots) runRefreshLoop(ctx context.Context) {
+	t := time.NewTicker(manualTagRefreshInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.refresh()
+		}
+	}
+}
+
+// refresh pulls the current tag list and rebinds the slot pool. Slots
+// that are no longer needed are hidden; reused slots only get SetTitle
+// when the visible label actually changed, to avoid unnecessary native
+// menu redraws.
+func (s *manualTagSlots) refresh() {
+	tags, err := s.a.ListTags()
+	if err != nil {
+		slog.Warn("tray: list tags for manual menu failed", "err", err)
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if tagsEqual(s.last, tags) {
+		return
+	}
+
+	visible := 0
+	for _, t := range tags {
+		if t.Name == "" {
+			continue
+		}
+		if visible >= len(s.items) {
+			slog.Warn("tray: more tags than manual-tag slots — extras hidden",
+				"slots", len(s.items), "tag_count", len(tags))
+			break
+		}
+		item := s.items[visible]
+		item.SetTitle(t.Name)
+		item.SetTooltip("Zeit dem Tag '" + t.Name + "' zuordnen")
+		item.Show()
+		s.tagID[visible] = t.ID
+		visible++
+	}
+	for i := visible; i < len(s.items); i++ {
+		s.items[i].Hide()
+		s.tagID[i] = 0
+	}
+	s.last = append(s.last[:0], tags...)
+}
+
+// tagsEqual is a cheap equality check on the fields the manual-tag menu
+// actually renders (id + name). It intentionally ignores fields like
+// Color or PersonioProjectID that don't affect the submenu.
+func tagsEqual(a, b []storage.Tag) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].ID != b[i].ID || a[i].Name != b[i].Name {
+			return false
+		}
+	}
+	return true
 }
