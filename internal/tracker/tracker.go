@@ -48,6 +48,12 @@ func (realFocusSource) IdleDuration() (time.Duration, error)  { return winapi.Id
 type Config struct {
 	PollInterval  time.Duration
 	IdleThreshold time.Duration
+	// TagBlockGranularity snaps every focus block's start_time and end_time
+	// to a fixed local-time grid of this width (start floored, end ceiled).
+	// Adjacent blocks meet on a grid boundary so the §2.1 non-overlap
+	// invariant is preserved. 0 disables snapping (the tracker stores raw
+	// poll-clock timestamps as before).
+	TagBlockGranularity time.Duration
 }
 
 // Tracker owns the focus-tracking lifecycle.
@@ -77,6 +83,11 @@ type Tracker struct {
 	// so the user's manual tag wins over auto-tag rules without us having to
 	// stop polling. Manual mode and Pause are deliberately independent.
 	manualTagID *int64
+	// blockGranularity mirrors Config.TagBlockGranularity but is mutable so
+	// SetTagBlockGranularity can hot-reload changes from Settings without a
+	// tracker restart. Guarded by mu — read by the tick goroutine, written
+	// from the App layer.
+	blockGranularity time.Duration
 }
 
 // Option is a functional option.
@@ -94,12 +105,13 @@ func New(cfg Config, blocks storage.FocusBlockRepository, rules storage.RuleRepo
 		logger = slog.Default()
 	}
 	t := &Tracker{
-		cfg:    cfg,
-		source: realFocusSource{},
-		clock:  realClock{},
-		blocks: blocks,
-		rules:  rules,
-		logger: logger,
+		cfg:              cfg,
+		source:           realFocusSource{},
+		clock:            realClock{},
+		blocks:           blocks,
+		rules:            rules,
+		logger:           logger,
+		blockGranularity: cfg.TagBlockGranularity,
 	}
 	for _, o := range opts {
 		o(t)
@@ -114,7 +126,8 @@ func (t *Tracker) Pause(ctx context.Context) {
 	defer t.mu.Unlock()
 	t.paused = true
 	if t.current != nil {
-		_ = t.blocks.Close(ctx, t.current.ID, t.clock.Now())
+		end := t.snapEndAt(t.current.StartTime, t.clock.Now())
+		_ = t.blocks.Close(ctx, t.current.ID, end)
 		t.current = nil
 	}
 }
@@ -131,6 +144,74 @@ func (t *Tracker) Paused() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.paused
+}
+
+// SetTagBlockGranularity hot-reloads the grid step used to snap focus-block
+// start/end times. 0 disables snapping. Negative values are coerced to 0.
+// Already-open blocks keep the granularity that was active when they opened —
+// the new value affects the next close + open boundary.
+func (t *Tracker) SetTagBlockGranularity(d time.Duration) {
+	if d < 0 {
+		d = 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.blockGranularity = d
+}
+
+// snapEndAt returns the rounded end_time the tracker should write when
+// closing a block opened at `start` while the wall clock reads `now`. With
+// granularity disabled it returns now. Otherwise it returns the smallest
+// grid boundary t >= now such that t - start is a positive multiple of the
+// granularity step — a started X-min slot counts as a full slot. Callers
+// must hold t.mu.
+func (t *Tracker) snapEndAt(start, now time.Time) time.Time {
+	step := t.blockGranularity
+	if step <= 0 {
+		return now
+	}
+	d := now.Sub(start)
+	if d <= 0 {
+		return start.Add(step)
+	}
+	slots := d / step
+	if d%step != 0 {
+		slots++
+	}
+	if slots == 0 {
+		slots = 1
+	}
+	return start.Add(slots * step)
+}
+
+// snapStartAt returns the rounded start_time for a fresh block opened at
+// wall-clock `now`. With granularity disabled it returns now. Otherwise it
+// returns the latest grid boundary <= now ("floor"), bumped forward to
+// `notBefore` if the previous block's rounded end already overlaps that
+// floor. Callers must hold t.mu.
+func (t *Tracker) snapStartAt(now, notBefore time.Time) time.Time {
+	step := t.blockGranularity
+	if step <= 0 {
+		return now
+	}
+	floored := floorToStep(now, step)
+	if !notBefore.IsZero() && notBefore.After(floored) {
+		return notBefore
+	}
+	return floored
+}
+
+// floorToStep returns the largest grid boundary <= ts. The grid is anchored
+// at local midnight so 15-min slots line up with :00/:15/:30/:45 boundaries
+// the user sees, even in timezones whose UTC offset is not a whole hour.
+func floorToStep(ts time.Time, step time.Duration) time.Time {
+	if step <= 0 {
+		return ts
+	}
+	local := ts.Local()
+	midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, local.Location())
+	delta := local.Sub(midnight)
+	return midnight.Add(delta - (delta % step))
 }
 
 // SetManualTag tells the tracker which tag the App's currently open manual
@@ -181,33 +262,59 @@ func (t *Tracker) shutdown(ctx context.Context) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.current != nil {
-		if err := t.blocks.Close(ctx, t.current.ID, t.clock.Now()); err != nil {
+		end := t.snapEndAt(t.current.StartTime, t.clock.Now())
+		if err := t.blocks.Close(ctx, t.current.ID, end); err != nil {
 			t.logger.Warn("close on shutdown failed", "err", err)
 		}
 		t.current = nil
 	}
 }
 
-// recover finalizes any block left open by a previous crash.
+// recover finalizes every block left open by a previous crash. Closing only
+// the latest open (LastOpen) leaves earlier opens overlapping with anything
+// the user records after the relaunch — Personio rejects overlapping work
+// periods, so each leftover open is closed at min(start+idleThreshold, now)
+// and at the earliest the next block's start to avoid reintroducing overlap.
 func (t *Tracker) recover(ctx context.Context) error {
-	open, err := t.blocks.LastOpen(ctx)
+	opens, err := t.blocks.ListOpen(ctx)
 	if err != nil {
-		return fmt.Errorf("query last open: %w", err)
+		return fmt.Errorf("list open blocks: %w", err)
 	}
-	if open == nil {
+	if len(opens) == 0 {
 		return nil
 	}
-	end := open.StartTime.Add(t.cfg.IdleThreshold)
 	now := t.clock.Now()
-	if end.After(now) {
-		end = now
+	for i, open := range opens {
+		end := open.StartTime.Add(t.cfg.IdleThreshold)
+		if end.After(now) {
+			end = now
+		}
+		// If a later open block exists, this one must end no later than the
+		// next one's start — otherwise closing it would create an overlap
+		// that the storage layer would refuse.
+		if i+1 < len(opens) && opens[i+1].StartTime.Before(end) {
+			end = opens[i+1].StartTime
+		}
+		// Snap to the granularity grid so recovered blocks share the same
+		// quantization as freshly tracked ones — but never past the next
+		// open's start (would re-introduce overlap).
+		t.mu.Lock()
+		snapped := t.snapEndAt(open.StartTime, end)
+		t.mu.Unlock()
+		if i+1 < len(opens) && opens[i+1].StartTime.Before(snapped) {
+			snapped = opens[i+1].StartTime
+		}
+		end = snapped
+		t.logger.Info("recovering open block from previous run",
+			"id", open.ID, "process", open.ProcessName,
+			"start", open.StartTime.Format(time.RFC3339),
+			"recovered_end", end.Format(time.RFC3339),
+		)
+		if err := t.blocks.Close(ctx, open.ID, end); err != nil {
+			return fmt.Errorf("close open block %d: %w", open.ID, err)
+		}
 	}
-	t.logger.Info("recovering open block from previous run",
-		"id", open.ID, "process", open.ProcessName,
-		"start", open.StartTime.Format(time.RFC3339),
-		"recovered_end", end.Format(time.RFC3339),
-	)
-	return t.blocks.Close(ctx, open.ID, end)
+	return nil
 }
 
 func (t *Tracker) tick(ctx context.Context) {
@@ -241,8 +348,8 @@ func (t *Tracker) handleIdle(ctx context.Context) {
 	if t.current == nil {
 		return
 	}
-	now := t.clock.Now()
-	if err := t.blocks.MarkIdle(ctx, t.current.ID, now); err != nil {
+	end := t.snapEndAt(t.current.StartTime, t.clock.Now())
+	if err := t.blocks.MarkIdle(ctx, t.current.ID, end); err != nil {
 		t.logger.Warn("mark idle failed", "err", err)
 		return
 	}
@@ -256,7 +363,8 @@ func (t *Tracker) closeCurrent(ctx context.Context) {
 	if t.current == nil {
 		return
 	}
-	if err := t.blocks.Close(ctx, t.current.ID, t.clock.Now()); err != nil {
+	end := t.snapEndAt(t.current.StartTime, t.clock.Now())
+	if err := t.blocks.Close(ctx, t.current.ID, end); err != nil {
 		t.logger.Warn("close failed", "err", err)
 	}
 	t.current = nil
@@ -274,8 +382,10 @@ func (t *Tracker) handleFocus(ctx context.Context, info winapi.FocusInfo) {
 	}
 
 	now := t.clock.Now()
+	var prevEnd time.Time
 	if t.current != nil {
-		if err := t.blocks.Close(ctx, t.current.ID, now); err != nil {
+		prevEnd = t.snapEndAt(t.current.StartTime, now)
+		if err := t.blocks.Close(ctx, t.current.ID, prevEnd); err != nil {
 			t.logger.Warn("close on switch failed", "err", err)
 		}
 	}
@@ -284,7 +394,7 @@ func (t *Tracker) handleFocus(ctx context.Context, info winapi.FocusInfo) {
 		ProcessName: info.ProcessName,
 		ProcessPath: info.ProcessPath,
 		WindowTitle: info.Title,
-		StartTime:   now,
+		StartTime:   t.snapStartAt(now, prevEnd),
 	}
 	if err := t.blocks.Open(ctx, b); err != nil {
 		t.logger.Warn("open block failed", "err", err)

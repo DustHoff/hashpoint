@@ -237,6 +237,66 @@ func TestTracker_ManualTagOverridesAutoTagRules(t *testing.T) {
 	}
 }
 
+func TestTracker_GranularitySnapsToGrid(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	db, err := storage.OpenInMemory(ctx)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	blocks := storage.NewFocusBlockRepo(db)
+	rules := storage.NewRuleRepo(db)
+	src := &fakeSource{}
+	// 09:07:13 local — picked so floor(09:07, 15min) = 09:00 and the test
+	// asserts both bounds get snapped to grid, independent of host TZ.
+	start := time.Date(2026, 4, 25, 9, 7, 13, 0, time.Local)
+	clock := &fakeClock{t: start}
+	src.set(winapi.FocusInfo{ProcessName: "chrome.exe", Title: "GitHub"}, 0)
+
+	trk := New(Config{
+		PollInterval:        time.Millisecond,
+		IdleThreshold:       5 * time.Minute,
+		TagBlockGranularity: 15 * time.Minute,
+	}, blocks, rules, nil, WithFocusSource(src), WithClock(clock))
+
+	trk.tick(ctx)
+	first, err := blocks.LastOpen(ctx)
+	if err != nil || first == nil {
+		t.Fatalf("expected an open block, err=%v", err)
+	}
+	wantStart := time.Date(2026, 4, 25, 9, 0, 0, 0, time.Local)
+	if !first.StartTime.Equal(wantStart.UTC()) {
+		t.Errorf("first block start = %v, want %v (floored to 15-min grid)", first.StartTime, wantStart.UTC())
+	}
+
+	// Switch focus 5 minutes later — the prev block must close on the next
+	// 15-min boundary (09:15) and the new block must start there too.
+	clock.advance(5 * time.Minute)
+	src.set(winapi.FocusInfo{ProcessName: "code.exe", Title: "main.go"}, 0)
+	trk.tick(ctx)
+
+	closedFirst, _ := blocks.Get(ctx, first.ID)
+	if closedFirst.EndTime == nil {
+		t.Fatal("expected first block to be closed")
+	}
+	wantEnd := time.Date(2026, 4, 25, 9, 15, 0, 0, time.Local)
+	if !closedFirst.EndTime.Equal(wantEnd.UTC()) {
+		t.Errorf("first block end = %v, want %v (ceil to next 15-min slot)", *closedFirst.EndTime, wantEnd.UTC())
+	}
+
+	second, _ := blocks.LastOpen(ctx)
+	if second == nil || second.ID == first.ID {
+		t.Fatalf("expected new block on focus switch, got %+v", second)
+	}
+	if !second.StartTime.Equal(wantEnd.UTC()) {
+		t.Errorf("second block start = %v, want %v (== prev end on grid)", second.StartTime, wantEnd.UTC())
+	}
+}
+
 func TestTracker_SameFocusKeepsBlockOpen(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

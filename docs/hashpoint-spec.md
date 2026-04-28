@@ -23,6 +23,9 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
 - Konsekutive identische Fokussierungen (gleicher Prozess + gleicher Titel) werden zu einem Block zusammengefasst.
 - **Idle-Detection:** Wenn der User > 5 Min inaktiv ist (kein Input via `GetLastInputInfo`), wird der aktuelle Block beendet und als „Idle" markiert.
 - **Lock/Sleep:** Beim Sperren oder Ruhezustand wird der aktuelle Block sauber abgeschlossen.
+- **Non-Overlap-Invariante:** Zwei Fokus-Blöcke dürfen sich zeitlich nie überlappen — Personio lehnt überlappende `WORK`-Perioden serverseitig ab. Die Storage-Schicht (`focus_block_repo`) prüft jeden `Open`/`Update`/`Close`/`Split` gegen den bestehenden Datenbestand und liefert `storage.ErrOverlap`, falls das Intervall mit einem anderen Block kollidiert (offene Blöcke gelten als bis ∞ laufend). Intervalle sind halb-offen `[start, end)`, d. h. `prev.end == next.start` ist erlaubt.
+- **Granularitäts-Quantisierung beim Erfassen (optional):** Ist `tracking.tag_block_granularity_min > 0`, snapt der Tracker bereits *beim Schreiben in die DB* jede `start_time` auf die nächste Slot-Untergrenze (Floor) und jede `end_time` auf die nächste Slot-Obergrenze (Ceil). Das Raster ist an lokaler Mitternacht verankert (z. B. `:00/:15/:30/:45` bei `15`). Beim Fokuswechsel innerhalb eines Slots fällt damit der Slot komplett auf den vorherigen Prozess; der Folgeblock startet auf der nächsten Slot-Grenze. Damit liefern die im Persistenzlayer gespeicherten Zeiten bereits die Personio-fähige Quantisierung — der Sync-seitige Snap (§2.5.3) bleibt als Sicherheitsnetz aktiv, fasst aber bei eingeschalteter Tracker-Quantisierung in der Regel keine Zeiten mehr an.
+- **Crash-Recovery:** Beim Start finalisiert der Tracker **alle** Blöcke, die noch ohne `end_time` in der DB stehen (`ListOpen`), nicht nur den letzten. Jeder Recovery-Block wird auf `min(start + idle_threshold, now, next_open.start)` geschlossen, damit das Schließen selbst keinen Overlap mit einem nachgelagerten Open einbringt.
 
 ### 2.2 Tray-Icon
 - Tool startet minimiert in der Windows-Taskleiste (System Tray).
@@ -191,10 +194,11 @@ Pro Request:
 > Die UI-API kennt im Period-Modell **keine Activity-ID**. `tags.personio_activity_id` bleibt deshalb als **Legacy-Feld** im Schema/UI bestehen, wird aber beim Sync nicht verwendet. Sollte Personio das Feld in einer späteren UI-Version wieder einführen, kann der Syncer es ohne Schemaänderung berücksichtigen.
 
 #### 2.5.3 Aggregation
-- Blöcke werden pro **lokalem Datum** und **effektiver Personio-Project-ID** + **Kommentar** gruppiert.
-- Pro Gruppe entsteht **eine** Period; `start` = früheste Block-Startzeit, `end` = späteste Block-Endzeit (UTC, vom Server in lokale Zeit konvertiert).
+- Blöcke werden chronologisch durchlaufen; **konsekutive** Blöcke mit identischem `(lokalem Datum, project_id, comment)` und einem Zeitabstand ≤ 5 s (Tracker-Jitter-Toleranz) werden zu **einer** Period zusammengefasst. Eine Lücke darüber, ein Idle-Block oder ein nicht-syncbarer Block beendet den Lauf — Personio sieht damit echte Pausen statt einer Spanne, die sie überdeckt.
+- Pro Period: `start` = früheste Block-Startzeit des Laufs, `end` = späteste Block-Endzeit (UTC → lokal-naive `YYYY-MM-DDTHH:MM:SS`).
 - `period_type` ist immer `"work"`. Pausen werden aktuell nicht synchronisiert.
-- Kommentar-Format: `"<parent_name> <sub_name> <sub_description>"` aus dem Tag-Mapping, plus optional ` — <block_description>` aus `focus_blocks.description`. Identische Kommentare werden je Bucket dedupliziert.
+- Kommentar-Format: `"<parent_name> <sub_name> <sub_description>"` aus dem Tag-Mapping, plus optional ` — <block_description>` aus `focus_blocks.description`. Innerhalb eines Laufs gehören alle Blöcke per Konstruktion zum selben Kommentar.
+- **Granularitäts-Quantisierung (optional):** Ist `tracking.tag_block_granularity_min > 0`, wird jede Period auf ein **lokales Slot-Raster** der Breite `granularity` gelegt (verankert an Mitternacht der lokalen Zeitzone, damit z. B. 15-min-Slots auf `:00/:15/:30/:45` fallen). `start` wird auf den Slot-Anfang **abgerundet** (Floor), `end` auf das nächste Slot-Ende **aufgerundet** (Ceil). Eine angefangene X-Minuten-Periode zählt also als volle X-Minuten und beginnt zugleich am Slot-Rand — z. B. `granularity=15` ⇒ Lauf `09:07–09:12` → `09:00–09:15`, Lauf `09:07–09:23` → `09:00–09:30`. Ein anschließender chronologischer Sweep verhindert Überlappungen: würde der gefloorte Start einer Period in den (gerundeten) End-Slot der vorherigen Period fallen, wird er auf diesen End-Slot vorgeschoben (und die End-Zeit erneut geceilt). Verbleibende End-vs-nächster-Start-Kollisionen werden durch Kappen der End-Zeit gelöst. `0` (Default) deaktiviert das Raster komplett.
 
 #### 2.5.4 Fehlerbehandlung
 - Antwort `401`/`403` oder `30x → /login` ⇒ `ErrSessionExpired`. Im UI: rotes Banner mit Hinweis auf erneute Anmeldung; Tray-Sync schreibt nur ins Log.
@@ -210,10 +214,10 @@ Pro Request:
 
 ## 3. Nicht-funktionale Anforderungen
 
-- **Performance:** CPU-Last < 1 % im Idle, RAM < 100 MB.
-- **Privacy:** Keine externen Calls außer zu Personio. Alle Daten lokal.
-- **Robustheit:** Crash-sicher – ungespeicherter Block wird beim nächsten Start wiederhergestellt.
-- **Logging:** Rotierendes Logfile (`%LOCALAPPDATA%\TimeTracker\log\`).
+- **Performance:** CPU-Last < 1 % im Leerlauf, RAM < 100 MB.
+- **Datenschutz:** Keine externen Aufrufe außer zu Personio. Alle Daten verbleiben lokal.
+- **Robustheit:** Absturzsicher – ein offen gebliebener Block wird beim nächsten Start automatisch finalisiert.
+- **Protokollierung:** Rotierende Logdatei unter `%LOCALAPPDATA%\TimeTracker\log\`.
 
 ---
 
@@ -257,10 +261,17 @@ CREATE TABLE focus_blocks (
   description     TEXT,                    -- freie Tätigkeitsbeschreibung pro Block
   personio_id     TEXT,
   synced_at       DATETIME,
+  is_placeholder  BOOLEAN DEFAULT 0,       -- 1 = Manual-Tag-Platzhalter ohne echtes Programm
   FOREIGN KEY (tag_id) REFERENCES tags(id)
 );
 CREATE INDEX idx_blocks_start ON focus_blocks(start_time);
 CREATE INDEX idx_blocks_tag   ON focus_blocks(tag_id);
+
+-- Non-Overlap-Invariante: in der App-Schicht erzwungen, siehe §2.1. Jeder
+-- Open/Update/Close/Split öffnet eine Transaktion und prüft per
+-- `selectOverlap`, ob das neue Intervall einen anderen Block schneidet
+-- (offene Blöcke gelten als bis ∞ laufend). Bei Konflikt wird `ErrOverlap`
+-- zurückgegeben — kein Schreibzugriff erfolgt.
 
 CREATE TABLE tags (
   id                    INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -300,7 +311,13 @@ DB-Pfad: `%LOCALAPPDATA%\TimeTracker\data.db`.
 
 ### 4.4 Tracking-Loop (Pseudocode)
 ```
-ticker := 2s
+// Beim Start: alle Blöcke aus vorherigen Runs finalisieren (Crash-Recovery).
+for open in ListOpen():
+  end = min(open.start + idle_threshold, now, next_open.start)
+  Close(open.id, snapEnd(open.start, end))   // auf Slot-Grenze runden, falls
+                                             // tag_block_granularity_min > 0
+
+ticker := 2s   // tatsächlich konfigurierbar via tracking.poll_interval_sec
 currentBlock := nil
 loop:
   hwnd := GetForegroundWindow()
@@ -310,29 +327,49 @@ loop:
   idle := IsIdle(threshold=5min)
 
   if idle:
-    closeBlock(currentBlock)
+    closeBlock(currentBlock, snapEnd(currentBlock.start, now()))
     continue
 
   if currentBlock == nil OR proc != currentBlock.proc OR title != currentBlock.title:
-    closeBlock(currentBlock)
-    currentBlock = openBlock(proc, title, now())
+    prevEnd = snapEnd(currentBlock.start, now())  // Ceil auf nächste Slot-Grenze
+    closeBlock(currentBlock, prevEnd)
+    newStart = max(snapStart(now()), prevEnd)     // Floor auf Slot-Untergrenze,
+                                                  // mind. ab prevEnd
+    currentBlock = openBlock(proc, title, newStart)
 ```
+
+> `snapStart`/`snapEnd` sind nur aktiv, wenn `tracking.tag_block_granularity_min > 0` —
+> sonst geben sie `now()` durch. Mit aktivem Raster decken zwei aufeinanderfolgende
+> Tracker-Blöcke immer ganze Slots ab, sind grid-aligned und touch-only (`prev.end == next.start`),
+> sodass die Non-Overlap-Invariante (§2.1) ohne Mehrarbeit erfüllt ist.
+
+> Jeder `openBlock` läuft transaktional gegen den Overlap-Check (§2.1). Zwei
+> gleichzeitig offene Blöcke (z. B. Manual-Block + Tracker-Block) sind dadurch
+> ausgeschlossen — der Tracker schließt seinen vorherigen Block grundsätzlich,
+> bevor er den nächsten öffnet.
 
 ### 4.5 Personio-Sync-Flow
 1. User wählt Datum/Zeitraum → klickt „Sync".
 2. Lade alle Blöcke mit zugewiesenem Tag, deren effektives Mapping (Sub-Tag oder vererbt vom Parent) `sync_to_personio = 1` hat.
 3. Resolve effektives Mapping pro Block: Sub-Tag-Mapping bevorzugt, sonst Parent-Mapping.
-4. Baue `comment` pro Block: `"<parent_name> <sub_name> <sub_description>"` (leere Teile auslassen).
-5. Aggregiere pro `(Datum, project_id, activity_id)` → eine Attendance-Periode; Comments werden mit `; ` zusammengeführt und dedupliziert.
-6. Sende Requests; bei Erfolg `personio_id` und `synced_at` pro Block speichern.
-7. Zeige Erfolgs-/Fehlerübersicht.
+4. Baue `comment` pro Block: `"<parent_name> <sub_name> <sub_description>"` plus optional ` — <description>` (leere Teile auslassen).
+5. Aggregiere konsekutive Blöcke mit identischem `(lokalem Datum, project_id, comment)` zu **einer** Period (siehe §2.5.3); Idle-/ungetaggte Blöcke und Lücken > 5 s beenden den Lauf.
+6. Hole pro Tag das Timesheet (`day_id`, `state`); bei `state=trackable` PUT mit den aggregierten Perioden, sonst Fehler ins Result.
+7. Sende Requests; bei Erfolg `personio_id` (= `day_id`) und `synced_at` pro Block speichern.
+8. Zeige Erfolgs-/Fehlerübersicht.
+
+> Die Non-Overlap-Invariante (§2.1) ist Voraussetzung für diesen Ablauf:
+> Personio antwortet auf überlappende Perioden mit dem Fehler
+> `400 — There are overlapping WORK periods` (englischer Server-Wortlaut),
+> und der gesamte Tag bleibt dann unverändert.
 
 ### 4.6 Konfiguration (Beispiel `config.toml`)
 ```toml
 [tracking]
-enabled            = true   # globaler Schalter: false pausiert Polling + Auto-Tagging
-poll_interval_sec  = 2
-idle_threshold_min = 5
+enabled                    = true   # globaler Schalter: false pausiert Polling + Auto-Tagging
+poll_interval_sec          = 2
+idle_threshold_min         = 5
+tag_block_granularity_min  = 0      # 0 = aus; 15 = jede Period auf 15-min-Slots aufrunden (siehe §2.5.3)
 
 [personio]
 tenant = "onesi"            # Subdomain, der Login läuft via CDP — keine API-Tokens

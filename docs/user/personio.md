@@ -124,10 +124,10 @@ Andere Blöcke landen in der **„Übersprungen"-Statistik**.
 
 | Fehlermeldung | Ursache | Lösung |
 | --- | --- | --- |
-| *„session expired — please re-authenticate"* | Personio hat die Cookies invalidiert. | In den Einstellungen **Erneut anmelden** klicken. |
+| *„Sitzung abgelaufen — bitte erneut anmelden"* (intern `personio: session expired — please re-authenticate`) | Personio hat die Cookies invalidiert. | In den Einstellungen **Erneut anmelden** klicken. |
 | *„kein Timesheet-Eintrag — Personio betrachtet diesen Tag als nicht buchbar"* | Personio liefert für diesen Tag keinen Eintrag. | Datum prüfen, ggf. liegt Personios Mitarbeiterdatum außerhalb. |
 | *„Tag ist in Personio … und kann nicht beschrieben werden"* | Tag ist `non_trackable` / `locked` (Wochenende, Feiertag, gesperrter Zeitraum). | In Personio prüfen, ggf. Sperre durch HR aufheben lassen. |
-| *„fetch employee id"* | `/api/v1/navigation/context` antwortet nicht erwartungsgemäß. | Erneut anmelden. |
+| *„Mitarbeiter-ID konnte nicht ermittelt werden"* (intern `fetch employee id`) | `/api/v1/navigation/context` antwortet nicht erwartungsgemäß. | Erneut anmelden. |
 | *„kein Personio-Tenant in den Einstellungen hinterlegt"* | Tenant in den Einstellungen leer. | Tenant eintragen, speichern. |
 
 Authentifizierungs-Header werden niemals geloggt; Cookies liegen

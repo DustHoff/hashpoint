@@ -128,7 +128,7 @@ Dieses Dokument beschreibt die GitHub-Actions-Workflows und die Versionierungsst
 
 - `GITHUB_TOKEN` reicht für Tag- und Release-Erstellung; explizit als `permissions: contents: write` im Workflow setzen.
 - Keine externen Secrets nötig für CI/Release. Personio-Credentials sind ausschließlich Runtime-Config beim Endnutzer, **nie** in Workflows.
-- Codesigning-Zertifikat (falls später eingeführt): als `WINDOWS_CERT_PFX` und `WINDOWS_CERT_PASSWORD` Secret, nur im Release-Job referenziert.
+- **Codesigning** läuft über **Azure Trusted Signing** (kein PFX mehr). Eine `metadata.json` (`Endpoint`, `CodeSigningAccountName`, `CertificateProfileName`) wird lokal/CI-seitig erzeugt und ist via `.gitignore` ausgeschlossen — die Werte sind deployment-spezifisch und gehören nicht ins Repo. Für CI: Azure-Login per OIDC (Federated Credential auf das Workflow-OIDC-Token), anschließend signiert `signtool sign /dlib Azure.CodeSigning.Dlib.dll /dmdf metadata.json …` das Release-Binary. Erforderliche Tenant-/Subscription-/Account-Werte als Repository-Secrets (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID`).
 
 ---
 

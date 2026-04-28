@@ -95,8 +95,9 @@ func run() error {
 	// and idle-threshold values without a restart.
 	var trkMu sync.Mutex
 	trk := tracker.New(tracker.Config{
-		PollInterval:  cfg.Tracking.PollInterval(),
-		IdleThreshold: cfg.Tracking.IdleThreshold(),
+		PollInterval:        cfg.Tracking.PollInterval(),
+		IdleThreshold:       cfg.Tracking.IdleThreshold(),
+		TagBlockGranularity: cfg.Tracking.TagBlockGranularity(),
 	}, blocks, rules, slog.Default())
 
 	sessionStore := defaultSessionStore()
@@ -113,7 +114,11 @@ func run() error {
 			slog.Warn("could not build personio client", "err", err)
 			return nil
 		}
-		return personio.NewSyncer(cli, blocks, tags, slog.Default())
+		s := personio.NewSyncer(cli, blocks, tags, slog.Default())
+		// Read fresh on every build so changes via Settings take effect
+		// without restarting (cfg is mutated in place by OnConfigSet below).
+		s.SetTagBlockGranularity(cfg.Tracking.TagBlockGranularity())
+		return s
 	}
 
 	a := app.New(app.Deps{
@@ -129,11 +134,16 @@ func run() error {
 		OnConfigSet: func(c *config.Config) error {
 			trkMu.Lock()
 			defer trkMu.Unlock()
+			// Mirror the new values back into the captured `cfg` pointer so
+			// closures (notably syncerFor) read the latest settings without
+			// having to be rebuilt.
+			*cfg = *c
 			// Tracker.Reconfigure is best-effort: at minimum we log; if the
 			// implementation grows a hot-reload entry point we wire it here.
 			slog.Info("config updated",
 				"poll_interval_sec", c.Tracking.PollIntervalSec,
 				"idle_threshold_min", c.Tracking.IdleThresholdMin,
+				"tag_block_granularity_min", c.Tracking.TagBlockGranularityMin,
 				"tracking_enabled", c.Tracking.Enabled,
 				"personio_tenant", c.Personio.Tenant,
 				"autostart", c.UI.Autostart)
@@ -144,6 +154,9 @@ func run() error {
 			} else {
 				trk.Pause(ctx)
 			}
+			// Hot-reload the granularity so a value change in Settings starts
+			// snapping the next block boundary without a restart.
+			trk.SetTagBlockGranularity(c.Tracking.TagBlockGranularity())
 			return nil
 		},
 		Version: app.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate},

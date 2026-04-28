@@ -15,6 +15,10 @@ type FocusBlockRepository interface {
 	MarkIdle(ctx context.Context, id int64, end time.Time) error
 	// LastOpen returns the currently open block (if any) — used for crash recovery.
 	LastOpen(ctx context.Context) (*FocusBlock, error)
+	// ListOpen returns every block whose end_time is NULL, ordered ascending
+	// by start_time — used by tracker recovery to close all leftover opens
+	// from a previous crash, not just the latest one.
+	ListOpen(ctx context.Context) ([]FocusBlock, error)
 	// ListByDay returns all blocks whose start_time falls on the given UTC day.
 	ListByDay(ctx context.Context, day time.Time) ([]FocusBlock, error)
 	// ListBetween returns all blocks in [from, to).

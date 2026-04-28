@@ -172,3 +172,8 @@ func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
 
 // ErrNotFound is returned when a single-row lookup yields no rows.
 var ErrNotFound = errors.New("storage: not found")
+
+// ErrOverlap is returned when a focus-block write would create a time overlap
+// with another block. Personio rejects overlapping work periods, so we refuse
+// to persist them in the first place.
+var ErrOverlap = errors.New("storage: focus block overlaps existing block")

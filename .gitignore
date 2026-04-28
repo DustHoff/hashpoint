@@ -40,6 +40,9 @@ Thumbs.db
 .env
 .env.local
 
+# Azure Trusted Signing — endpoint + account names are deployment-specific
+metadata.json
+
 # Logs
 *.log
 log/

@@ -38,12 +38,17 @@ type Config struct {
 
 // TrackingConfig holds polling/idle parameters.
 type TrackingConfig struct {
-	PollIntervalSec  int  `toml:"poll_interval_sec"  json:"poll_interval_sec"`
-	IdleThresholdMin int  `toml:"idle_threshold_min" json:"idle_threshold_min"`
+	PollIntervalSec  int `toml:"poll_interval_sec"  json:"poll_interval_sec"`
+	IdleThresholdMin int `toml:"idle_threshold_min" json:"idle_threshold_min"`
 	// Enabled controls whether the foreground-window polling loop runs. When
 	// false the tracker stays paused (no focus blocks are created); the tray
 	// "Pause Tracking" toggle is a transient runtime override on top of this.
 	Enabled bool `toml:"enabled" json:"enabled"`
+	// TagBlockGranularityMin quantizes the duration of every tag-block sent to
+	// Personio to a multiple of this many minutes — a started X-minute slot
+	// counts as a full X minutes. With 0 (default) no rounding is applied;
+	// a typical value is 15 ("Viertelstunden-Buchung"). Range [0,60].
+	TagBlockGranularityMin int `toml:"tag_block_granularity_min" json:"tag_block_granularity_min"`
 }
 
 // PersonioConfig holds the Personio tenant subdomain. The session cookies
@@ -75,6 +80,12 @@ func (t TrackingConfig) PollInterval() time.Duration {
 // IdleThreshold returns the idle threshold as a duration.
 func (t TrackingConfig) IdleThreshold() time.Duration {
 	return time.Duration(t.IdleThresholdMin) * time.Minute
+}
+
+// TagBlockGranularity returns the rounding step for tag-block durations as a
+// duration. A return value of 0 disables rounding.
+func (t TrackingConfig) TagBlockGranularity() time.Duration {
+	return time.Duration(t.TagBlockGranularityMin) * time.Minute
 }
 
 // AppURL returns the Personio web app URL for the configured tenant. Returns
@@ -187,6 +198,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Tracking.IdleThresholdMin < 1 || c.Tracking.IdleThresholdMin > 240 {
 		errs = append(errs, "tracking.idle_threshold_min must be in [1,240]")
+	}
+	if c.Tracking.TagBlockGranularityMin < 0 || c.Tracking.TagBlockGranularityMin > 60 {
+		errs = append(errs, "tracking.tag_block_granularity_min must be in [0,60] (0 = aus)")
 	}
 	if t := strings.TrimSpace(c.Personio.Tenant); t != "" {
 		if !tenantRe.MatchString(strings.ToLower(t)) {

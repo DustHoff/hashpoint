@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -113,14 +114,21 @@ func TestFocusBlockRepo_ListByDay(t *testing.T) {
 	day := time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC)
 	other := day.Add(48 * time.Hour)
 
-	for i, ts := range []time.Time{
+	// Each block is closed before the next is opened — opens are now refused
+	// when they would overlap an existing block, including a prior still-open
+	// block (treated as +infinity).
+	starts := []time.Time{
 		day.Add(8 * time.Hour),
 		day.Add(10 * time.Hour),
 		other,
-	} {
+	}
+	for i, ts := range starts {
 		b := &FocusBlock{ProcessName: "p", WindowTitle: "t", StartTime: ts}
 		if err := repo.Open(ctx, b); err != nil {
 			t.Fatalf("open %d: %v", i, err)
+		}
+		if err := repo.Close(ctx, b.ID, ts.Add(30*time.Minute)); err != nil {
+			t.Fatalf("close %d: %v", i, err)
 		}
 	}
 
@@ -169,5 +177,60 @@ func TestFocusBlockRepo_SetTagAndSync(t *testing.T) {
 	got2, _ := repo.Get(ctx, b.ID)
 	if got2.PersonioID == nil || *got2.PersonioID != "P-1" {
 		t.Fatalf("personio id missing: %+v", got2)
+	}
+}
+
+func TestFocusBlockRepo_RejectsOverlap(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo := setupDB(t)
+
+	base := time.Date(2026, 4, 25, 9, 0, 0, 0, time.UTC)
+	first := &FocusBlock{ProcessName: "p", WindowTitle: "t", StartTime: base}
+	if err := repo.Open(ctx, first); err != nil {
+		t.Fatalf("open first: %v", err)
+	}
+	end := base.Add(time.Hour)
+	if err := repo.Close(ctx, first.ID, end); err != nil {
+		t.Fatalf("close first: %v", err)
+	}
+
+	// New block starts inside the closed first block — must be refused.
+	overlapping := &FocusBlock{ProcessName: "p", WindowTitle: "t", StartTime: base.Add(30 * time.Minute)}
+	if err := repo.Open(ctx, overlapping); !errors.Is(err, ErrOverlap) {
+		t.Fatalf("expected ErrOverlap on overlapping open, got %v", err)
+	}
+
+	// Touching at the boundary (start == prior end) must be allowed —
+	// intervals are half-open [start, end).
+	adjacent := &FocusBlock{ProcessName: "p", WindowTitle: "t", StartTime: end}
+	if err := repo.Open(ctx, adjacent); err != nil {
+		t.Fatalf("adjacent open should succeed, got %v", err)
+	}
+
+	// Updating an existing block to overlap another must also fail.
+	moved := *adjacent
+	moved.StartTime = base.Add(15 * time.Minute)
+	endAdj := base.Add(75 * time.Minute)
+	moved.EndTime = &endAdj
+	if err := repo.Update(ctx, &moved); !errors.Is(err, ErrOverlap) {
+		t.Fatalf("expected ErrOverlap on overlapping update, got %v", err)
+	}
+}
+
+func TestFocusBlockRepo_OpenWhileAnotherStillOpen(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo := setupDB(t)
+
+	first := &FocusBlock{ProcessName: "p", WindowTitle: "t", StartTime: time.Date(2026, 4, 25, 9, 0, 0, 0, time.UTC)}
+	if err := repo.Open(ctx, first); err != nil {
+		t.Fatalf("open first: %v", err)
+	}
+	// Second open while first is still open: an open block has end=+inf,
+	// so any later block starts inside it.
+	second := &FocusBlock{ProcessName: "p", WindowTitle: "t", StartTime: first.StartTime.Add(time.Hour)}
+	if err := repo.Open(ctx, second); !errors.Is(err, ErrOverlap) {
+		t.Fatalf("expected ErrOverlap when opening over a still-open block, got %v", err)
 	}
 }

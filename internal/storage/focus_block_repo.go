@@ -40,6 +40,20 @@ const (
 		WHERE end_time IS NULL
 		ORDER BY start_time DESC LIMIT 1`
 
+	selectAllOpen = `SELECT ` + focusColumns + ` FROM focus_blocks
+		WHERE end_time IS NULL
+		ORDER BY start_time ASC`
+
+	// selectOverlap finds the first block whose interval intersects [?start, ?end)
+	// while ignoring the row with id = ?excludeID. End-time may be NULL (still
+	// open) — treated as +infinity for the comparison. The new block's end may
+	// also be NULL (passed as a sentinel far-future timestamp by the caller).
+	selectOverlap = `SELECT id FROM focus_blocks
+		WHERE id != ?
+		  AND start_time < ?
+		  AND (end_time IS NULL OR end_time > ?)
+		ORDER BY start_time ASC LIMIT 1`
+
 	selectByID = `SELECT ` + focusColumns + ` FROM focus_blocks WHERE id = ?`
 
 	selectBetween = `SELECT ` + focusColumns + ` FROM focus_blocks
@@ -62,9 +76,20 @@ const (
 		WHERE id = ?`
 )
 
-// Open starts a new focus block.
+// Open starts a new focus block. Refuses the write if the block would overlap
+// any existing block — overlapping work periods are rejected by Personio
+// downstream, so we enforce non-overlap at the point of persistence.
 func (r *FocusBlockRepo) Open(ctx context.Context, b *FocusBlock) error {
-	res, err := r.db.ExecContext(ctx, insertFocusBlock,
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := assertNoOverlapTx(ctx, tx, 0, b.StartTime.UTC(), b.EndTime); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, insertFocusBlock,
 		b.ProcessName,
 		nullableString(b.ProcessPath),
 		b.WindowTitle,
@@ -84,6 +109,9 @@ func (r *FocusBlockRepo) Open(ctx context.Context, b *FocusBlock) error {
 	if err != nil {
 		return err
 	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
 	b.ID = id
 	return nil
 }
@@ -100,30 +128,47 @@ func (r *FocusBlockRepo) MarkIdle(ctx context.Context, id int64, end time.Time) 
 
 func (r *FocusBlockRepo) finalize(ctx context.Context, query string, id int64, end time.Time) error {
 	end = end.UTC()
-	b, err := r.Get(ctx, id)
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	row := tx.QueryRowContext(ctx, selectByID, id)
+	b, err := scanFocusBlock(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
 	if err != nil {
 		return err
 	}
 	if b == nil {
 		return ErrNotFound
 	}
+	// Setting end_time may shrink or grow the block's interval. Even when it
+	// only shrinks (block was open == +infinity), another block that started
+	// after this one could now sit inside the new interval if it was inserted
+	// while this one was still open. Refuse the close in that case so the
+	// caller surfaces the inconsistency instead of letting it propagate to
+	// Personio.
+	if end.Before(b.StartTime) {
+		end = b.StartTime
+	}
+	if err := assertNoOverlapTx(ctx, tx, id, b.StartTime, &end); err != nil {
+		return err
+	}
 	dur := int64(end.Sub(b.StartTime).Round(time.Second).Seconds())
 	if dur < 0 {
 		dur = 0
 	}
-	res, err := r.db.ExecContext(ctx, query, end, dur, id)
+	res, err := tx.ExecContext(ctx, query, end, dur, id)
 	if err != nil {
 		return fmt.Errorf("finalize block: %w", err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
+	if _, err := res.RowsAffected(); err != nil {
 		return err
 	}
-	if n == 0 {
-		// Already closed; not a hard error.
-		return nil
-	}
-	return nil
+	return tx.Commit()
 }
 
 // LastOpen returns the most recently started open block, or nil if none.
@@ -137,6 +182,28 @@ func (r *FocusBlockRepo) LastOpen(ctx context.Context) (*FocusBlock, error) {
 		return nil, err
 	}
 	return b, nil
+}
+
+// ListOpen returns every block that is still open (end_time IS NULL),
+// ordered by start_time ascending. Used by tracker recovery on startup so
+// that any blocks left dangling by previous crashes are all closed — closing
+// only the latest one (LastOpen) leaves earlier opens overlapping with newer
+// blocks once the user resumes work.
+func (r *FocusBlockRepo) ListOpen(ctx context.Context) ([]FocusBlock, error) {
+	rows, err := r.db.QueryContext(ctx, selectAllOpen)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FocusBlock
+	for rows.Next() {
+		b, err := scanFocusBlockRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *b)
+	}
+	return out, rows.Err()
 }
 
 // ListByDay returns blocks whose start_time falls on day (UTC).
@@ -224,6 +291,14 @@ func (r *FocusBlockRepo) Split(ctx context.Context, id int64, at time.Time) (*Fo
 		right.EndTime = nil
 		right.DurationSec = 0
 	}
+	// Splitting can only shrink the original's interval and the new right
+	// block fits inside the original's footprint, so a split itself never
+	// creates an overlap. We still consult the helper to defend against an
+	// open right (end NULL) that would conflict with a sibling started in
+	// the meantime.
+	if err := assertNoOverlapTx(ctx, tx, id, right.StartTime, right.EndTime); err != nil {
+		return nil, err
+	}
 	res, err := tx.ExecContext(ctx, insertFocusBlock,
 		right.ProcessName,
 		nullableString(right.ProcessPath),
@@ -252,9 +327,19 @@ func (r *FocusBlockRepo) Split(ctx context.Context, id int64, at time.Time) (*Fo
 	return &right, nil
 }
 
-// Update writes the editable fields of a block back.
+// Update writes the editable fields of a block back. Refuses the write if it
+// would overlap any other block.
 func (r *FocusBlockRepo) Update(ctx context.Context, b *FocusBlock) error {
-	_, err := r.db.ExecContext(ctx, updateBlock,
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := assertNoOverlapTx(ctx, tx, b.ID, b.StartTime.UTC(), b.EndTime); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, updateBlock,
 		b.ProcessName,
 		nullableString(b.ProcessPath),
 		b.WindowTitle,
@@ -267,8 +352,10 @@ func (r *FocusBlockRepo) Update(ctx context.Context, b *FocusBlock) error {
 		nullableStringPtr(b.Description),
 		boolToInt(b.IsPlaceholder),
 		b.ID,
-	)
-	return err
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Delete removes a block.
@@ -335,6 +422,36 @@ func scanFocusBlockRows(rows *sql.Rows) (*FocusBlock, error) {
 	}
 	hydrate(&b, processPath, end, tagID, description, personioID, syncedAt, isIdle, autoTagged, isPlaceholder)
 	return &b, nil
+}
+
+// txQuerier is the subset of *sql.Tx we need to run the overlap probe — kept
+// narrow so test fakes can satisfy it without re-implementing all of *sql.Tx.
+type txQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// farFuture is the +infinity sentinel used when probing overlap for a block
+// that has no end_time yet — chosen well past any plausible focus block while
+// still fitting in SQLite's TEXT/Julian time representation.
+var farFuture = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// assertNoOverlapTx returns ErrOverlap if any block other than excludeID has
+// an interval intersecting [start, end). end may be nil to denote a still-open
+// block (treated as +infinity). Block intervals are half-open [start, end).
+func assertNoOverlapTx(ctx context.Context, q txQuerier, excludeID int64, start time.Time, end *time.Time) error {
+	probeEnd := farFuture
+	if end != nil {
+		probeEnd = end.UTC()
+	}
+	row := q.QueryRowContext(ctx, selectOverlap, excludeID, probeEnd, start.UTC())
+	var otherID int64
+	if err := row.Scan(&otherID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	return fmt.Errorf("%w: id=%d", ErrOverlap, otherID)
 }
 
 func hydrate(b *FocusBlock, processPath sql.NullString, end sql.NullTime, tagID sql.NullInt64,

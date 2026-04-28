@@ -166,6 +166,8 @@ bleibt die letzte Wahl erhalten.
 
 > Nicht editierbar sind Prozessname, Dauer (wird automatisch berechnet) und der Idle-Status. Diese Felder werden ausschließlich von der Erfassung gesetzt.
 
+> **Überlappungen sind nicht erlaubt:** Eine Bearbeitung, die einen Block in den Zeitbereich eines anderen schiebt, wird mit dem Hinweis „Block überschneidet einen bestehenden Block" (intern `storage: focus block overlaps existing block`) abgelehnt. Personio würde überlappende Arbeitszeiten serverseitig zurückweisen, daher verhindert die App das bereits beim Speichern. Vor dem Vergrößern eines Blocks daher zuerst den Nachbarn entsprechend verkleinern oder löschen.
+
 ## Fehlerbanner
 
 Schlägt eine Aktion fehl (z. B. Sync mit Personio), erscheint im Tab ein rotes Banner mit der Fehlermeldung. Häufige Ursachen:

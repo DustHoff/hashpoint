@@ -68,7 +68,7 @@ func TestBuildDayPeriods_PerProjectAndCommentBuckets(t *testing.T) {
 		},
 	}
 
-	periods := buildDayPeriods(blocks, tags)
+	periods := buildDayPeriods(blocks, tags, 0)
 	if len(periods) != 1 {
 		t.Fatalf("expected 1 day bucket, got %d", len(periods))
 	}
@@ -143,7 +143,7 @@ func TestBuildDayPeriods_MergesOnlyConsecutiveRuns(t *testing.T) {
 			{ID: 2, ProcessName: "chrome", StartTime: at(9, 15), EndTime: end(9, 45), TagID: ptr(int64(2)), Description: ptr("Login")},
 			{ID: 3, ProcessName: "code", StartTime: at(9, 45), EndTime: end(10, 0), TagID: ptr(int64(2)), Description: ptr("Login")},
 		}
-		dp := buildDayPeriods(blocks, tags)[dateKey]
+		dp := buildDayPeriods(blocks, tags, 0)[dateKey]
 		if dp == nil || len(dp.list) != 1 {
 			t.Fatalf("expected 1 merged period, got %+v", dp)
 		}
@@ -166,7 +166,7 @@ func TestBuildDayPeriods_MergesOnlyConsecutiveRuns(t *testing.T) {
 			{ID: 2, StartTime: at(9, 30), EndTime: end(10, 0), IsIdle: true},
 			{ID: 3, StartTime: at(10, 0), EndTime: end(10, 30), TagID: ptr(int64(2)), Description: ptr("Login")},
 		}
-		dp := buildDayPeriods(blocks, tags)[dateKey]
+		dp := buildDayPeriods(blocks, tags, 0)[dateKey]
 		if dp == nil || len(dp.list) != 2 {
 			t.Fatalf("expected 2 periods (idle splits the run), got %+v", dp)
 		}
@@ -177,7 +177,7 @@ func TestBuildDayPeriods_MergesOnlyConsecutiveRuns(t *testing.T) {
 			{ID: 1, StartTime: at(9, 0), EndTime: end(9, 30), TagID: ptr(int64(2)), Description: ptr("Login")},
 			{ID: 2, StartTime: at(9, 30), EndTime: end(10, 0), TagID: ptr(int64(2)), Description: ptr("Logout")},
 		}
-		dp := buildDayPeriods(blocks, tags)[dateKey]
+		dp := buildDayPeriods(blocks, tags, 0)[dateKey]
 		if dp == nil || len(dp.list) != 2 {
 			t.Fatalf("expected 2 periods (different descriptions), got %+v", dp)
 		}
@@ -189,7 +189,7 @@ func TestBuildDayPeriods_MergesOnlyConsecutiveRuns(t *testing.T) {
 			{ID: 2, StartTime: at(9, 30), EndTime: end(9, 45), TagID: ptr(int64(3))},
 			{ID: 3, StartTime: at(9, 45), EndTime: end(10, 30), TagID: ptr(int64(2)), Description: ptr("Login")},
 		}
-		dp := buildDayPeriods(blocks, tags)[dateKey]
+		dp := buildDayPeriods(blocks, tags, 0)[dateKey]
 		if dp == nil || len(dp.list) != 3 {
 			t.Fatalf("expected 3 periods (A | B | A), got %+v", dp)
 		}
@@ -210,7 +210,7 @@ func TestBuildDayPeriods_MergesOnlyConsecutiveRuns(t *testing.T) {
 			// 1-hour gap with no recorded block — likely the laptop was closed.
 			{ID: 2, StartTime: at(11, 0), EndTime: end(12, 0), TagID: ptr(int64(2)), Description: ptr("Login")},
 		}
-		dp := buildDayPeriods(blocks, tags)[dateKey]
+		dp := buildDayPeriods(blocks, tags, 0)[dateKey]
 		if dp == nil || len(dp.list) != 2 {
 			t.Fatalf("expected 2 periods (time gap > tolerance), got %+v", dp)
 		}
@@ -225,7 +225,7 @@ func TestBuildDayPeriods_MergesOnlyConsecutiveRuns(t *testing.T) {
 			{ID: 2, StartTime: at(10, 0), EndTime: end(12, 0), TagID: ptr(int64(2)), Description: ptr("Login")},
 			{ID: 3, StartTime: at(13, 0), EndTime: end(15, 0), TagID: ptr(int64(2)), Description: ptr("Login")},
 		}
-		dp := buildDayPeriods(blocks, tags)[dateKey]
+		dp := buildDayPeriods(blocks, tags, 0)[dateKey]
 		if dp == nil || len(dp.list) != 2 {
 			t.Fatalf("expected 2 periods (09-12, 13-15), got %+v", dp)
 		}
@@ -253,9 +253,123 @@ func TestBuildDayPeriods_MergesOnlyConsecutiveRuns(t *testing.T) {
 			{ID: 1, StartTime: at(9, 0), EndTime: end(9, 30), TagID: ptr(int64(2)), Description: ptr("Login")},
 			{ID: 2, StartTime: at(9, 30).Add(2 * time.Second), EndTime: end(10, 0), TagID: ptr(int64(2)), Description: ptr("Login")},
 		}
-		dp := buildDayPeriods(blocks, tags)[dateKey]
+		dp := buildDayPeriods(blocks, tags, 0)[dateKey]
 		if dp == nil || len(dp.list) != 1 {
 			t.Fatalf("expected 1 merged period across 2s jitter, got %+v", dp)
+		}
+	})
+}
+
+func TestBuildDayPeriods_GranularityRoundsUp(t *testing.T) {
+	t.Parallel()
+
+	parent := storage.Tag{ID: 1, Name: "#projekta", PersonioProjectID: ptr("4711"), SyncToPersonio: true}
+	sub := storage.Tag{ID: 2, ParentID: ptr(int64(1)), Name: "#frontend", SyncToPersonio: true}
+	tags := map[int64]storage.Tag{1: parent, 2: sub}
+
+	day := time.Date(2026, 4, 25, 12, 0, 0, 0, time.Local)
+	at := func(h, m int) time.Time {
+		return day.Add(time.Duration(h-12)*time.Hour + time.Duration(m)*time.Minute)
+	}
+	end := func(h, m int) *time.Time { v := at(h, m); return &v }
+	dateKey := day.Local().Format("2006-01-02")
+
+	t.Run("12-min run becomes a full 15-min slot", func(t *testing.T) {
+		blocks := []storage.FocusBlock{
+			{ID: 1, StartTime: at(9, 0), EndTime: end(9, 12), TagID: ptr(int64(2))},
+		}
+		dp := buildDayPeriods(blocks, tags, 15*time.Minute)[dateKey]
+		if dp == nil || len(dp.list) != 1 {
+			t.Fatalf("expected 1 period, got %+v", dp)
+		}
+		want := at(9, 15).Local().Format("2006-01-02T15:04:05")
+		if dp.list[0].End != want {
+			t.Fatalf("end = %q, want %q (rounded up to next 15-min slot)", dp.list[0].End, want)
+		}
+	})
+
+	t.Run("16-min run becomes 30 min", func(t *testing.T) {
+		blocks := []storage.FocusBlock{
+			{ID: 1, StartTime: at(9, 0), EndTime: end(9, 16), TagID: ptr(int64(2))},
+		}
+		dp := buildDayPeriods(blocks, tags, 15*time.Minute)[dateKey]
+		want := at(9, 30).Local().Format("2006-01-02T15:04:05")
+		if dp.list[0].End != want {
+			t.Fatalf("end = %q, want %q", dp.list[0].End, want)
+		}
+	})
+
+	t.Run("exact 15-min run stays 15 min", func(t *testing.T) {
+		blocks := []storage.FocusBlock{
+			{ID: 1, StartTime: at(9, 0), EndTime: end(9, 15), TagID: ptr(int64(2))},
+		}
+		dp := buildDayPeriods(blocks, tags, 15*time.Minute)[dateKey]
+		want := at(9, 15).Local().Format("2006-01-02T15:04:05")
+		if dp.list[0].End != want {
+			t.Fatalf("end = %q, want %q (no rounding when already on a slot boundary)", dp.list[0].End, want)
+		}
+	})
+
+	t.Run("start floored to grid; closely-following neighbour is pushed", func(t *testing.T) {
+		// A: 9:00–9:12 → grid slot 9:00–9:15. B starts 9:14 (different desc):
+		// flooring its start to 9:00 would overlap A, so the sweep pushes B's
+		// start forward to A.end (9:15) and re-ceils the end on the grid.
+		blocks := []storage.FocusBlock{
+			{ID: 1, StartTime: at(9, 0), EndTime: end(9, 12), TagID: ptr(int64(2)), Description: ptr("A")},
+			{ID: 2, StartTime: at(9, 14), EndTime: end(9, 30), TagID: ptr(int64(2)), Description: ptr("B")},
+		}
+		dp := buildDayPeriods(blocks, tags, 15*time.Minute)[dateKey]
+		if dp == nil || len(dp.list) != 2 {
+			t.Fatalf("expected 2 periods, got %+v", dp)
+		}
+		wantFirstEnd := at(9, 15).Local().Format("2006-01-02T15:04:05")
+		if dp.list[0].End != wantFirstEnd {
+			t.Errorf("first period end = %q, want %q (full 15-min slot)", dp.list[0].End, wantFirstEnd)
+		}
+		wantSecondStart := at(9, 15).Local().Format("2006-01-02T15:04:05")
+		if dp.list[1].Start != wantSecondStart {
+			t.Errorf("second period start = %q, want %q (pushed to predecessor end)", dp.list[1].Start, wantSecondStart)
+		}
+	})
+
+	t.Run("start floors to previous slot boundary", func(t *testing.T) {
+		// A run of 9:07–9:12 occupies the [9:00, 9:15) slot — both bounds snap
+		// to the grid, so the user-visible Personio booking is 9:00–9:15.
+		blocks := []storage.FocusBlock{
+			{ID: 1, StartTime: at(9, 7), EndTime: end(9, 12), TagID: ptr(int64(2))},
+		}
+		dp := buildDayPeriods(blocks, tags, 15*time.Minute)[dateKey]
+		if dp == nil || len(dp.list) != 1 {
+			t.Fatalf("expected 1 period, got %+v", dp)
+		}
+		wantStart := at(9, 0).Local().Format("2006-01-02T15:04:05")
+		wantEnd := at(9, 15).Local().Format("2006-01-02T15:04:05")
+		if dp.list[0].Start != wantStart || dp.list[0].End != wantEnd {
+			t.Fatalf("period = %s..%s, want %s..%s", dp.list[0].Start, dp.list[0].End, wantStart, wantEnd)
+		}
+	})
+
+	t.Run("run spanning a slot boundary covers both slots", func(t *testing.T) {
+		// 9:07–9:23 spans the 9:00 and 9:15 slots → grid range 9:00–9:30.
+		blocks := []storage.FocusBlock{
+			{ID: 1, StartTime: at(9, 7), EndTime: end(9, 23), TagID: ptr(int64(2))},
+		}
+		dp := buildDayPeriods(blocks, tags, 15*time.Minute)[dateKey]
+		wantStart := at(9, 0).Local().Format("2006-01-02T15:04:05")
+		wantEnd := at(9, 30).Local().Format("2006-01-02T15:04:05")
+		if dp.list[0].Start != wantStart || dp.list[0].End != wantEnd {
+			t.Fatalf("period = %s..%s, want %s..%s", dp.list[0].Start, dp.list[0].End, wantStart, wantEnd)
+		}
+	})
+
+	t.Run("granularity 0 disables rounding", func(t *testing.T) {
+		blocks := []storage.FocusBlock{
+			{ID: 1, StartTime: at(9, 0), EndTime: end(9, 12), TagID: ptr(int64(2))},
+		}
+		dp := buildDayPeriods(blocks, tags, 0)[dateKey]
+		want := at(9, 12).Local().Format("2006-01-02T15:04:05")
+		if dp.list[0].End != want {
+			t.Fatalf("end = %q, want %q (no rounding configured)", dp.list[0].End, want)
 		}
 	})
 }
