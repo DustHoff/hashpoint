@@ -52,16 +52,31 @@ type Config struct {
 
 // Tracker owns the focus-tracking lifecycle.
 type Tracker struct {
-	cfg     Config
-	source  FocusSource
-	clock   Clock
-	blocks  storage.FocusBlockRepository
-	rules   storage.RuleRepository
-	logger  *slog.Logger
+	cfg    Config
+	source FocusSource
+	clock  Clock
+	blocks storage.FocusBlockRepository
+	rules  storage.RuleRepository
+	logger *slog.Logger
 
-	mu       sync.Mutex
-	current  *storage.FocusBlock
-	paused   bool
+	mu sync.Mutex
+	// current holds the tracker's own open program-focus block (nil while
+	// nothing is being tracked). Manual blocks live in the App layer and are
+	// not reflected here.
+	current *storage.FocusBlock
+	// paused is the user-facing pause state controlled by Pause/Resume —
+	// driven by tracking.enabled, the tray toggle and the timeline button.
+	// The whole state machine collapses to this single flag: paused = no
+	// process tracking, no auto-tagging, manual placeholder blocks still
+	// allowed at the App layer; running = process tracking + auto-tag rules
+	// active alongside any manual placeholder the user has open.
+	paused bool
+	// manualTagID is the tag id of the App's currently open manual block
+	// (nil when no manual is active). When set, applyAutoTag inherits this
+	// tag onto every new program block instead of running the rule engine —
+	// so the user's manual tag wins over auto-tag rules without us having to
+	// stop polling. Manual mode and Pause are deliberately independent.
+	manualTagID *int64
 }
 
 // Option is a functional option.
@@ -116,6 +131,23 @@ func (t *Tracker) Paused() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.paused
+}
+
+// SetManualTag tells the tracker which tag the App's currently open manual
+// block carries (nil when no manual block is open). While set, every new
+// program block opened by the tracker inherits this tag instead of being
+// matched against the auto-tag rule engine — manual selection wins over
+// rules. The tracker keeps polling and recording window context the whole
+// time; only the tagging decision changes.
+func (t *Tracker) SetManualTag(tagID *int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if tagID == nil {
+		t.manualTagID = nil
+		return
+	}
+	v := *tagID
+	t.manualTagID = &v
 }
 
 // Run starts the polling loop and blocks until ctx is cancelled. The current
@@ -267,7 +299,22 @@ func (t *Tracker) handleFocus(ctx context.Context, info winapi.FocusInfo) {
 		"id", b.ID, "process", b.ProcessName, "title", b.WindowTitle)
 }
 
+// applyAutoTag tags the freshly opened block. Caller holds t.mu.
+//
+// If the App has a manual-tag block open, every new program block inherits
+// that tag instead of being matched against the rule engine — the user's
+// explicit choice wins over auto-tag rules without us having to stop polling.
+// auto_tagged is left false in that case so the timeline can still tell
+// rule-applied tags from manually-driven ones.
 func (t *Tracker) applyAutoTag(ctx context.Context, b *storage.FocusBlock) {
+	if t.manualTagID != nil {
+		tagID := *t.manualTagID
+		b.TagID = &tagID
+		if err := t.blocks.SetTag(ctx, b.ID, &tagID, false); err != nil {
+			t.logger.Warn("manual tag inheritance failed", "err", err)
+		}
+		return
+	}
 	rules, err := t.rules.ListEnabled(ctx)
 	if err != nil {
 		t.logger.Debug("auto-tag: list rules failed", "err", err)

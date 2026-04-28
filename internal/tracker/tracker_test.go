@@ -155,6 +155,88 @@ func TestTracker_MarksIdleWhenThresholdExceeded(t *testing.T) {
 	}
 }
 
+func TestTracker_ManualTagOverridesAutoTagRules(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := storage.OpenInMemory(ctx)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	blocks := storage.NewFocusBlockRepo(db)
+	tags := storage.NewTagRepo(db)
+	rules := storage.NewRuleRepo(db)
+
+	autoTag := storage.Tag{Name: "#auto"}
+	if err := tags.Create(ctx, &autoTag); err != nil {
+		t.Fatalf("create auto tag: %v", err)
+	}
+	manualTag := storage.Tag{Name: "#manual"}
+	if err := tags.Create(ctx, &manualTag); err != nil {
+		t.Fatalf("create manual tag: %v", err)
+	}
+	rule := storage.Rule{
+		MatchField: "process_name",
+		MatchType:  "contains",
+		Pattern:    "chrome",
+		TagID:      autoTag.ID,
+		Priority:   1,
+		Enabled:    true,
+	}
+	if err := rules.Create(ctx, &rule); err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+
+	src := &fakeSource{}
+	clock := &fakeClock{t: time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)}
+	src.set(winapi.FocusInfo{ProcessName: "chrome.exe", Title: "GitHub"}, 0)
+
+	trk := New(Config{PollInterval: time.Millisecond, IdleThreshold: 5 * time.Minute},
+		blocks, rules, nil, WithFocusSource(src), WithClock(clock))
+
+	// Without manual mode the rule engine drives tagging.
+	trk.tick(ctx)
+	first, _ := blocks.LastOpen(ctx)
+	if first == nil || first.TagID == nil || *first.TagID != autoTag.ID || !first.AutoTagged {
+		t.Fatalf("expected auto-tagged block, got %+v", first)
+	}
+
+	// Engage manual mode — tracker keeps polling, but new blocks inherit
+	// the manual tag instead of going through the rules. Process tracking
+	// and the rule engine must not be torn down (no Pause), they're just
+	// outvoted by the explicit user choice.
+	trk.SetManualTag(&manualTag.ID)
+	clock.advance(30 * time.Second)
+	src.set(winapi.FocusInfo{ProcessName: "chrome.exe", Title: "Inbox"}, 0)
+	trk.tick(ctx)
+
+	second, _ := blocks.LastOpen(ctx)
+	if second == nil || second.ID == first.ID {
+		t.Fatalf("expected a new block while manual is active, got %+v", second)
+	}
+	if second.TagID == nil || *second.TagID != manualTag.ID {
+		t.Fatalf("manual tag must override rule engine, got tag %v", second.TagID)
+	}
+	if second.AutoTagged {
+		t.Errorf("manual-overridden blocks must not be flagged auto_tagged")
+	}
+
+	// Clearing the manual tag puts the rule engine back in charge.
+	trk.SetManualTag(nil)
+	clock.advance(30 * time.Second)
+	src.set(winapi.FocusInfo{ProcessName: "chrome.exe", Title: "Calendar"}, 0)
+	trk.tick(ctx)
+
+	third, _ := blocks.LastOpen(ctx)
+	if third == nil || third.ID == second.ID {
+		t.Fatalf("expected a new block after clearing manual, got %+v", third)
+	}
+	if third.TagID == nil || *third.TagID != autoTag.ID || !third.AutoTagged {
+		t.Errorf("rule engine must drive tagging again, got %+v", third)
+	}
+}
+
 func TestTracker_SameFocusKeepsBlockOpen(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
