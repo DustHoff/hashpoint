@@ -39,9 +39,12 @@ function colorFromName(name: string): string {
   return `hsl(${hue} 35% 45%)`;
 }
 
-// A contiguous segment groups adjacent blocks that share both tag and
-// process — same-program neighbours collapse into one rectangle on the strip
-// and share a single hover/select target.
+// A contiguous segment groups adjacent blocks that share tag, process AND
+// description — same-program neighbours collapse into one rectangle on the
+// strip and share a single hover/select target. Including the description
+// in the merge key keeps the strip honest: a description added to one
+// block doesn't visually paint adjacent same-tag blocks that don't carry
+// it.
 interface Segment {
   tagID: number | null;
   processName: string;
@@ -49,7 +52,6 @@ interface Segment {
   start: number;
   end: number;
   description: string;
-  hasMixedDescriptions: boolean;
   allPlaceholder: boolean;
 }
 
@@ -63,12 +65,15 @@ function buildSegments(blocks: FocusBlock[]): Segment[] {
     }
     const { start, end } = blockBounds(b);
     const tagID = b.tag_id ?? null;
-    if (cur && cur.tagID === tagID && cur.processName === b.process_name) {
+    const description = b.description ?? "";
+    if (
+      cur &&
+      cur.tagID === tagID &&
+      cur.processName === b.process_name &&
+      cur.description === description
+    ) {
       cur.blockIDs.push(b.id);
       cur.end = Math.max(cur.end, end);
-      const d = b.description ?? "";
-      if (d && cur.description === "") cur.description = d;
-      else if (d && d !== cur.description) cur.hasMixedDescriptions = true;
       cur.allPlaceholder = cur.allPlaceholder && b.is_placeholder;
     } else {
       cur = {
@@ -77,8 +82,7 @@ function buildSegments(blocks: FocusBlock[]): Segment[] {
         blockIDs: [b.id],
         start,
         end,
-        description: b.description ?? "",
-        hasMixedDescriptions: false,
+        description,
         allPlaceholder: b.is_placeholder,
       };
       out.push(cur);
@@ -980,9 +984,7 @@ export default function Timeline() {
                   `${formatHHMM(new Date(seg.start).toISOString())}–${formatHHMM(new Date(seg.end).toISOString())} · ${formatDuration(Math.round((seg.end - seg.start) / 1000))}\n` +
                   `${seg.processName || "(Platzhalter)"} · ${tag ? tag.name : "ohne Tag"}` +
                   (seg.allPlaceholder ? " · manuelle Zeitspanne" : "") +
-                  (seg.description
-                    ? `\n${seg.description}${seg.hasMixedDescriptions ? " (gemischt)" : ""}`
-                    : "")
+                  (seg.description ? `\n${seg.description}` : "")
                 }
               />
             );
