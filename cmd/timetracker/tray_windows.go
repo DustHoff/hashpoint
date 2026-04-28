@@ -83,10 +83,9 @@ func onTrayReady(ctx context.Context, a *app.App, version string) {
 			systray.Quit()
 			return
 		case <-mOpen.ClickedCh:
-			// Wails has no direct "show window" cross-cut from tray on plain
-			// systray; opening is handled by Wails when the user clicks the
-			// taskbar icon. As a fallback we log it.
-			slog.Debug("tray: open clicked")
+			// HideWindowOnClose means the close button only hides the
+			// window — the tray is the only path back without restarting.
+			a.ShowWindow()
 		case <-mPause.ClickedCh:
 			if a.IsTrackingPaused() {
 				a.ResumeTracking()

@@ -18,6 +18,7 @@ import (
 	"github.com/onesi/hashpoint/internal/storage"
 	"github.com/onesi/hashpoint/internal/tagging"
 	"github.com/onesi/hashpoint/internal/tracker"
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // VersionInfo describes the running build.
@@ -55,6 +56,12 @@ type App struct {
 
 	mu  sync.Mutex
 	cfg *config.Config
+	// started flips true once Wails has called Startup with the real runtime
+	// context. Guarded by `mu`. We need it because the tray goroutine may
+	// fire ShowWindow before the Wails frontend has attached itself —
+	// runtime.* helpers panic if handed a context without their hidden
+	// frontend value.
+	started bool
 	// Manual-tag state — guarded by `mu`. When `manualBlockID` is non-nil a
 	// placeholder block is currently open under the user's selected tag from
 	// the tray submenu. The tracker is told the active tag id via
@@ -80,13 +87,35 @@ func New(deps Deps) *App {
 
 // Startup is invoked by Wails once the runtime is ready.
 func (a *App) Startup(ctx context.Context) {
+	a.mu.Lock()
 	a.ctx = ctx
+	a.started = true
+	a.mu.Unlock()
 	a.logger.Info("frontend started")
 }
 
 // Shutdown is invoked by Wails on window close. Tracker shutdown is handled
 // in main; nothing to do here.
 func (a *App) Shutdown(_ context.Context) {}
+
+// ShowWindow brings the Wails main window to the foreground. The tray's
+// "Öffnen" entry calls it after the user has closed the window — Wails is
+// configured with HideWindowOnClose, so close hides the window and the
+// tray is the only way to bring it back without restarting the app. If
+// Startup has not run yet (tray click during early boot) we just log: the
+// runtime helpers would otherwise panic on a context without their
+// frontend value.
+func (a *App) ShowWindow() {
+	a.mu.Lock()
+	ctx, ready := a.ctx, a.started
+	a.mu.Unlock()
+	if !ready || ctx == nil {
+		a.logger.Warn("app: ShowWindow called before Wails Startup — ignoring")
+		return
+	}
+	wailsruntime.WindowShow(ctx)
+	wailsruntime.WindowUnminimise(ctx)
+}
 
 // Version returns build metadata for the "About" dialog.
 func (a *App) Version() VersionInfo { return a.deps.Version }
