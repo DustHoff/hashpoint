@@ -5,39 +5,76 @@ import (
 	"time"
 )
 
-// FocusBlockRepository persists tracked focus intervals.
-type FocusBlockRepository interface {
-	// Open starts a new block; the returned ID is set on the block.
-	Open(ctx context.Context, b *FocusBlock) error
-	// Close finalizes the block by setting its end time and computed duration.
+// ProcessTrackRepository persists raw window-focus events. Process tracks
+// have no overlap constraint at the storage layer — the tracker is the
+// single writer and emits events in chronological order, so blocks are
+// disjoint by construction.
+type ProcessTrackRepository interface {
+	// Open starts a new track; the returned ID is set on the track.
+	Open(ctx context.Context, p *ProcessTrack) error
+	// Close finalizes the track by setting its end time and computed duration.
 	Close(ctx context.Context, id int64, end time.Time) error
-	// MarkIdle finalizes the block as idle.
+	// MarkIdle finalizes the track as idle.
 	MarkIdle(ctx context.Context, id int64, end time.Time) error
-	// LastOpen returns the currently open block (if any) — used for crash recovery.
-	LastOpen(ctx context.Context) (*FocusBlock, error)
-	// ListOpen returns every block whose end_time is NULL, ordered ascending
-	// by start_time — used by tracker recovery to close all leftover opens
-	// from a previous crash, not just the latest one.
-	ListOpen(ctx context.Context) ([]FocusBlock, error)
-	// ListByDay returns all blocks whose start_time falls on the given UTC day.
-	ListByDay(ctx context.Context, day time.Time) ([]FocusBlock, error)
-	// ListBetween returns all blocks in [from, to).
-	ListBetween(ctx context.Context, from, to time.Time) ([]FocusBlock, error)
-	// SetTag assigns or clears the tag of a block. autoTagged flags whether the
-	// assignment came from the rules engine.
-	SetTag(ctx context.Context, id int64, tagID *int64, autoTagged bool) error
-	// SetDescription writes the per-block activity description (nil/empty clears it).
+	// LastOpen returns the most recently started open track, or nil.
+	LastOpen(ctx context.Context) (*ProcessTrack, error)
+	// ListOpen returns every track whose end_time is NULL, ascending.
+	ListOpen(ctx context.Context) ([]ProcessTrack, error)
+	// ListByDay returns all tracks whose start_time falls on the given UTC day.
+	ListByDay(ctx context.Context, day time.Time) ([]ProcessTrack, error)
+	// ListBetween returns all tracks in [from, to).
+	ListBetween(ctx context.Context, from, to time.Time) ([]ProcessTrack, error)
+	// LastEnd returns the end_time of the most recently closed track, or zero
+	// time when no closed track exists. Used by the startup-cleanup hook to
+	// compute a sensible end for any dangling open-ended manual tag.
+	LastEnd(ctx context.Context) (time.Time, error)
+	// Get fetches a single track by ID.
+	Get(ctx context.Context, id int64) (*ProcessTrack, error)
+}
+
+// TagBlockRepository persists tagged time spans. The repo enforces the
+// non-overlap invariant: tagging spans synced to Personio must not collide,
+// and the storage layer is the last line of defense.
+type TagBlockRepository interface {
+	// Open inserts a new tag block. Refuses the write if it would overlap
+	// any other tag block.
+	Open(ctx context.Context, b *TagBlock) error
+	// Close finalizes an open tag block by setting its end time.
+	Close(ctx context.Context, id int64, end time.Time) error
+	// SetEnd is Close without the "must be still open" precondition — used
+	// when shrinking an existing closed block (e.g. manual range tag carving
+	// space out of an auto block).
+	SetEnd(ctx context.Context, id int64, end time.Time) error
+	// SetStart shrinks a tag block by moving its start_time forward.
+	SetStart(ctx context.Context, id int64, start time.Time) error
+	// SetTag re-points a tag block to a different tag (used during
+	// re-tagging a manual range).
+	SetTag(ctx context.Context, id, tagID int64) error
+	// SetDescription writes the activity description (nil clears it).
 	SetDescription(ctx context.Context, id int64, description *string) error
-	// MarkSynced records the Personio attendance ID for the block.
+	// MarkSynced records the Personio attendance ID.
 	MarkSynced(ctx context.Context, id int64, personioID string, at time.Time) error
-	// Split splits a block at the given UTC time. Returns the new (right) block.
-	Split(ctx context.Context, id int64, at time.Time) (*FocusBlock, error)
-	// Update writes editable fields (start_time, end_time, window_title) back.
-	Update(ctx context.Context, b *FocusBlock) error
-	// Delete removes a block.
+	// LastOpen returns the most recently started open tag block, or nil.
+	LastOpen(ctx context.Context) (*TagBlock, error)
+	// ListOpen returns every tag block whose end_time is NULL, ascending.
+	ListOpen(ctx context.Context) ([]TagBlock, error)
+	// ListOpenManual returns every open-ended manual tag block, ascending.
+	// At most one should ever be present; callers treat anything else as a
+	// startup-cleanup target.
+	ListOpenManual(ctx context.Context) ([]TagBlock, error)
+	// ListByDay returns all tag blocks whose start_time falls on the given
+	// UTC day.
+	ListByDay(ctx context.Context, day time.Time) ([]TagBlock, error)
+	// ListBetween returns all tag blocks in [from, to).
+	ListBetween(ctx context.Context, from, to time.Time) ([]TagBlock, error)
+	// ListOverlapping returns every tag block whose interval intersects
+	// [from, to). Used by the manual-range workflow to find auto blocks
+	// that need trimming or splitting.
+	ListOverlapping(ctx context.Context, from, to time.Time) ([]TagBlock, error)
+	// Get fetches a single tag block by ID.
+	Get(ctx context.Context, id int64) (*TagBlock, error)
+	// Delete removes a tag block.
 	Delete(ctx context.Context, id int64) error
-	// Get fetches a single block by ID.
-	Get(ctx context.Context, id int64) (*FocusBlock, error)
 }
 
 // TagRepository persists tag hierarchies.

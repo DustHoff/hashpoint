@@ -1,7 +1,7 @@
 // Mirrors the Go domain types in internal/storage. Keep in sync manually
 // (Wails generates wailsjs/go bindings, but we re-declare richer types here).
 
-export interface FocusBlock {
+export interface ProcessTrack {
   id: number;
   process_name: string;
   process_path?: string;
@@ -10,12 +10,18 @@ export interface FocusBlock {
   end_time?: string;
   duration_sec: number;
   is_idle: boolean;
-  tag_id?: number;
-  auto_tagged: boolean;
+}
+
+export interface TagBlock {
+  id: number;
+  tag_id: number;
   description?: string;
+  start_time: string; // RFC3339 UTC
+  end_time?: string;
+  duration_sec: number;
+  is_manual: boolean;
   personio_id?: string;
   synced_at?: string;
-  is_placeholder: boolean;
 }
 
 export interface Tag {

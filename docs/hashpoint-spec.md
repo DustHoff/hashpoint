@@ -20,12 +20,13 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
   - Fenstertitel (enthält oft Dateiname/URL/Tab)
   - Startzeitpunkt des Fokus
   - Endzeitpunkt des Fokus (= Beginn des nächsten Fokuswechsels)
-- Konsekutive identische Fokussierungen (gleicher Prozess + gleicher Titel) werden zu einem Block zusammengefasst.
-- **Idle-Detection:** Wenn der User > 5 Min inaktiv ist (kein Input via `GetLastInputInfo`), wird der aktuelle Block beendet und als „Idle" markiert.
-- **Lock/Sleep:** Beim Sperren oder Ruhezustand wird der aktuelle Block sauber abgeschlossen.
-- **Non-Overlap-Invariante:** Zwei Fokus-Blöcke dürfen sich zeitlich nie überlappen — Personio lehnt überlappende `WORK`-Perioden serverseitig ab. Die Storage-Schicht (`focus_block_repo`) prüft jeden `Open`/`Update`/`Close`/`Split` gegen den bestehenden Datenbestand und liefert `storage.ErrOverlap`, falls das Intervall mit einem anderen Block kollidiert (offene Blöcke gelten als bis ∞ laufend). Intervalle sind halb-offen `[start, end)`, d. h. `prev.end == next.start` ist erlaubt.
-- **Granularitäts-Quantisierung beim Erfassen (optional):** Ist `tracking.tag_block_granularity_min > 0`, snapt der Tracker bereits *beim Schreiben in die DB* jede `start_time` auf die nächste Slot-Untergrenze (Floor) und jede `end_time` auf die nächste Slot-Obergrenze (Ceil). Das Raster ist an lokaler Mitternacht verankert (z. B. `:00/:15/:30/:45` bei `15`). Beim Fokuswechsel innerhalb eines Slots fällt damit der Slot komplett auf den vorherigen Prozess; der Folgeblock startet auf der nächsten Slot-Grenze. Damit liefern die im Persistenzlayer gespeicherten Zeiten bereits die Personio-fähige Quantisierung — der Sync-seitige Snap (§2.5.3) bleibt als Sicherheitsnetz aktiv, fasst aber bei eingeschalteter Tracker-Quantisierung in der Regel keine Zeiten mehr an.
-- **Crash-Recovery:** Beim Start finalisiert der Tracker **alle** Blöcke, die noch ohne `end_time` in der DB stehen (`ListOpen`), nicht nur den letzten. Jeder Recovery-Block wird auf `min(start + idle_threshold, now, next_open.start)` geschlossen, damit das Schließen selbst keinen Overlap mit einem nachgelagerten Open einbringt.
+- Konsekutive identische Fokussierungen (gleicher Prozess + gleicher Titel) werden zu einem Eintrag zusammengefasst.
+- **Idle-Detection:** Wenn der User > 5 Min inaktiv ist (kein Input via `GetLastInputInfo`), wird der aktuelle `process_track` beendet und als „Idle" markiert.
+- **Lock/Sleep:** Beim Sperren oder Ruhezustand wird der aktuelle `process_track` sauber abgeschlossen.
+- **Roh-Erfassung (keine Granularität):** Der Tracker schreibt `process_tracks` mit den exakten Poll-Zeitstempeln in die DB. Es findet **keine** Granularitäts-Quantisierung auf dieser Ebene statt — Slot-Snapping ist Aufgabe der Tag-Block-Schicht (§2.4.3). Der Process-Track-Strip in der UI zeigt damit, was tatsächlich passiert ist, sekundengenau.
+- **Disjoint-Eigenschaft:** Process-Tracks sind per Konstruktion disjunkt (der Tracker schließt seinen vorherigen Eintrag, bevor er einen neuen öffnet). Eine Overlap-Prüfung auf Storage-Ebene ist daher nicht nötig.
+- **Crash-Recovery:** Beim Start finalisiert der Tracker **alle** Process-Tracks, die noch ohne `end_time` in der DB stehen (`ListOpen`), nicht nur den letzten. Jeder Recovery-Eintrag wird auf `min(start + idle_threshold, now, next_open.start)` geschlossen.
+- **Tagging-Entkopplung:** Der Tracker entscheidet **nichts** über Tags. Bei jedem Fokuswechsel ruft er den Tagging-Orchestrator (`OnFocusChanged`) auf; der Orchestrator pflegt die `tag_blocks` in einer separaten Tabelle (siehe §2.4.3).
 
 ### 2.2 Tray-Icon
 - Tool startet minimiert in der Windows-Taskleiste (System Tray).
@@ -44,45 +45,50 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
   Tags erscheinen erst nach Neustart der Anwendung.
 
 ### 2.3 Hauptfenster (Zeitachse)
-- Tagesansicht zweigeteilt: **horizontaler Zeitstrahl oben** (24-Stunden-Strip),
-  **Tabellenliste aller Programme/Erfassungen darunter**.
+- Tagesansicht: **zwei übereinander liegende Strips** mit gemeinsamer
+  Zoom/Scroll-Achse, darunter zwei Tabellen.
 - Datums-Navigation (Vor/Zurück, Datepicker).
-- Tabellenliste je Block mit:
-  - Programm-Icon/-Name
-  - Fenstertitel
-  - Start–Ende, Dauer
-  - Tätigkeitsbeschreibung (siehe 2.3.1)
-  - zugewiesener Tag (mit Auto-Tag-Indikator ⚙)
-- **Zeitstrahl-Strip** rendert den Tag von 00:00 bis 24:00 als horizontalen
-  Balken. Zusammenhängende Blöcke mit demselben Tag werden zu **einem
-  Tag-Segment** zusammengefasst und in der Tag-Farbe dargestellt; Idle-Blöcke
-  als blasser Streifen, ungetaggte Blöcke als grauer Streifen.
-- **Range-Selektion auf dem Strip:** Per Drag (linke Maustaste) wird eine
-  Zeitspanne aufgezogen; alle nicht-idlen Blöcke, die diesen Bereich schneiden,
-  werden in einem Schwung selektiert. `Shift+Drag` erweitert die bestehende
-  Auswahl additiv.
-- **Klick auf ein Tag-Segment** wählt alle Blöcke des Segments aus
-  (`Shift+Klick` = additiv).
-- **Hover-Highlight:** Mouse-Over auf einem Tag-Segment hebt die zugehörigen
-  Programmzeilen in der Tabelle hervor (und umgekehrt soll auf Hover über eine
-  Zeile das Segment im Strip betont werden).
-- **Multi-Select in der Tabelle:** Klick toggelt, `Shift+Klick` wählt einen
-  zusammenhängenden Bereich.
-- **Tag- & Beschreibungs-Zuweisung** an die Auswahl: Tag-Buttons + freies
-  Textfeld (siehe 2.3.1). Auswahl löschen ist explizit möglich.
-- Aggregierte Ansicht: Summen pro Tag.
-- Manuelles Editieren (Block teilen, Zeit anpassen, löschen).
+- **Top-Strip — Tag-Blöcke:** Visualisiert die manuellen und automatischen
+  `tag_blocks`. Auto-Blöcke werden mit gestrichelter Umrandung dargestellt,
+  manuelle Blöcke ohne Rand. Das Strip ist die einzige Stelle, an der
+  manuelles Tagging gestartet wird (Drag-to-tag).
+- **Bottom-Strip — Process-Tracks:** Read-only-Visualisierung der rohen
+  Fenster-Fokus-Events. Idle-Bereiche werden abgeblendet; jeder Prozess
+  bekommt eine deterministische Hue, damit aufeinanderfolgende Programme
+  visuell trennbar sind. Granularität greift hier nicht — die Zeiten sind
+  sekundengenau.
+- **Drag auf dem Top-Strip** zieht eine Zeitspanne auf (snappt live auf
+  das Granularitätsraster). Beim Loslassen entsteht ein „committed range".
+  Ein Klick auf einen Tag im Auswahl-Panel ruft `CreateManualRange` auf:
+  überlappende Auto-Tag-Blöcke werden getrimmt/gesplittet/gelöscht (Manual
+  schlägt Auto), Überschneidung mit einem bestehenden manuellen Tag-Block
+  wird mit `ErrOverlap` abgelehnt.
+- **Drag-Range-Edit:** Die Kanten der noch ungetaggten Range lassen sich
+  greifen und neu positionieren (Snap auf das Granularitätsraster).
+- **Klick auf einen Tag-Block** im Top-Strip selektiert ihn (Shift = additiv).
+  Ausgewählte Blöcke können neu getagt werden (`SetTagBlockTag`),
+  beschriftet (`SetTagBlockDescription`) oder gelöscht (`DeleteTagBlock`).
+- **Hover** auf einem Tag-Block oder Process-Track filtert die untere
+  Process-Tabelle auf den Zeitraum.
+- **Mausrad zoomt** (cursor-anchored), **Shift+Mausrad schwenkt**,
+  **Doppelklick** setzt den Zoom zurück. Beide Strips reagieren synchron
+  auf dieselbe View-Window-State.
+- **Tabellen** unterhalb der Strips:
+  - Tag-Block-Tabelle: pro `tag_block` eine Zeile mit Zeitraum, Dauer,
+    `manuell|auto`, Beschreibung, Tag-Chips (Parent + Sub).
+  - Process-Track-Tabelle: gruppiert aufeinanderfolgende Tracks mit
+    gleichem Prozess. Der Pfeil expandiert die Gruppe und zeigt die
+    einzelnen Fenstertitel.
 
-### 2.3.1 Tätigkeitsbeschreibung pro Block
-- Jeder Fokus-Block hat ein optionales freies Textfeld `description`.
-- Über die Selektion auf dem Strip oder in der Tabelle lassen sich beliebig
-  viele Blöcke auf einmal mit demselben Tag **und** derselben Beschreibung
-  versehen — typische Anwendung: ein zusammenhängender Tag-Block, in dem
-  mehrere Programme involviert waren (IDE + Browser + Terminal), bekommt
-  einen einzelnen Beschreibungstext (z. B. „Refactoring Login-Flow").
-- Beim Personio-Sync wird die Block-Beschreibung an den aus Tag/Sub-Tag
-  generierten Kommentar angehängt (Format: `"<tag-comment> — <description>"`);
-  Beschreibungen werden je Aggregations-Bucket dedupliziert.
+### 2.3.1 Tätigkeitsbeschreibung pro Tag-Block
+- Jeder `tag_block` hat ein optionales freies Textfeld `description`.
+- Beim Anlegen einer manuellen Range („Tag-Button" im Auswahl-Panel) wird
+  der Beschreibungstext mit übernommen.
+- Bei einem **offenen** manuellen Tag (siehe §2.4.2) wird die beim Start
+  hinterlegte Beschreibung auch nach einer Auto-Tag-Unterbrechung erneut
+  in den fortgesetzten manuellen Block geschrieben.
+- Beim Personio-Sync wird die Beschreibung an den aus Tag/Sub-Tag
+  generierten Kommentar angehängt (Format: `"<tag-comment> — <description>"`).
 
 ### 2.4 Tags (mit Hierarchie)
 - Frei definierbare Tags in **zwei Ebenen**: Parent-Tag (z. B. `#projekta`) und Sub-Tag (z. B. `#frontend`, `#meeting`, `#review`).
@@ -98,8 +104,10 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
 - Ein Block wird genau **einem** Tag zugeordnet — das kann ein Parent oder ein Sub-Tag sein.
 - UI: kaskadierender Selector (Parent → Sub) bei Block-Zuweisung; Sub-Tags ohne Mapping fallen auf das Parent-Mapping zurück.
 
-### 2.4.1 Auto-Tagging (Ausbaustufe 2)
-- Regelbasierte automatische Tag-Zuweisung beim Erfassen eines neuen Blocks.
+### 2.4.1 Auto-Tagging (Tag-Block-Lebenszyklus)
+- Regelbasierte automatische Tag-Zuweisung als **eigener Tag-Block** im
+  `tag_blocks`-Schema, gepflegt vom Tagging-Orchestrator
+  (`internal/tagging/orchestrator.go`).
 - Eine Regel besteht aus:
   - `match_field`: `process_name` | `window_title` | `both`
   - `match_type`: `contains` | `equals` | `regex`
@@ -107,34 +115,77 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
   - `tag_id`: Ziel-Tag (Parent oder Sub)
   - `priority`: Integer; höhere Priorität gewinnt bei Mehrfach-Match
   - `enabled`: bool
-- Auswertung: nach jedem Block-Abschluss werden Regeln in Reihenfolge der Priorität geprüft; erste passende Regel setzt `tag_id`.
-- **Regex-Engine:** Go-Standardbibliothek `regexp` (RE2-Syntax) — kein Backtracking, lineare Laufzeit, keine Catastrophic-Regex-Risiken. Ungültige Patterns werden beim Speichern via `regexp.Compile` validiert und abgelehnt.
-- Manuell gesetzte Tags werden **nicht überschrieben** (Flag `auto_tagged` in `focus_blocks`).
-- UI: eigener Bereich „Auto-Tagging-Regeln" mit Test-Funktion gegen vorhandene Blöcke.
-- Bulk-Apply: Regel rückwirkend auf bereits erfasste, ungetaggte Blöcke anwenden.
-- **Vorrang manueller Tags:** Solange eine manuelle Tagging-Sitzung läuft
-  (siehe 2.4.2), erbt jeder neu geöffnete Tracker-Block den manuellen Tag und
-  läuft **nicht** durch die Regel-Engine — `auto_tagged` bleibt dabei `false`,
-  damit Auswertungen den manuellen Override von Regelmatches unterscheiden
-  können.
+- **Lebenszyklus:**
+  1. Tracker meldet `OnFocusChanged(name, title, at)`.
+  2. Orchestrator prüft Regeln in Priorität-DESC-Reihenfolge.
+  3. Trifft eine Regel: ist bereits ein Auto-Block der **gleichen Regel**
+     offen, wird er weitergeführt. Sonst wird ein offener Auto-Block der
+     anderen Regel geschlossen (Floor-Snap auf Granularität, siehe §2.4.3)
+     und ein neuer Auto-Block für die treffende Regel geöffnet (Floor-Snap
+     auf Granularität).
+  4. Trifft keine Regel: ein offener Auto-Block wird geschlossen.
+- **Regex-Engine:** Go-Standardbibliothek `regexp` (RE2-Syntax) — kein
+  Backtracking, lineare Laufzeit. Ungültige Patterns werden beim Speichern
+  via `regexp.Compile` validiert und abgelehnt.
+- **Zero-Length-Suppression:** Floor-Snap am Anfang **und** am Ende kann
+  einen 0-Sekunden-Auto-Block produzieren (wenn ein Match die Granularität
+  unterschreitet). Solche Blöcke werden nicht persistiert / vor dem Close
+  wieder gelöscht.
+- **Vorrang manueller Range-Tags:** §2.4.3 beschreibt das Verhalten bei
+  Überlappung — eine manuelle Range schneidet Auto-Blöcke aus.
 
-### 2.4.2 Manuelles Tagging (Tray-Submenü)
-- Über das Tray-Submenü „Manueller Tag" kann der User die laufende Zeit einer
-  Kategorie zuordnen, ohne sie vorher zu erfassen — typisch für Telefonate,
-  Meetings ohne Bildschirm-Aktivität oder Pausen.
-- Klick auf einen Tag im Submenü öffnet einen Platzhalter-Block
-  (`is_placeholder = true`, leerer `process_name`/`window_title`,
-  `start_time = now`) mit dem gewählten Tag und teilt dem Tracker den aktiven
-  Manual-Tag mit.
-- Ein bereits offener Manual-Block wird beim Wechsel auf einen anderen Tag
-  sauber geschlossen, bevor der neue Block geöffnet wird.
-- „Kein Tag (Stop)" beendet den aktuellen Manual-Block. Wiederholtes Klicken
-  ohne aktiven Block ist ein No-Op.
-- **Parallelität:** Manuelles Tagging stoppt das Fokus-Polling **nicht**.
-  Solange `tracking.enabled = true` ist, läuft das Programm-Tracking weiter
-  und die Tracker-Blöcke übernehmen den manuellen Tag (Override über die
-  Auto-Tagging-Engine, siehe 2.4.1). Ist `tracking.enabled = false`, bleibt
-  nur der Platzhalter-Block bestehen.
+### 2.4.2 Manuelles Tagging (offene-Ende-Sitzung)
+- Über das Tray-Submenü „Manueller Tag" startet der User eine **offene
+  manuelle Tag-Sitzung**. Anders als ein Range-Tag hat sie kein Ende-Datum
+  und gilt als Default-Kontext, in den die laufende Aktivität automatisch
+  einsortiert wird.
+- **Genau einer** offener manueller Tag-Block existiert zu jeder Zeit.
+  Beim Anwendungsstart schließt der Orchestrator alle dangling offenen
+  manuellen Blöcke (`CloseDanglingManualAtStartup`) auf das Ende des
+  letzten Process-Tracks (oder `now`, wenn kein Tracking lief).
+- **Auto-Tag-Unterbrechung:**
+  1. User startet manuellen Tag M zur Zeit T1.
+  2. Aktivität läuft, M ist offen und „aktiv".
+  3. Zur Zeit T2 fokussiert ein Prozess, der eine Auto-Tag-Regel erfüllt:
+     M wird auf `floor(T2)` geschlossen, ein Auto-Block A öffnet auf
+     `floor(T2)`, und der Orchestrator merkt sich M's Tag + Beschreibung
+     als „pausiert".
+  4. Auto-Block A bleibt offen, solange ein matching-Prozess läuft.
+  5. Endet das Matching zu T3 (anderer Prozess oder Idle), schließt A auf
+     `floor(T3)`. Ist die Granularität so groß, dass `floor(T3) ==
+     floor(T2)`, wird A gelöscht statt geschlossen (zero-length).
+  6. Sofort danach wird ein **neuer** manueller Tag-Block mit dem gleichen
+     Tag und derselben Beschreibung wie M auf `floor(T3)` geöffnet —
+     vorausgesetzt, der Fokus zeigt auf einen aktiven Prozess. Bei Idle
+     bleibt M „pausiert", bis der nächste Fokus-Event kommt.
+- **Start während aktiver Auto-Sitzung:** Klickt der User „Manueller Tag",
+  während ein Auto-Block läuft, wird kein manueller Block erzeugt — der
+  gewünschte Tag/Beschreibung werden als „pausiert" gespeichert und der
+  manuelle Block startet erst, wenn der Auto-Block endet.
+- **Stop:** „Kein Tag (Stop)" schließt den offenen manuellen Block (oder
+  verwirft den pausierten Status, wenn aktuell ein Auto-Block läuft).
+
+### 2.4.3 Granularität & manuelle Range-Tags
+- **Granularität wirkt nur auf `tag_blocks`.** Process-Tracks bleiben
+  immer roh.
+- Granularitätsraster: lokal-zeitausgerichtet (`:00/:15/:30/:45` bei `15`),
+  Anker an lokaler Mitternacht.
+- **Auto-Blöcke:** Start auf Floor, End auf Floor. Zero-Length wird unter-
+  drückt (siehe §2.4.1).
+- **Manuelle Range-Tags:** Drag-to-tag im Top-Strip. Start floors, End
+  ceils. Beim Persistieren werden überlappende Blöcke wie folgt behandelt:
+  - Manueller Block in der Range: **Ablehnen** (`ErrOverlap`).
+  - Auto-Block vollständig in der Range: **Löschen**.
+  - Auto-Block startet vor der Range, endet in der Range: **End auf
+    Range-Start trimmen** (`SetEnd`).
+  - Auto-Block startet in der Range, endet nach der Range: **Start auf
+    Range-Ende trimmen** (`SetStart`).
+  - Auto-Block umschließt die Range vollständig: **Splitten** — Original
+    wird auf Range-Start verkürzt, ein neuer Block deckt Range-Ende bis
+    Original-Ende ab.
+- **Manuelle Range bei aktiver offener manueller Sitzung:** kollidiert
+  per Definition (offener Manual-Block ist „is_manual = 1"); die Range
+  wird abgelehnt. User muss den offenen Manual zuerst stoppen.
 
 ### 2.5 Personio-Synchronisation
 
@@ -194,11 +245,20 @@ Pro Request:
 > Die UI-API kennt im Period-Modell **keine Activity-ID**. `tags.personio_activity_id` bleibt deshalb als **Legacy-Feld** im Schema/UI bestehen, wird aber beim Sync nicht verwendet. Sollte Personio das Feld in einer späteren UI-Version wieder einführen, kann der Syncer es ohne Schemaänderung berücksichtigen.
 
 #### 2.5.3 Aggregation
-- Blöcke werden chronologisch durchlaufen; **konsekutive** Blöcke mit identischem `(lokalem Datum, project_id, comment)` und einem Zeitabstand ≤ 5 s (Tracker-Jitter-Toleranz) werden zu **einer** Period zusammengefasst. Eine Lücke darüber, ein Idle-Block oder ein nicht-syncbarer Block beendet den Lauf — Personio sieht damit echte Pausen statt einer Spanne, die sie überdeckt.
-- Pro Period: `start` = früheste Block-Startzeit des Laufs, `end` = späteste Block-Endzeit (UTC → lokal-naive `YYYY-MM-DDTHH:MM:SS`).
+- Quelle ist die `tag_blocks`-Tabelle (nicht mehr `focus_blocks`). Die
+  Granularität ist auf dieser Ebene bereits angewandt — die Aggregation
+  rundet **nicht** zusätzlich.
+- Blöcke werden chronologisch durchlaufen; **konsekutive** Tag-Blöcke
+  mit identischem `(lokalem Datum, project_id, comment)` und einem
+  Zeitabstand ≤ 5 s werden zu **einer** Period zusammengefasst. Eine
+  Lücke darüber oder ein nicht-syncbarer Block beendet den Lauf.
+- Pro Period: `start` = früheste Tag-Block-Startzeit des Laufs, `end` =
+  späteste Tag-Block-Endzeit (UTC → lokal-naive `YYYY-MM-DDTHH:MM:SS`).
 - `period_type` ist immer `"work"`. Pausen werden aktuell nicht synchronisiert.
-- Kommentar-Format: `"<parent_name> <sub_name> <sub_description>"` aus dem Tag-Mapping, plus optional ` — <block_description>` aus `focus_blocks.description`. Innerhalb eines Laufs gehören alle Blöcke per Konstruktion zum selben Kommentar.
-- **Granularitäts-Quantisierung (optional):** Ist `tracking.tag_block_granularity_min > 0`, wird jede Period auf ein **lokales Slot-Raster** der Breite `granularity` gelegt (verankert an Mitternacht der lokalen Zeitzone, damit z. B. 15-min-Slots auf `:00/:15/:30/:45` fallen). `start` wird auf den Slot-Anfang **abgerundet** (Floor), `end` auf das nächste Slot-Ende **aufgerundet** (Ceil). Eine angefangene X-Minuten-Periode zählt also als volle X-Minuten und beginnt zugleich am Slot-Rand — z. B. `granularity=15` ⇒ Lauf `09:07–09:12` → `09:00–09:15`, Lauf `09:07–09:23` → `09:00–09:30`. Ein anschließender chronologischer Sweep verhindert Überlappungen: würde der gefloorte Start einer Period in den (gerundeten) End-Slot der vorherigen Period fallen, wird er auf diesen End-Slot vorgeschoben (und die End-Zeit erneut geceilt). Verbleibende End-vs-nächster-Start-Kollisionen werden durch Kappen der End-Zeit gelöst. `0` (Default) deaktiviert das Raster komplett.
+- Kommentar-Format: `"<parent_name> <sub_name> <sub_description>"` aus dem
+  Tag-Mapping, plus optional ` — <block_description>` aus
+  `tag_blocks.description`. Innerhalb eines Laufs gehören alle Blöcke per
+  Konstruktion zum selben Kommentar.
 
 #### 2.5.4 Fehlerbehandlung
 - Antwort `401`/`403` oder `30x → /login` ⇒ `ErrSessionExpired`. Im UI: rotes Banner mit Hinweis auf erneute Anmeldung; Tray-Sync schreibt nur ins Log.
@@ -208,7 +268,11 @@ Pro Request:
 #### 2.5.5 Sync-Modi & Idempotenz
 - Einzelner Tag (Timeline-Button + Tray-„Sync zu Personio (heute)").
 - Zeitraum (`SyncRange`) — aktuell intern, im UI nicht exponiert.
-- Personio's `PUT day` ist idempotent (ersetzt den Tag). Bereits synchronisierte Blöcke werden lokal mit `synced_at` und der `day_id` als `personio_id` markiert. Erneuter Sync überschreibt den Personio-Tag mit dem aktuellen Stand der Blöcke; manuelle Änderungen in Personio gehen dabei verloren.
+- Personio's `PUT day` ist idempotent (ersetzt den Tag). Bereits
+  synchronisierte Tag-Blöcke werden lokal mit `synced_at` und der `day_id`
+  als `personio_id` markiert (`tag_blocks` trägt diese Felder). Erneuter
+  Sync überschreibt den Personio-Tag mit dem aktuellen Stand; manuelle
+  Änderungen in Personio gehen dabei verloren.
 
 ---
 
@@ -226,14 +290,17 @@ Pro Request:
 ### 4.1 Modulstruktur (Go-Packages)
 ```
 /cmd/timetracker          Main, Tray-Setup
-/internal/tracker         Fokus-Polling, Idle-Detection
-/internal/winapi          Windows-API-Wrapper (CGO oder syscall)
-/internal/storage         SQLite-Layer (Repository-Pattern)
-/internal/ui              Hauptfenster (siehe 4.3)
-/internal/tagging         Tag-Logik, Block-Zuordnung
-/internal/personio        Personio-API-Client
-/internal/config          Settings (TOML/JSON in %APPDATA%)
-/internal/logging         strukturiertes Logging (zerolog/slog)
+/internal/tracker         Fokus-Polling, Idle-Detection, schreibt process_tracks
+/internal/winapi          Windows-API-Wrapper
+/internal/storage         SQLite-Layer (Repository-Pattern, getrennte
+                          Repos für process_tracks und tag_blocks)
+/internal/tagging         Tagging-Engine (Regel-Match) + Orchestrator
+                          (tag_block-Lebenszyklus, manuelle Sitzungen)
+/internal/app             Wails-Bindings (App-Struct mit JS-exponierten
+                          Methoden für beide Strips + manuelles Tagging)
+/internal/personio        Personio-API-Client (liest tag_blocks)
+/internal/config          Settings (TOML in %APPDATA%)
+/internal/logging         slog-Setup
 ```
 
 ### 4.2 Bibliotheken
@@ -246,32 +313,51 @@ Pro Request:
 - **Konfiguration:** TOML mit `BurntSushi/toml`.
 
 ### 4.3 Datenmodell (SQLite)
-```sql
-CREATE TABLE focus_blocks (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  process_name    TEXT NOT NULL,
-  process_path    TEXT,
-  window_title    TEXT NOT NULL,
-  start_time      DATETIME NOT NULL,
-  end_time        DATETIME,
-  duration_sec    INTEGER,
-  is_idle         BOOLEAN DEFAULT 0,
-  tag_id          INTEGER,
-  auto_tagged     BOOLEAN DEFAULT 0,
-  description     TEXT,                    -- freie Tätigkeitsbeschreibung pro Block
-  personio_id     TEXT,
-  synced_at       DATETIME,
-  is_placeholder  BOOLEAN DEFAULT 0,       -- 1 = Manual-Tag-Platzhalter ohne echtes Programm
-  FOREIGN KEY (tag_id) REFERENCES tags(id)
-);
-CREATE INDEX idx_blocks_start ON focus_blocks(start_time);
-CREATE INDEX idx_blocks_tag   ON focus_blocks(tag_id);
 
--- Non-Overlap-Invariante: in der App-Schicht erzwungen, siehe §2.1. Jeder
--- Open/Update/Close/Split öffnet eine Transaktion und prüft per
--- `selectOverlap`, ob das neue Intervall einen anderen Block schneidet
--- (offene Blöcke gelten als bis ∞ laufend). Bei Konflikt wird `ErrOverlap`
--- zurückgegeben — kein Schreibzugriff erfolgt.
+> **Migration 0004** hat das frühere `focus_blocks` (Mischung aus Prozess-
+> Aktivität und Tagging-Status) in zwei unabhängige Tabellen gespalten:
+> `process_tracks` (rohe Fokus-Events) und `tag_blocks` (Tagging-Spannen).
+> Bestehende Daten werden in beide Tabellen migriert; die `down`-Migration
+> fügt sie wieder zusammen.
+
+```sql
+-- Rohe Fokus-Events. Disjunkt per Konstruktion, keine Granularität,
+-- keine Tagging-Felder.
+CREATE TABLE process_tracks (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  process_name  TEXT NOT NULL,
+  process_path  TEXT,
+  window_title  TEXT NOT NULL,
+  start_time    DATETIME NOT NULL,
+  end_time      DATETIME,
+  duration_sec  INTEGER,
+  is_idle       INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_process_tracks_start ON process_tracks(start_time);
+CREATE INDEX idx_process_tracks_open  ON process_tracks(end_time)
+  WHERE end_time IS NULL;
+
+-- Tagging-Spannen. Granularität ist auf dieser Ebene bereits angewandt.
+-- Non-Overlap-Invariante: jeder Open/SetEnd/SetStart prüft per
+-- `selectTagBlockOverlap`, ob das neue Intervall einen anderen Tag-Block
+-- schneidet (offene Blöcke gelten als bis ∞ laufend). Bei Konflikt wird
+-- `ErrOverlap` zurückgegeben.
+CREATE TABLE tag_blocks (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  tag_id        INTEGER NOT NULL,
+  description   TEXT,
+  start_time    DATETIME NOT NULL,
+  end_time      DATETIME,
+  duration_sec  INTEGER,
+  is_manual     INTEGER NOT NULL DEFAULT 0,
+  personio_id   TEXT,
+  synced_at     DATETIME,
+  FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_tag_blocks_start ON tag_blocks(start_time);
+CREATE INDEX idx_tag_blocks_tag   ON tag_blocks(tag_id);
+CREATE INDEX idx_tag_blocks_open  ON tag_blocks(end_time)
+  WHERE end_time IS NULL;
 
 CREATE TABLE tags (
   id                    INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -311,57 +397,101 @@ DB-Pfad: `%LOCALAPPDATA%\TimeTracker\data.db`.
 
 ### 4.4 Tracking-Loop (Pseudocode)
 ```
-// Beim Start: alle Blöcke aus vorherigen Runs finalisieren (Crash-Recovery).
-for open in ListOpen():
+// Beim Start: alle Process-Tracks aus vorherigen Runs finalisieren.
+for open in tracks.ListOpen():
   end = min(open.start + idle_threshold, now, next_open.start)
-  Close(open.id, snapEnd(open.start, end))   // auf Slot-Grenze runden, falls
-                                             // tag_block_granularity_min > 0
+  tracks.Close(open.id, end)        // rohe Zeit, kein Snap
+// Orchestrator finalisiert dangling tag_blocks separat.
+orchestrator.Recover()
+orchestrator.CloseDanglingManualAtStartup(fallback = now)
 
-ticker := 2s   // tatsächlich konfigurierbar via tracking.poll_interval_sec
-currentBlock := nil
+ticker := 2s   // konfigurierbar via tracking.poll_interval_sec
+current := nil
 loop:
   hwnd := GetForegroundWindow()
-  pid  := GetProcessId(hwnd)
-  proc := GetProcessName(pid)
+  proc := GetProcessName(GetProcessId(hwnd))
   title := GetWindowText(hwnd)
   idle := IsIdle(threshold=5min)
 
   if idle:
-    closeBlock(currentBlock, snapEnd(currentBlock.start, now()))
+    tracks.MarkIdle(current.id, now())
+    orchestrator.OnFocusCleared(now())
     continue
 
-  if currentBlock == nil OR proc != currentBlock.proc OR title != currentBlock.title:
-    prevEnd = snapEnd(currentBlock.start, now())  // Ceil auf nächste Slot-Grenze
-    closeBlock(currentBlock, prevEnd)
-    newStart = max(snapStart(now()), prevEnd)     // Floor auf Slot-Untergrenze,
-                                                  // mind. ab prevEnd
-    currentBlock = openBlock(proc, title, newStart)
+  if current == nil OR proc != current.proc OR title != current.title:
+    tracks.Close(current.id, now())
+    current = tracks.Open(proc, title, now())
+    orchestrator.OnFocusChanged(proc, title, now())
 ```
 
-> `snapStart`/`snapEnd` sind nur aktiv, wenn `tracking.tag_block_granularity_min > 0` —
-> sonst geben sie `now()` durch. Mit aktivem Raster decken zwei aufeinanderfolgende
-> Tracker-Blöcke immer ganze Slots ab, sind grid-aligned und touch-only (`prev.end == next.start`),
-> sodass die Non-Overlap-Invariante (§2.1) ohne Mehrarbeit erfüllt ist.
+> Der Tracker selbst kennt keine Granularität und keine Tags — er meldet
+> Fokus-Änderungen an den Orchestrator, der `tag_blocks` mit
+> Granularitäts-Snap und Lifecycle-Logik pflegt.
 
-> Jeder `openBlock` läuft transaktional gegen den Overlap-Check (§2.1). Zwei
-> gleichzeitig offene Blöcke (z. B. Manual-Block + Tracker-Block) sind dadurch
-> ausgeschlossen — der Tracker schließt seinen vorherigen Block grundsätzlich,
-> bevor er den nächsten öffnet.
+### 4.4.1 Orchestrator-State-Machine (Pseudocode)
+```
+// Internal state, guarded by mu:
+//   focusActive:      bool
+//   openAuto:         { blockID, ruleID, tagID } | nil
+//   openManual:       { blockID, tagID, description } | nil
+//   pausedManual:     { tagID, description } | nil
+
+OnFocusChanged(name, title, at):
+  focusActive = true
+  rule = matchRule(name, title)        // first-by-priority enabled rule
+  advance(at, rule)
+
+OnFocusCleared(at):
+  focusActive = false
+  advance(at, nil)
+
+advance(at, rule):
+  snap = floor(at, granularity)
+
+  if openAuto != nil:
+    if rule != nil and rule.id == openAuto.ruleID:
+      return                            // same rule, keep open
+    closeAuto(snap)                     // may resume pausedManual
+
+  if rule != nil:
+    if openManual != nil:
+      pauseManual(snap)                 // remembers tag+desc, closes block
+    startAuto(rule, snap)
+    return
+
+  if !focusActive and openManual != nil:
+    pauseManual(snap)
+    return
+
+  if pausedManual != nil and openManual == nil and focusActive:
+    resumeManual(snap)                  // opens fresh manual at `snap`
+
+closeAuto(snap):
+  // delete if zero-length, otherwise SetEnd(snap)
+  // resume pausedManual if focusActive
+```
 
 ### 4.5 Personio-Sync-Flow
 1. User wählt Datum/Zeitraum → klickt „Sync".
-2. Lade alle Blöcke mit zugewiesenem Tag, deren effektives Mapping (Sub-Tag oder vererbt vom Parent) `sync_to_personio = 1` hat.
-3. Resolve effektives Mapping pro Block: Sub-Tag-Mapping bevorzugt, sonst Parent-Mapping.
-4. Baue `comment` pro Block: `"<parent_name> <sub_name> <sub_description>"` plus optional ` — <description>` (leere Teile auslassen).
-5. Aggregiere konsekutive Blöcke mit identischem `(lokalem Datum, project_id, comment)` zu **einer** Period (siehe §2.5.3); Idle-/ungetaggte Blöcke und Lücken > 5 s beenden den Lauf.
-6. Hole pro Tag das Timesheet (`day_id`, `state`); bei `state=trackable` PUT mit den aggregierten Perioden, sonst Fehler ins Result.
-7. Sende Requests; bei Erfolg `personio_id` (= `day_id`) und `synced_at` pro Block speichern.
+2. Lade alle `tag_blocks` im Zeitraum, deren effektives Mapping (Sub-Tag
+   oder vererbt vom Parent) `sync_to_personio = 1` hat. Offene Tag-Blöcke
+   werden übersprungen (kein `end_time`).
+3. Resolve effektives Mapping pro Tag-Block: Sub-Tag-Mapping bevorzugt,
+   sonst Parent-Mapping.
+4. Baue `comment` pro Tag-Block: `"<parent_name> <sub_name> <sub_description>"`
+   plus optional ` — <description>` (leere Teile auslassen).
+5. Aggregiere konsekutive Tag-Blöcke mit identischem `(lokalem Datum,
+   project_id, comment)` zu **einer** Period (siehe §2.5.3).
+6. Hole pro Tag das Timesheet (`day_id`, `state`); bei `state=trackable`
+   PUT mit den aggregierten Perioden, sonst Fehler ins Result.
+7. Sende Requests; bei Erfolg `personio_id` (= `day_id`) und `synced_at`
+   auf jedem beteiligten `tag_block` speichern.
 8. Zeige Erfolgs-/Fehlerübersicht.
 
-> Die Non-Overlap-Invariante (§2.1) ist Voraussetzung für diesen Ablauf:
-> Personio antwortet auf überlappende Perioden mit dem Fehler
-> `400 — There are overlapping WORK periods` (englischer Server-Wortlaut),
-> und der gesamte Tag bleibt dann unverändert.
+> Die Non-Overlap-Invariante (§4.3) auf `tag_blocks` ist Voraussetzung für
+> diesen Ablauf: Personio antwortet auf überlappende Perioden mit
+> `400 — There are overlapping WORK periods`, und der gesamte Tag bleibt
+> dann unverändert.
 
 ### 4.6 Konfiguration (Beispiel `config.toml`)
 ```toml
@@ -369,7 +499,9 @@ loop:
 enabled                    = true   # globaler Schalter: false pausiert Polling + Auto-Tagging
 poll_interval_sec          = 2
 idle_threshold_min         = 5
-tag_block_granularity_min  = 0      # 0 = aus; 15 = jede Period auf 15-min-Slots aufrunden (siehe §2.5.3)
+tag_block_granularity_min  = 0      # 0 = aus; 15 = Tag-Blöcke (manuell + auto)
+                                    # auf 15-min-Slots snappen (§2.4.3).
+                                    # Process-Tracks bleiben immer roh.
 
 [personio]
 tenant = "onesi"            # Subdomain, der Login läuft via CDP — keine API-Tokens

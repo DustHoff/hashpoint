@@ -18,6 +18,7 @@ import (
 	"github.com/onesi/hashpoint/internal/logging"
 	"github.com/onesi/hashpoint/internal/personio"
 	"github.com/onesi/hashpoint/internal/storage"
+	"github.com/onesi/hashpoint/internal/tagging"
 	"github.com/onesi/hashpoint/internal/tracker"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -86,19 +87,23 @@ func run() error {
 	}
 	defer func() { _ = db.Close() }()
 
-	blocks := storage.NewFocusBlockRepo(db)
+	tracks := storage.NewProcessTrackRepo(db)
+	tagBlocks := storage.NewTagBlockRepo(db)
 	tags := storage.NewTagRepo(db)
 	rules := storage.NewRuleRepo(db)
 	settings := storage.NewSettingsRepo(db)
 
+	orchestrator := tagging.NewOrchestrator(tagBlocks, tracks, rules, slog.Default())
+	orchestrator.SetGranularity(cfg.Tracking.TagBlockGranularity())
+
 	// Tracker is reconfigurable: SaveConfig from the UI must adopt new poll
-	// and idle-threshold values without a restart.
+	// and idle-threshold values without a restart. The orchestrator listens
+	// to focus events and owns the tag-block lifecycle.
 	var trkMu sync.Mutex
 	trk := tracker.New(tracker.Config{
-		PollInterval:        cfg.Tracking.PollInterval(),
-		IdleThreshold:       cfg.Tracking.IdleThreshold(),
-		TagBlockGranularity: cfg.Tracking.TagBlockGranularity(),
-	}, blocks, rules, slog.Default())
+		PollInterval:  cfg.Tracking.PollInterval(),
+		IdleThreshold: cfg.Tracking.IdleThreshold(),
+	}, tracks, slog.Default(), tracker.WithObserver(orchestrator))
 
 	sessionStore := defaultSessionStore()
 
@@ -114,32 +119,25 @@ func run() error {
 			slog.Warn("could not build personio client", "err", err)
 			return nil
 		}
-		s := personio.NewSyncer(cli, blocks, tags, slog.Default())
-		// Read fresh on every build so changes via Settings take effect
-		// without restarting (cfg is mutated in place by OnConfigSet below).
-		s.SetTagBlockGranularity(cfg.Tracking.TagBlockGranularity())
-		return s
+		return personio.NewSyncer(cli, tagBlocks, tags, slog.Default())
 	}
 
 	a := app.New(app.Deps{
-		Blocks:     blocks,
-		Tags:       tags,
-		Rules:      rules,
-		Settings:   settings,
-		Tracker:    trk,
-		Sessions:   sessionStore,
-		SyncerFor:  syncerFor,
-		ConfigPath: paths.ConfigFile,
-		Config:     cfg,
+		Tracks:       tracks,
+		TagBlocks:    tagBlocks,
+		Tags:         tags,
+		Rules:        rules,
+		Settings:     settings,
+		Tracker:      trk,
+		Orchestrator: orchestrator,
+		Sessions:     sessionStore,
+		SyncerFor:    syncerFor,
+		ConfigPath:   paths.ConfigFile,
+		Config:       cfg,
 		OnConfigSet: func(c *config.Config) error {
 			trkMu.Lock()
 			defer trkMu.Unlock()
-			// Mirror the new values back into the captured `cfg` pointer so
-			// closures (notably syncerFor) read the latest settings without
-			// having to be rebuilt.
 			*cfg = *c
-			// Tracker.Reconfigure is best-effort: at minimum we log; if the
-			// implementation grows a hot-reload entry point we wire it here.
 			slog.Info("config updated",
 				"poll_interval_sec", c.Tracking.PollIntervalSec,
 				"idle_threshold_min", c.Tracking.IdleThresholdMin,
@@ -147,16 +145,12 @@ func run() error {
 				"tracking_enabled", c.Tracking.Enabled,
 				"personio_tenant", c.Personio.Tenant,
 				"autostart", c.UI.Autostart)
-			// The persistent enabled flag is applied directly to the tracker
-			// so the toggle in Settings takes effect without a restart.
 			if c.Tracking.Enabled {
 				trk.Resume()
 			} else {
 				trk.Pause(ctx)
 			}
-			// Hot-reload the granularity so a value change in Settings starts
-			// snapping the next block boundary without a restart.
-			trk.SetTagBlockGranularity(c.Tracking.TagBlockGranularity())
+			orchestrator.SetGranularity(c.Tracking.TagBlockGranularity())
 			return nil
 		},
 		Version: app.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate},

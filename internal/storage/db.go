@@ -47,8 +47,10 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 
 // OpenInMemory opens a transient in-memory SQLite DB for tests. Each call
 // returns an isolated DB (no cache=shared) so parallel tests don't collide.
+// The DSN mirrors Open() so tests see the same time formatting behaviour as
+// the on-disk database (driver returns time.Time for DATETIME columns).
 func OpenInMemory(ctx context.Context) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", "file::memory:?_pragma=foreign_keys(ON)")
+	db, err := sql.Open("sqlite", "file::memory:?_pragma=foreign_keys(ON)&_time_format=sqlite")
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +175,7 @@ func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
 // ErrNotFound is returned when a single-row lookup yields no rows.
 var ErrNotFound = errors.New("storage: not found")
 
-// ErrOverlap is returned when a focus-block write would create a time overlap
-// with another block. Personio rejects overlapping work periods, so we refuse
-// to persist them in the first place.
-var ErrOverlap = errors.New("storage: focus block overlaps existing block")
+// ErrOverlap is returned when a tag-block write would create a time overlap
+// with another tag block. Personio rejects overlapping work periods, so we
+// refuse to persist them in the first place.
+var ErrOverlap = errors.New("storage: tag block overlaps existing block")

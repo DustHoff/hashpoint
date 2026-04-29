@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"time"
 )
@@ -47,3 +48,14 @@ func nsToString(s sql.NullString) *string {
 	v := s.String
 	return &v
 }
+
+// txQuerier is the subset of *sql.Tx the overlap probe needs — kept narrow
+// so test fakes can satisfy it without re-implementing all of *sql.Tx.
+type txQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// farFuture is the +infinity sentinel used when probing overlap for a still-
+// open block (end_time IS NULL). Chosen well past any plausible block while
+// still fitting in SQLite's TEXT/Julian time representation.
+var farFuture = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)

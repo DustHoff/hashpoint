@@ -16,19 +16,18 @@ import (
 	"github.com/onesi/hashpoint/internal/tagging"
 )
 
-// Syncer aggregates tagged blocks and pushes them to Personio via the
+// Syncer aggregates tag blocks and pushes them to Personio via the
 // internal/UI API.
 type Syncer struct {
-	client      *UIClient
-	blocks      storage.FocusBlockRepository
-	tags        storage.TagRepository
-	logger      *slog.Logger
-	clock       func() time.Time
-	granularity time.Duration
+	client *UIClient
+	blocks storage.TagBlockRepository
+	tags   storage.TagRepository
+	logger *slog.Logger
+	clock  func() time.Time
 }
 
 // NewSyncer wires a Syncer.
-func NewSyncer(client *UIClient, blocks storage.FocusBlockRepository, tags storage.TagRepository, logger *slog.Logger) *Syncer {
+func NewSyncer(client *UIClient, blocks storage.TagBlockRepository, tags storage.TagRepository, logger *slog.Logger) *Syncer {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -39,17 +38,6 @@ func NewSyncer(client *UIClient, blocks storage.FocusBlockRepository, tags stora
 		logger: logger,
 		clock:  func() time.Time { return time.Now().UTC() },
 	}
-}
-
-// SetTagBlockGranularity quantizes every tag-block duration to a multiple of
-// the given step before sending to Personio: any started slot counts as a
-// full slot, so a 12-min run with a 15-min granularity becomes a 15-min
-// period. Pass 0 to disable rounding. Negative values are coerced to 0.
-func (s *Syncer) SetTagBlockGranularity(step time.Duration) {
-	if step < 0 {
-		step = 0
-	}
-	s.granularity = step
 }
 
 // Result reports the outcome of a sync run.
@@ -67,14 +55,14 @@ func (s *Syncer) SyncDay(ctx context.Context, day time.Time) (*Result, error) {
 	return s.SyncRange(ctx, from, to)
 }
 
-// SyncRange syncs all tagged blocks in [from, to).
+// SyncRange syncs all tag blocks in [from, to).
 func (s *Syncer) SyncRange(ctx context.Context, from, to time.Time) (*Result, error) {
 	if s.client == nil {
 		return nil, errors.New("personio: client not configured")
 	}
 	blocks, err := s.blocks.ListBetween(ctx, from, to)
 	if err != nil {
-		return nil, fmt.Errorf("list blocks: %w", err)
+		return nil, fmt.Errorf("list tag blocks: %w", err)
 	}
 	tags, err := s.tags.List(ctx)
 	if err != nil {
@@ -85,7 +73,7 @@ func (s *Syncer) SyncRange(ctx context.Context, from, to time.Time) (*Result, er
 		tagsByID[t.ID] = t
 	}
 
-	periodsByDay := buildDayPeriods(blocks, tagsByID, s.granularity)
+	periodsByDay := buildDayPeriods(blocks, tagsByID)
 	res := &Result{}
 	for _, b := range blocks {
 		if shouldSkip(b, tagsByID) {
@@ -137,8 +125,6 @@ func (s *Syncer) SyncRange(ctx context.Context, from, to time.Time) (*Result, er
 		}
 		dayID := strings.TrimSpace(tc.DayID)
 		if dayID == "" {
-			// Day has no Personio record yet — generate a fresh UUID; the
-			// PUT endpoint accepts that as an upsert key.
 			dayID = newUUIDv4()
 		}
 		payload := SetDayPayload{
@@ -157,65 +143,54 @@ func (s *Syncer) SyncRange(ctx context.Context, from, to time.Time) (*Result, er
 		now := s.clock()
 		for _, id := range dayPayload.blockIDs {
 			if err := s.blocks.MarkSynced(ctx, id, dayID, now); err != nil {
-				s.logger.Warn("mark synced failed", "block_id", id, "err", err)
+				s.logger.Warn("mark synced failed", "tag_block_id", id, "err", err)
 			}
 		}
 	}
 	return res, nil
 }
 
-func shouldSkip(b storage.FocusBlock, tags map[int64]storage.Tag) bool {
-	if b.IsIdle || b.TagID == nil || b.EndTime == nil {
+func shouldSkip(b storage.TagBlock, tags map[int64]storage.Tag) bool {
+	if b.EndTime == nil {
 		return true
 	}
-	tag, ok := tags[*b.TagID]
+	tag, ok := tags[b.TagID]
 	if !ok {
 		return true
 	}
 	mapping := tagging.Resolve(tag, tags)
-	// A missing project_id is allowed — Personio accepts work periods without
-	// a project assignment (the comment carries the tag name in that case).
 	return !mapping.SyncToPersonio
 }
 
-// dayPeriods is the per-date bucket built from tag-grouped blocks.
+// dayPeriods is the per-date bucket built from tag-block runs.
 type dayPeriods struct {
 	list     []Period
 	blockIDs []int64
-	// starts/ends parallel list — kept in struct form so the post-processing
-	// pass (granularity rounding + neighbour clamping) can reason about real
-	// times before we format them as local-naive ISO into list[i].
-	starts []time.Time
-	ends   []time.Time
+	starts   []time.Time
+	ends     []time.Time
 }
 
-// buildDayPeriods walks blocks in chronological order and merges *consecutive*
-// runs that share (local-date, project_id, comment) into a single Period.
-// Blocks with the same tag but separated by an idle block, an untagged block,
-// or a non-trivial time gap stay as distinct periods — Personio then sees the
-// genuine break in work, not a single span that swallows the gap.
-//
-// If granularity > 0, each Period's end is rounded up to the next multiple of
-// `granularity` from its start ("started X-min slot counts as a full slot").
-// A subsequent per-day pass clamps any rounded end at the following period's
-// start so the rounding never reintroduces overlaps Personio would reject.
+// buildDayPeriods walks tag blocks in chronological order and merges
+// consecutive runs that share (local-date, project_id, comment) into a
+// single Period. Blocks with the same tag separated by a gap stay distinct
+// — Personio sees the genuine break in work.
 //
 // Times are formatted as local-naive ISO (YYYY-MM-DDTHH:MM:SS) — the shape
-// Personio's UI sends and expects.
-func buildDayPeriods(blocks []storage.FocusBlock, tags map[int64]storage.Tag, granularity time.Duration) map[string]*dayPeriods {
+// Personio's UI sends and expects. Granularity is already enforced by the
+// tag_blocks table itself (the orchestrator only persists snapped times),
+// so no further rounding is needed here.
+func buildDayPeriods(blocks []storage.TagBlock, tags map[int64]storage.Tag) map[string]*dayPeriods {
 	type runKey struct {
 		date    string
 		project string
 		comment string
 	}
 
-	// Tiny gaps (sub-second tracker jitter) shouldn't fragment an otherwise
-	// continuous run; anything larger is treated as a real break.
 	const contiguityTolerance = 5 * time.Second
 
 	out := make(map[string]*dayPeriods)
 	var (
-		curBlocks []storage.FocusBlock
+		curBlocks []storage.TagBlock
 		curKey    runKey
 		curEnd    time.Time
 	)
@@ -250,12 +225,10 @@ func buildDayPeriods(blocks []storage.FocusBlock, tags map[int64]storage.Tag, gr
 
 	for _, b := range blocks {
 		if shouldSkip(b, tags) {
-			// Idle / untagged / non-syncable blocks always break the run —
-			// they represent real breaks in the user's work.
 			flush()
 			continue
 		}
-		tag := tags[*b.TagID]
+		tag := tags[b.TagID]
 		m := tagging.Resolve(tag, tags)
 		date := b.StartTime.Local().Format("2006-01-02")
 		c := buildComment(m, b)
@@ -270,7 +243,7 @@ func buildDayPeriods(blocks []storage.FocusBlock, tags map[int64]storage.Tag, gr
 			continue
 		}
 		flush()
-		curBlocks = []storage.FocusBlock{b}
+		curBlocks = []storage.TagBlock{b}
 		curKey = k
 		if b.EndTime != nil {
 			curEnd = *b.EndTime
@@ -281,14 +254,7 @@ func buildDayPeriods(blocks []storage.FocusBlock, tags map[int64]storage.Tag, gr
 	flush()
 
 	for _, dp := range out {
-		// Sort all parallel slices by period start. We can't sort dp.list
-		// alone because starts/ends mirror it positionally.
 		sort.Stable(byStart{dp})
-		// Apply granularity rounding (each period's slot counts as a full
-		// quantum) and clamp to the next period's start so rounding never
-		// produces overlap — Personio rejects overlapping work periods.
-		applyGranularity(dp, granularity)
-		// Format the local-naive ISO strings the UI API expects.
 		for i := range dp.list {
 			dp.list[i].Start = dp.starts[i].Local().Format("2006-01-02T15:04:05")
 			dp.list[i].End = dp.ends[i].Local().Format("2006-01-02T15:04:05")
@@ -310,79 +276,7 @@ func (b byStart) Swap(i, j int) {
 	b.dp.ends[i], b.dp.ends[j] = b.dp.ends[j], b.dp.ends[i]
 }
 
-// applyGranularity snaps every period to a fixed local-time grid of width
-// `step`: the start is floored to the grid, the end is ceiled from the
-// floored start. A started slot counts as a full slot — a 12-min run with
-// step=15min becomes a 15-min period that occupies one whole grid cell.
-//
-// A left-to-right sweep then enforces non-overlap: if flooring period[i]'s
-// start would put it inside period[i-1]'s rounded end, the start is pushed
-// forward to that end. A trailing pass also caps any end that overshoots the
-// next period's start. Personio rejects overlapping work periods, so the
-// rounding must always preserve the §2.1 non-overlap invariant.
-func applyGranularity(dp *dayPeriods, step time.Duration) {
-	if step <= 0 || dp == nil || len(dp.list) == 0 {
-		return
-	}
-	for i := range dp.starts {
-		s := floorToStep(dp.starts[i], step)
-		dp.starts[i] = s
-		dp.ends[i] = ceilToStep(s, dp.ends[i], step)
-	}
-	// Pass 1: fix start-side overlaps caused by flooring two close periods
-	// onto the same grid cell. Push the later period's start to the prior
-	// period's end (already on grid), then re-ceil the end so it remains
-	// at least one full slot wide.
-	for i := 1; i < len(dp.starts); i++ {
-		if dp.starts[i].Before(dp.ends[i-1]) {
-			dp.starts[i] = dp.ends[i-1]
-			dp.ends[i] = ceilToStep(dp.starts[i], dp.ends[i], step)
-		}
-	}
-	// Pass 2: cap any remaining end that overshoots the next period's start
-	// (can happen when ceil pushes end past a closely-following neighbour).
-	for i := 0; i+1 < len(dp.ends); i++ {
-		if dp.ends[i].After(dp.starts[i+1]) {
-			dp.ends[i] = dp.starts[i+1]
-		}
-	}
-}
-
-// floorToStep returns the largest t <= ts such that (t - localMidnight) is a
-// multiple of step. The grid is anchored to **local** midnight so 15-min
-// slots line up with the :00/:15/:30/:45 boundaries the user sees in the UI,
-// even in timezones whose UTC offset is not a whole hour.
-func floorToStep(ts time.Time, step time.Duration) time.Time {
-	if step <= 0 {
-		return ts
-	}
-	local := ts.Local()
-	midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, local.Location())
-	delta := local.Sub(midnight)
-	return midnight.Add(delta - (delta % step))
-}
-
-// ceilToStep returns the smallest t > start such that (t - start) is a
-// positive multiple of step and t >= end. A zero/negative-length run is
-// rounded to a single full slot — a "started" slot counts as a full slot.
-// Callers should pass a `start` that is already on the grid (via floorToStep)
-// so the returned end stays grid-aligned.
-func ceilToStep(start, end time.Time, step time.Duration) time.Time {
-	d := end.Sub(start)
-	if d <= 0 {
-		return start.Add(step)
-	}
-	slots := d / step
-	if d%step != 0 {
-		slots++
-	}
-	if slots == 0 {
-		slots = 1
-	}
-	return start.Add(slots * step)
-}
-
-func buildComment(m tagging.EffectiveMapping, b storage.FocusBlock) string {
+func buildComment(m tagging.EffectiveMapping, b storage.TagBlock) string {
 	c := m.BuildComment()
 	if b.Description != nil {
 		if d := strings.TrimSpace(*b.Description); d != "" {
@@ -395,7 +289,7 @@ func buildComment(m tagging.EffectiveMapping, b storage.FocusBlock) string {
 	return c
 }
 
-func blockSpan(blocks []storage.FocusBlock) (time.Time, time.Time) {
+func blockSpan(blocks []storage.TagBlock) (time.Time, time.Time) {
 	if len(blocks) == 0 {
 		return time.Time{}, time.Time{}
 	}

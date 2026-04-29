@@ -4,7 +4,10 @@ Willkommen im Benutzerhandbuch des Hashpoint TimeTrackers. Diese Dokumentation r
 
 ## Was ist der TimeTracker?
 
-Der TimeTracker ist eine Windows-Desktop-Anwendung, die im Hintergrund automatisch erfasst, in welchen Anwendungen und Fenstern Sie arbeiten. Aus diesen Erfassungen entstehen sogenannte **Fokus-Blöcke**, die sich anschließend kategorisieren (taggen) und an Personio synchronisieren lassen.
+Der TimeTracker ist eine Windows-Desktop-Anwendung, die im Hintergrund automatisch erfasst, in welchen Anwendungen und Fenstern Sie arbeiten. Die App pflegt zwei Schichten:
+
+- **Process-Tracks** — die rohe Fokus-Aktivität (was Sie tatsächlich auf dem Bildschirm hatten, sekundengenau).
+- **Tag-Blöcke** — Tagging-Spannen, die diese Aktivität in Kategorien einsortieren. Sie entstehen automatisch durch Auto-Tagging-Regeln oder manuell (per Drag auf der Zeitachse oder über das Tray-Submenü) und sind die Quelle für die Personio-Synchronisation.
 
 ## Inhalt
 

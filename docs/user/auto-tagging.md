@@ -1,6 +1,18 @@
 # Auto-Tagging-Regeln
 
-Auto-Tagging-Regeln weisen neuen Fokus-Blöcken automatisch einen Tag zu, sobald sie geöffnet werden – auf Basis von Prozessname und/oder Fenstertitel. So müssen Sie häufig wiederkehrende Tätigkeiten nicht jedes Mal manuell taggen.
+Auto-Tagging-Regeln erzeugen automatisch **Tag-Blöcke**, sobald ein passender Prozess fokussiert wird – auf Basis von Prozessname und/oder Fenstertitel. So müssen Sie häufig wiederkehrende Tätigkeiten nicht jedes Mal manuell taggen.
+
+## Was passiert beim Auto-Tagging?
+
+Anders als bei einer reinen „pro Block"-Markierung pflegt der TimeTracker einen **Auto-Tag-Block** mit eigenem Lebenszyklus:
+
+1. Sie wechseln in einen Browser; die Regel „Prozess enthält `chrome` → `#web`" trifft.
+2. Der TimeTracker öffnet einen Auto-Tag-Block `#web` (Start auf das Granularitätsraster gesnappt — z. B. `09:00` bei einer 15-Min-Granularität, auch wenn Sie eigentlich um `09:07` eingestiegen sind).
+3. Solange Sie in einem Programm bleiben, das die **gleiche** Regel trifft (egal welches `chrome`-Fenster), bleibt der Auto-Block offen.
+4. Sobald Sie auf ein nicht-passendes Programm wechseln (oder idle gehen), schließt der Block (End auf das Raster floored).
+5. Eine kürzere Match-Phase, die das Granularitätsraster nicht erreicht, erzeugt **keinen** Tag-Block — Auto-Blöcke unterhalb der Granularität werden unterdrückt.
+
+Auto-Tag-Blöcke sind im Tag-Strip an der **gestrichelten Umrandung** erkennbar, manuelle Tag-Blöcke haben keine Umrandung.
 
 ## Aufbau des Tabs
 
@@ -20,10 +32,10 @@ Der Tab **Auto-Tagging** ist zweispaltig:
 
 | Feld | Werte | Bedeutung |
 | --- | --- | --- |
-| **Feld** | `Prozess`, `Fenstertitel`, `Beide` | Welcher Teil eines Blocks für die Übereinstimmung herangezogen wird. Bei `Beide` müssen Prozess **und** Titel matchen. |
+| **Feld** | `Prozess`, `Fenstertitel`, `Beide` | Welcher Teil eines Process-Tracks für die Übereinstimmung herangezogen wird. Bei `Beide` müssen Prozess **und** Titel matchen. |
 | **Typ** | `enthält`, `gleich`, `Regex (RE2)` | Wie der Pattern-Vergleich erfolgt. `enthält` und `gleich` sind case-insensitiv. |
 | **Pattern** | Text oder Regex | Der zu vergleichende Wert. Bei `Regex` Go-RE2-Syntax (kein Backtracking). |
-| **Ziel-Tag** | Tag aus Liste | Welcher Tag dem Block zugewiesen wird, wenn die Regel matcht. |
+| **Ziel-Tag** | Tag aus Liste | Welcher Tag dem Auto-Tag-Block zugewiesen wird. |
 | **Priorität** | Integer (Default `0`) | Höhere Werte werden zuerst geprüft. Erste passende Regel gewinnt. |
 | **aktiviert** | Checkbox (Default an) | Deaktivierte Regeln werden ignoriert. |
 
@@ -37,25 +49,15 @@ Der Tab **Auto-Tagging** ist zweispaltig:
 
 - Regeln werden nach **Priorität absteigend** ausgewertet.
 - Bei **gleicher Priorität** ist die Reihenfolge nicht garantiert – arbeiten Sie mit Lücken (`0`, `10`, `20`), um eindeutige Reihenfolgen zu erzwingen.
-- Sobald eine Regel matcht, wird der Block getaggt; weitere Regeln werden **nicht** mehr geprüft.
+- Sobald eine Regel matcht, wird der Auto-Block geöffnet; weitere Regeln werden **nicht** mehr geprüft.
 
 > **Faustregel:** Spezifischere Regeln bekommen höhere Priorität, allgemeine Fallback-Regeln eine niedrigere.
 
 ### Zusammenspiel mit dem Tracking-Schalter und dem manuellen Tagging
 
-- **Tracking deaktiviert** (Tray „Pause Tracking" oder Einstellungen
-  *„Erfassung der fokussierten Anwendung aktiv"*): Der TimeTracker erfasst
-  keine neuen Fokus-Blöcke, also greifen die Auto-Tagging-Regeln nicht. Der
-  Tab **Auto-Tagging** bleibt aber jederzeit erreichbar — Regeln lassen
-  sich auch im pausierten Zustand anlegen, bearbeiten, testen und über
-  „Auf Historie anwenden" rückwirkend einsetzen.
-- **Manuelles Tagging aktiv** (Tray-Submenü „Manueller Tag"): Solange ein
-  Manual-Block offen ist, **überspringt der TimeTracker die Regel-Engine**
-  für neu geöffnete Programm-Blöcke und vergibt stattdessen den manuell
-  gewählten Tag. Die Blöcke werden dabei nicht als „auto_tagged" markiert,
-  damit Sie sie in der Zeitachse von regelbasierten Treffern unterscheiden
-  können. Sobald „Kein Tag (Stop)" geklickt oder ein anderer manueller Tag
-  ausgewählt wird, übernimmt die Regel-Engine wieder.
+- **Tracking deaktiviert** (Tray „Pause Tracking" oder Einstellungen *„Erfassung der fokussierten Anwendung aktiv"*): Der TimeTracker erfasst keine neuen Process-Tracks, also greifen die Auto-Tagging-Regeln nicht. Der Tab **Auto-Tagging** bleibt aber jederzeit erreichbar — Regeln lassen sich im pausierten Zustand anlegen, bearbeiten und testen.
+- **Manuelles Tagging aktiv** (Tray-Submenü „Manueller Tag"): Eine offene manuelle Sitzung wird durch Auto-Tags **temporär unterbrochen** — der manuelle Block schließt am Auto-Tag-Start, der Auto-Block läuft, und sobald das Auto-Match endet, öffnet automatisch ein neuer manueller Block mit demselben Tag und derselben Beschreibung. Details siehe [Systemtray](tray.md#auto-tag-unterbrechung--automatische-fortsetzung).
+- **Manuelle Range übersteuert Auto:** Eine im Top-Strip per Drag erzeugte manuelle Range ersetzt überlappende Auto-Tag-Blöcke (sie werden getrimmt, gesplittet oder gelöscht). Auto-Tags überschreiben **nie** manuelle Tag-Blöcke.
 
 ## Live-Test (vor dem Speichern)
 
@@ -64,24 +66,13 @@ Vor dem Speichern können Sie eine Regel gegen reale Daten testen:
 1. Pattern und Ziel-Tag im Editor ausfüllen.
 2. Im Bereich **Live-Test** ein Datum wählen (Default: heute).
 3. **Testen** klicken.
-4. Es erscheint eine Liste von Blöcken aus dem gewählten Tag:
-   - **✓** (grün) = die Regel würde diesen Block taggen
+4. Es erscheint eine Liste der Process-Tracks dieses Tages:
+   - **✓** (grün) = die Regel würde diesen Track auslösen
    - **·** (grau) = die Regel matcht nicht
 5. Pattern anpassen und erneut testen, bis die Treffer passen.
 6. **Speichern** klicken.
 
-> Der Live-Test schreibt **nichts** in die Datenbank – er zeigt nur, welche Blöcke matchen würden.
-
-## Regel auf Historie anwenden
-
-Frisch angelegte Regeln greifen erst für **neue** Blöcke. Bestehende Blöcke kann man nachträglich nachtaggen:
-
-1. In der Regel-Liste auf **Auf Historie anwenden** klicken.
-2. Bestätigen.
-3. Der TimeTracker geht alle **ungetaggten** Blöcke der letzten zwei Jahre durch und tagged passende Blöcke.
-4. Eine Meldung zeigt die Anzahl neu getaggter Blöcke.
-
-> Bereits getaggte Blöcke (egal ob manuell oder durch eine andere Regel) werden **nicht** überschrieben. Wer alte Tags ersetzen will, muss sie zuerst manuell entfernen oder den Tag ändern.
+> Der Live-Test schreibt **nichts** in die Datenbank – er zeigt nur, welche Process-Tracks matchen würden.
 
 ## Regel bearbeiten oder löschen
 

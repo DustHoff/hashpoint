@@ -166,7 +166,7 @@ func (s *manualTagSlots) handleClicks(ctx context.Context, idx int, item *systra
 			if tagID == 0 {
 				continue
 			}
-			if err := s.a.StartManualTag(tagID); err != nil {
+			if err := s.a.StartManualTag(tagID, ""); err != nil {
 				slog.Warn("tray: start manual tag failed", "tag_id", tagID, "err", err)
 			}
 		}

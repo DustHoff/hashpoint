@@ -3,11 +3,12 @@
 
 import type {
   AppConfig,
-  FocusBlock,
   PersonioStatus,
+  ProcessTrack,
   Rule,
   SyncResult,
   Tag,
+  TagBlock,
   VersionInfo,
 } from "../types";
 
@@ -37,55 +38,50 @@ function bridge(): Record<string, GoFn> {
 export const api = {
   version: () => bridge().Version() as Promise<VersionInfo>,
 
-  blocksByDay: (dayISO: string) =>
-    bridge().BlocksByDay(dayISO) as Promise<FocusBlock[]>,
+  // Process tracks (raw window-focus events) ----------------------------
+  processTracksByDay: (dayISO: string) =>
+    bridge().ProcessTracksByDay(dayISO) as Promise<ProcessTrack[]>,
+  processTracksBetween: (from: string, to: string) =>
+    bridge().ProcessTracksBetween(from, to) as Promise<ProcessTrack[]>,
 
-  blocksBetween: (from: string, to: string) =>
-    bridge().BlocksBetween(from, to) as Promise<FocusBlock[]>,
+  // Tag blocks (tagging spans) ------------------------------------------
+  tagBlocksByDay: (dayISO: string) =>
+    bridge().TagBlocksByDay(dayISO) as Promise<TagBlock[]>,
+  tagBlocksBetween: (from: string, to: string) =>
+    bridge().TagBlocksBetween(from, to) as Promise<TagBlock[]>,
 
-  assignTag: (blockIds: number[], tagId: number) =>
-    bridge().AssignTag(blockIds, tagId) as Promise<void>,
-
-  // tagId: 0 clears the tag, -1 leaves the tag untouched (description-only update).
-  // rangeStart/rangeEnd (RFC3339, "" = ignore): if a tag is being set, any
-  // sub-intervals of the range not covered by a non-idle block in blockIds are
-  // filled with synthetic placeholder blocks. When the tag is cleared, any
-  // placeholder blocks among blockIds are deleted.
-  assignTagAndDescription: (
-    blockIds: number[],
+  createManualTagRange: (
+    startISO: string,
+    endISO: string,
     tagId: number,
     description: string,
-    rangeStart: string,
-    rangeEnd: string,
   ) =>
-    bridge().AssignTagAndDescription(
-      blockIds,
+    bridge().CreateManualTagRange(
+      startISO,
+      endISO,
       tagId,
       description,
-      rangeStart,
-      rangeEnd,
     ) as Promise<void>,
 
-  setBlockDescription: (id: number, description: string) =>
-    bridge().SetBlockDescription(id, description) as Promise<void>,
+  setTagBlockDescription: (id: number, description: string) =>
+    bridge().SetTagBlockDescription(id, description) as Promise<void>,
 
-  splitBlock: (id: number, atISO: string) =>
-    bridge().SplitBlock(id, atISO) as Promise<FocusBlock>,
+  setTagBlockTag: (id: number, tagId: number) =>
+    bridge().SetTagBlockTag(id, tagId) as Promise<void>,
 
-  updateBlock: (b: FocusBlock) =>
-    bridge().UpdateBlock(b) as Promise<void>,
+  deleteTagBlock: (id: number) =>
+    bridge().DeleteTagBlock(id) as Promise<void>,
 
-  deleteBlock: (id: number) => bridge().DeleteBlock(id) as Promise<void>,
+  deleteTagBlocks: (ids: number[]) =>
+    bridge().DeleteTagBlocks(ids) as Promise<number>,
 
-  // Bulk-delete: removes every block in `ids` (real and placeholder alike).
-  // Returns the number of rows actually deleted.
-  deleteBlocks: (ids: number[]) => bridge().DeleteBlocks(ids) as Promise<number>,
-
+  // Tags ----------------------------------------------------------------
   listTags: () => bridge().ListTags() as Promise<Tag[]>,
   createTag: (t: Partial<Tag>) => bridge().CreateTag(t) as Promise<Tag>,
   updateTag: (t: Tag) => bridge().UpdateTag(t) as Promise<void>,
   deleteTag: (id: number) => bridge().DeleteTag(id) as Promise<void>,
 
+  // Rules ---------------------------------------------------------------
   listRules: () => bridge().ListRules() as Promise<Rule[]>,
   createRule: (r: Partial<Rule>) => bridge().CreateRule(r) as Promise<Rule>,
   updateRule: (r: Rule) => bridge().UpdateRule(r) as Promise<void>,
@@ -94,37 +90,41 @@ export const api = {
   testRule: (r: Partial<Rule>, dayISO: string) =>
     bridge().TestRule(r, dayISO) as Promise<
       Array<{
-        block_id: number;
+        track_id: number;
         process_name: string;
         window_title: string;
         matched: boolean;
       }>
     >,
 
-  applyRuleToHistory: (id: number) =>
-    bridge().ApplyRuleToHistory(id) as Promise<number>,
-
+  // Tracking ------------------------------------------------------------
   pauseTracking: () => bridge().PauseTracking() as Promise<void>,
   resumeTracking: () => bridge().ResumeTracking() as Promise<void>,
   isTrackingPaused: () => bridge().IsTrackingPaused() as Promise<boolean>,
 
+  // Manual tagging ------------------------------------------------------
+  startManualTag: (tagId: number, description: string) =>
+    bridge().StartManualTag(tagId, description) as Promise<void>,
+  stopManualTag: () => bridge().StopManualTag() as Promise<void>,
+  isManualTagActive: () =>
+    bridge().IsManualTagActive() as Promise<[number, boolean]>,
+
+  // Sync ----------------------------------------------------------------
   syncDay: (dayISO: string) => bridge().SyncDay(dayISO) as Promise<SyncResult>,
   syncRange: (from: string, to: string) =>
     bridge().SyncRange(from, to) as Promise<SyncResult>,
 
-  // Settings ---------------------------------------------------------------
+  // Settings ------------------------------------------------------------
   getConfig: () => bridge().GetConfig() as Promise<AppConfig>,
   saveConfig: (c: AppConfig) => bridge().SaveConfig(c) as Promise<void>,
 
-  // Personio interactive login --------------------------------------------
+  // Personio ------------------------------------------------------------
   personioStatus: () => bridge().PersonioStatus() as Promise<PersonioStatus>,
-  // Live cookie probe — same metadata as personioStatus plus a fresh
-  // `valid` flag from a HEAD-equivalent call against the Personio app root.
   personioCheck: () => bridge().PersonioCheck() as Promise<PersonioStatus>,
   personioLogin: () => bridge().PersonioLogin() as Promise<void>,
   personioLogout: () => bridge().PersonioLogout() as Promise<void>,
 
-  // Log forwarding --------------------------------------------------------
+  // Log forwarding ------------------------------------------------------
   logFrontend: (
     level: "debug" | "info" | "warn" | "error",
     message: string,

@@ -1,9 +1,15 @@
 // Package tracker implements the foreground-window polling loop, idle
-// detection, focus-block lifecycle and crash recovery.
+// detection, process-track lifecycle and crash recovery.
 //
 // The loop runs in exactly one goroutine started by Run. It owns the current
-// open block; all state mutation happens from this goroutine, so no mutex is
-// needed on the in-memory state.
+// open process track; all state mutation happens from this goroutine, so no
+// mutex is needed on the in-memory state aside from the pause flag the App
+// layer toggles externally.
+//
+// Process tracking is deliberately raw: the tracker stores poll-clock
+// timestamps verbatim, with no granularity snapping and no tagging state.
+// Tag-block lifecycle (auto + manual) is owned by the tagging orchestrator
+// the tracker notifies on every focus change.
 //
 // Restrictions per CLAUDE.md §2: tracker must not import internal/app or
 // internal/personio. It depends only on storage, tagging and winapi.
@@ -18,7 +24,6 @@ import (
 	"time"
 
 	"github.com/onesi/hashpoint/internal/storage"
-	"github.com/onesi/hashpoint/internal/tagging"
 	"github.com/onesi/hashpoint/internal/winapi"
 )
 
@@ -44,50 +49,43 @@ type realFocusSource struct{}
 func (realFocusSource) Foreground() (winapi.FocusInfo, error) { return winapi.Foreground() }
 func (realFocusSource) IdleDuration() (time.Duration, error)  { return winapi.IdleDuration() }
 
+// FocusObserver receives notifications whenever the focused window changes
+// or focus is lost. The tagging orchestrator implements this to drive the
+// auto-tag-block lifecycle off the same event stream the tracker uses to
+// persist process tracks.
+type FocusObserver interface {
+	// OnFocusChanged is called when a new (process, window) becomes
+	// focused. The implicit close of the prior focus has already happened
+	// at the same wall-clock instant.
+	OnFocusChanged(ctx context.Context, processName, windowTitle string, at time.Time)
+	// OnFocusCleared is called when there is no current focus (idle, lock
+	// screen, or app shutdown). Any open auto-tag-block should close.
+	OnFocusCleared(ctx context.Context, at time.Time)
+}
+
 // Config controls runtime behavior of the tracker.
 type Config struct {
 	PollInterval  time.Duration
 	IdleThreshold time.Duration
-	// TagBlockGranularity snaps every focus block's start_time and end_time
-	// to a fixed local-time grid of this width (start floored, end ceiled).
-	// Adjacent blocks meet on a grid boundary so the §2.1 non-overlap
-	// invariant is preserved. 0 disables snapping (the tracker stores raw
-	// poll-clock timestamps as before).
-	TagBlockGranularity time.Duration
 }
 
 // Tracker owns the focus-tracking lifecycle.
 type Tracker struct {
-	cfg    Config
-	source FocusSource
-	clock  Clock
-	blocks storage.FocusBlockRepository
-	rules  storage.RuleRepository
-	logger *slog.Logger
+	cfg      Config
+	source   FocusSource
+	clock    Clock
+	tracks   storage.ProcessTrackRepository
+	observer FocusObserver
+	logger   *slog.Logger
 
 	mu sync.Mutex
-	// current holds the tracker's own open program-focus block (nil while
-	// nothing is being tracked). Manual blocks live in the App layer and are
-	// not reflected here.
-	current *storage.FocusBlock
-	// paused is the user-facing pause state controlled by Pause/Resume —
-	// driven by tracking.enabled, the tray toggle and the timeline button.
-	// The whole state machine collapses to this single flag: paused = no
-	// process tracking, no auto-tagging, manual placeholder blocks still
-	// allowed at the App layer; running = process tracking + auto-tag rules
-	// active alongside any manual placeholder the user has open.
+	// current holds the tracker's own open process track (nil while nothing
+	// is being tracked).
+	current *storage.ProcessTrack
+	// paused is the user-facing pause state controlled by Pause/Resume.
+	// While paused, no process tracking happens; manual tag blocks at the
+	// App layer are unaffected.
 	paused bool
-	// manualTagID is the tag id of the App's currently open manual block
-	// (nil when no manual is active). When set, applyAutoTag inherits this
-	// tag onto every new program block instead of running the rule engine —
-	// so the user's manual tag wins over auto-tag rules without us having to
-	// stop polling. Manual mode and Pause are deliberately independent.
-	manualTagID *int64
-	// blockGranularity mirrors Config.TagBlockGranularity but is mutable so
-	// SetTagBlockGranularity can hot-reload changes from Settings without a
-	// tracker restart. Guarded by mu — read by the tick goroutine, written
-	// from the App layer.
-	blockGranularity time.Duration
 }
 
 // Option is a functional option.
@@ -99,19 +97,21 @@ func WithFocusSource(s FocusSource) Option { return func(t *Tracker) { t.source 
 // WithClock overrides the default clock (for tests).
 func WithClock(c Clock) Option { return func(t *Tracker) { t.clock = c } }
 
+// WithObserver wires the tagging orchestrator. Without one the tracker is
+// silent on focus events — useful in tests that don't care about tagging.
+func WithObserver(o FocusObserver) Option { return func(t *Tracker) { t.observer = o } }
+
 // New constructs a tracker. Run starts the loop.
-func New(cfg Config, blocks storage.FocusBlockRepository, rules storage.RuleRepository, logger *slog.Logger, opts ...Option) *Tracker {
+func New(cfg Config, tracks storage.ProcessTrackRepository, logger *slog.Logger, opts ...Option) *Tracker {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	t := &Tracker{
-		cfg:              cfg,
-		source:           realFocusSource{},
-		clock:            realClock{},
-		blocks:           blocks,
-		rules:            rules,
-		logger:           logger,
-		blockGranularity: cfg.TagBlockGranularity,
+		cfg:    cfg,
+		source: realFocusSource{},
+		clock:  realClock{},
+		tracks: tracks,
+		logger: logger,
 	}
 	for _, o := range opts {
 		o(t)
@@ -119,20 +119,21 @@ func New(cfg Config, blocks storage.FocusBlockRepository, rules storage.RuleRepo
 	return t
 }
 
-// Pause stops opening new blocks; the currently open block (if any) is closed
-// at the time Pause is called.
+// Pause stops opening new tracks; the currently open track (if any) is
+// closed at the time Pause is called.
 func (t *Tracker) Pause(ctx context.Context) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.paused = true
 	if t.current != nil {
-		end := t.snapEndAt(t.current.StartTime, t.clock.Now())
-		_ = t.blocks.Close(ctx, t.current.ID, end)
+		now := t.clock.Now()
+		_ = t.tracks.Close(ctx, t.current.ID, now)
 		t.current = nil
+		t.notifyCleared(ctx, now)
 	}
 }
 
-// Resume re-enables block opening.
+// Resume re-enables track opening.
 func (t *Tracker) Resume() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -146,93 +147,7 @@ func (t *Tracker) Paused() bool {
 	return t.paused
 }
 
-// SetTagBlockGranularity hot-reloads the grid step used to snap focus-block
-// start/end times. 0 disables snapping. Negative values are coerced to 0.
-// Already-open blocks keep the granularity that was active when they opened —
-// the new value affects the next close + open boundary.
-func (t *Tracker) SetTagBlockGranularity(d time.Duration) {
-	if d < 0 {
-		d = 0
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.blockGranularity = d
-}
-
-// snapEndAt returns the rounded end_time the tracker should write when
-// closing a block opened at `start` while the wall clock reads `now`. With
-// granularity disabled it returns now. Otherwise it returns the smallest
-// grid boundary t >= now such that t - start is a positive multiple of the
-// granularity step — a started X-min slot counts as a full slot. Callers
-// must hold t.mu.
-func (t *Tracker) snapEndAt(start, now time.Time) time.Time {
-	step := t.blockGranularity
-	if step <= 0 {
-		return now
-	}
-	d := now.Sub(start)
-	if d <= 0 {
-		return start.Add(step)
-	}
-	slots := d / step
-	if d%step != 0 {
-		slots++
-	}
-	if slots == 0 {
-		slots = 1
-	}
-	return start.Add(slots * step)
-}
-
-// snapStartAt returns the rounded start_time for a fresh block opened at
-// wall-clock `now`. With granularity disabled it returns now. Otherwise it
-// returns the latest grid boundary <= now ("floor"), bumped forward to
-// `notBefore` if the previous block's rounded end already overlaps that
-// floor. Callers must hold t.mu.
-func (t *Tracker) snapStartAt(now, notBefore time.Time) time.Time {
-	step := t.blockGranularity
-	if step <= 0 {
-		return now
-	}
-	floored := floorToStep(now, step)
-	if !notBefore.IsZero() && notBefore.After(floored) {
-		return notBefore
-	}
-	return floored
-}
-
-// floorToStep returns the largest grid boundary <= ts. The grid is anchored
-// at local midnight so 15-min slots line up with :00/:15/:30/:45 boundaries
-// the user sees, even in timezones whose UTC offset is not a whole hour.
-func floorToStep(ts time.Time, step time.Duration) time.Time {
-	if step <= 0 {
-		return ts
-	}
-	local := ts.Local()
-	midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, local.Location())
-	delta := local.Sub(midnight)
-	return midnight.Add(delta - (delta % step))
-}
-
-// SetManualTag tells the tracker which tag the App's currently open manual
-// block carries (nil when no manual block is open). While set, every new
-// program block opened by the tracker inherits this tag instead of being
-// matched against the auto-tag rule engine — manual selection wins over
-// rules. The tracker keeps polling and recording window context the whole
-// time; only the tagging decision changes.
-func (t *Tracker) SetManualTag(tagID *int64) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if tagID == nil {
-		t.manualTagID = nil
-		return
-	}
-	v := *tagID
-	t.manualTagID = &v
-}
-
-// Run starts the polling loop and blocks until ctx is cancelled. The current
-// block is closed on shutdown.
+// Run starts the polling loop and blocks until ctx is cancelled.
 func (t *Tracker) Run(ctx context.Context) error {
 	if err := t.recover(ctx); err != nil {
 		t.logger.Warn("crash recovery failed", "err", err)
@@ -262,23 +177,21 @@ func (t *Tracker) shutdown(ctx context.Context) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.current != nil {
-		end := t.snapEndAt(t.current.StartTime, t.clock.Now())
-		if err := t.blocks.Close(ctx, t.current.ID, end); err != nil {
+		now := t.clock.Now()
+		if err := t.tracks.Close(ctx, t.current.ID, now); err != nil {
 			t.logger.Warn("close on shutdown failed", "err", err)
 		}
 		t.current = nil
+		t.notifyCleared(ctx, now)
 	}
 }
 
-// recover finalizes every block left open by a previous crash. Closing only
-// the latest open (LastOpen) leaves earlier opens overlapping with anything
-// the user records after the relaunch — Personio rejects overlapping work
-// periods, so each leftover open is closed at min(start+idleThreshold, now)
-// and at the earliest the next block's start to avoid reintroducing overlap.
+// recover finalizes every track left open by a previous crash. Closing only
+// the latest open leaves earlier opens dangling; we close every one.
 func (t *Tracker) recover(ctx context.Context) error {
-	opens, err := t.blocks.ListOpen(ctx)
+	opens, err := t.tracks.ListOpen(ctx)
 	if err != nil {
-		return fmt.Errorf("list open blocks: %w", err)
+		return fmt.Errorf("list open tracks: %w", err)
 	}
 	if len(opens) == 0 {
 		return nil
@@ -289,29 +202,17 @@ func (t *Tracker) recover(ctx context.Context) error {
 		if end.After(now) {
 			end = now
 		}
-		// If a later open block exists, this one must end no later than the
-		// next one's start — otherwise closing it would create an overlap
-		// that the storage layer would refuse.
+		// If a later open exists, this one ends no later than its start.
 		if i+1 < len(opens) && opens[i+1].StartTime.Before(end) {
 			end = opens[i+1].StartTime
 		}
-		// Snap to the granularity grid so recovered blocks share the same
-		// quantization as freshly tracked ones — but never past the next
-		// open's start (would re-introduce overlap).
-		t.mu.Lock()
-		snapped := t.snapEndAt(open.StartTime, end)
-		t.mu.Unlock()
-		if i+1 < len(opens) && opens[i+1].StartTime.Before(snapped) {
-			snapped = opens[i+1].StartTime
-		}
-		end = snapped
-		t.logger.Info("recovering open block from previous run",
+		t.logger.Info("recovering open process track from previous run",
 			"id", open.ID, "process", open.ProcessName,
 			"start", open.StartTime.Format(time.RFC3339),
 			"recovered_end", end.Format(time.RFC3339),
 		)
-		if err := t.blocks.Close(ctx, open.ID, end); err != nil {
-			return fmt.Errorf("close open block %d: %w", open.ID, err)
+		if err := t.tracks.Close(ctx, open.ID, end); err != nil {
+			return fmt.Errorf("close open track %d: %w", open.ID, err)
 		}
 	}
 	return nil
@@ -335,7 +236,7 @@ func (t *Tracker) tick(ctx context.Context) {
 		return
 	}
 	if info.IsZero() {
-		// E.g. lock screen — close any open block.
+		// E.g. lock screen — close any open track.
 		t.closeCurrent(ctx)
 		return
 	}
@@ -348,13 +249,14 @@ func (t *Tracker) handleIdle(ctx context.Context) {
 	if t.current == nil {
 		return
 	}
-	end := t.snapEndAt(t.current.StartTime, t.clock.Now())
-	if err := t.blocks.MarkIdle(ctx, t.current.ID, end); err != nil {
+	now := t.clock.Now()
+	if err := t.tracks.MarkIdle(ctx, t.current.ID, now); err != nil {
 		t.logger.Warn("mark idle failed", "err", err)
 		return
 	}
-	t.logger.Debug("block marked idle", "id", t.current.ID)
+	t.logger.Debug("track marked idle", "id", t.current.ID)
 	t.current = nil
+	t.notifyCleared(ctx, now)
 }
 
 func (t *Tracker) closeCurrent(ctx context.Context) {
@@ -363,18 +265,19 @@ func (t *Tracker) closeCurrent(ctx context.Context) {
 	if t.current == nil {
 		return
 	}
-	end := t.snapEndAt(t.current.StartTime, t.clock.Now())
-	if err := t.blocks.Close(ctx, t.current.ID, end); err != nil {
+	now := t.clock.Now()
+	if err := t.tracks.Close(ctx, t.current.ID, now); err != nil {
 		t.logger.Warn("close failed", "err", err)
 	}
 	t.current = nil
+	t.notifyCleared(ctx, now)
 }
 
 func (t *Tracker) handleFocus(ctx context.Context, info winapi.FocusInfo) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Same focus → keep current block open.
+	// Same focus → keep current track open.
 	if t.current != nil &&
 		t.current.ProcessName == info.ProcessName &&
 		t.current.WindowTitle == info.Title {
@@ -382,68 +285,43 @@ func (t *Tracker) handleFocus(ctx context.Context, info winapi.FocusInfo) {
 	}
 
 	now := t.clock.Now()
-	var prevEnd time.Time
 	if t.current != nil {
-		prevEnd = t.snapEndAt(t.current.StartTime, now)
-		if err := t.blocks.Close(ctx, t.current.ID, prevEnd); err != nil {
+		if err := t.tracks.Close(ctx, t.current.ID, now); err != nil {
 			t.logger.Warn("close on switch failed", "err", err)
 		}
 	}
 
-	b := &storage.FocusBlock{
+	p := &storage.ProcessTrack{
 		ProcessName: info.ProcessName,
 		ProcessPath: info.ProcessPath,
 		WindowTitle: info.Title,
-		StartTime:   t.snapStartAt(now, prevEnd),
+		StartTime:   now,
 	}
-	if err := t.blocks.Open(ctx, b); err != nil {
-		t.logger.Warn("open block failed", "err", err)
+	if err := t.tracks.Open(ctx, p); err != nil {
+		t.logger.Warn("open process track failed", "err", err)
 		t.current = nil
+		t.notifyCleared(ctx, now)
 		return
 	}
-	t.applyAutoTag(ctx, b)
-	t.current = b
+	t.current = p
 
 	// Title is debug-only by spec §5: never log on info+.
-	t.logger.Debug("opened block",
-		"id", b.ID, "process", b.ProcessName, "title", b.WindowTitle)
+	t.logger.Debug("opened process track",
+		"id", p.ID, "process", p.ProcessName, "title", p.WindowTitle)
+
+	t.notifyChanged(ctx, info.ProcessName, info.Title, now)
 }
 
-// applyAutoTag tags the freshly opened block. Caller holds t.mu.
-//
-// If the App has a manual-tag block open, every new program block inherits
-// that tag instead of being matched against the rule engine — the user's
-// explicit choice wins over auto-tag rules without us having to stop polling.
-// auto_tagged is left false in that case so the timeline can still tell
-// rule-applied tags from manually-driven ones.
-func (t *Tracker) applyAutoTag(ctx context.Context, b *storage.FocusBlock) {
-	if t.manualTagID != nil {
-		tagID := *t.manualTagID
-		b.TagID = &tagID
-		if err := t.blocks.SetTag(ctx, b.ID, &tagID, false); err != nil {
-			t.logger.Warn("manual tag inheritance failed", "err", err)
-		}
+func (t *Tracker) notifyChanged(ctx context.Context, name, title string, at time.Time) {
+	if t.observer == nil {
 		return
 	}
-	rules, err := t.rules.ListEnabled(ctx)
-	if err != nil {
-		t.logger.Debug("auto-tag: list rules failed", "err", err)
+	t.observer.OnFocusChanged(ctx, name, title, at)
+}
+
+func (t *Tracker) notifyCleared(ctx context.Context, at time.Time) {
+	if t.observer == nil {
 		return
 	}
-	if len(rules) == 0 {
-		return
-	}
-	compiled, err := tagging.Compile(rules)
-	if err != nil {
-		t.logger.Warn("auto-tag: compile rules failed", "err", err)
-		return
-	}
-	if hit := tagging.FirstMatch(compiled, b.ProcessName, b.WindowTitle); hit != nil {
-		tagID := hit.Rule.TagID
-		b.TagID = &tagID
-		b.AutoTagged = true
-		if err := t.blocks.SetTag(ctx, b.ID, &tagID, true); err != nil {
-			t.logger.Warn("auto-tag: set tag failed", "err", err)
-		}
-	}
+	t.observer.OnFocusCleared(ctx, at)
 }

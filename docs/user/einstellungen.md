@@ -25,7 +25,7 @@ Validierungsfehler werden oben im Tab als Banner angezeigt.
 | **Erfassung der fokussierten Anwendung aktiv** | an | Checkbox | Globaler Schalter für das automatische Fokus-Tracking. Deaktiviert: keine neuen Programm-Blöcke und keine Auto-Tagging-Regeln greifen mehr — manuelles Tagging über das Tray-Submenü bleibt möglich. Der Wert wird persistiert; wirkt sich sofort und auch über Anwendungs-Neustarts hinweg aus. Identisch mit dem Tray-Eintrag „Pause Tracking". |
 | **Poll-Intervall (Sekunden)** | `2` | `1`–`300` | Wie oft prüft der TimeTracker, welches Fenster im Vordergrund ist. Niedriger = präziser, aber höhere CPU-Last. |
 | **Idle-Schwelle (Minuten)** | `5` | `1`–`240` | Nach wie vielen Minuten ohne Tastatur-/Maus-Eingabe der laufende Block beendet und als **Idle** markiert wird. |
-| **Tag-Block-Granularität (Minuten)** | `0` | `0`–`60` | Legt **bereits beim Erfassen** und beim Personio-Sync jeden Block auf ein **Slot-Raster** dieser Breite (verankert an lokaler Mitternacht, also z. B. `:00/:15/:30/:45` bei `15`). Der Beginn wird **abgerundet**, das Ende **aufgerundet** — eine angefangene Periode zählt als voller Slot und liegt damit auch zeitlich auf dem Raster. Beispiel `15`: Beobachteter Lauf `09:07–09:12` wird als `09:00–09:15` gespeichert, `09:07–09:23` als `09:00–09:30`. Wechselt der Fokus innerhalb eines Slots, gehört der Slot dem ersten Prozess; der Folgeblock startet auf der nächsten Slot-Grenze. Werteänderungen treten ohne Neustart in Kraft (greifen ab dem nächsten Block-Boundary). `0` deaktiviert das Raster und speichert die exakten Zeiten. |
+| **Tag-Block-Granularität (Minuten)** | `0` | `0`–`60` | Legt **Tag-Blöcke** (manuelle Range-Tags und Auto-Tag-Blöcke) auf ein **Slot-Raster** dieser Breite (verankert an lokaler Mitternacht, also z. B. `:00/:15/:30/:45` bei `15`). Beginn wird **abgerundet**, Ende **abgerundet**. Auto-Tag-Blöcke unterhalb der Granularität werden nicht erzeugt (Zero-Length-Suppression). **Process-Tracks** sind von dieser Einstellung **nicht** betroffen — der untere Strip zeigt immer die rohen, sekundengenauen Zeiten. Werteänderungen treten ohne Neustart in Kraft (greifen ab dem nächsten Tag-Block-Boundary). `0` deaktiviert das Raster komplett. |
 
 ## Oberfläche
 
@@ -66,7 +66,8 @@ Wer den Editor lieber direkt verwendet, kann die Datei unter
 enabled                    = true   # globaler Schalter für Fokus-Tracking + Auto-Tagging
 poll_interval_sec          = 2
 idle_threshold_min         = 5
-tag_block_granularity_min  = 0      # 0 = aus; 15 = Personio-Buchungen auf 15-min-Slots aufrunden
+tag_block_granularity_min  = 0      # 0 = aus; 15 = Tag-Blöcke (manuell+auto) auf
+                                    # 15-min-Slots snappen. Process-Tracks bleiben roh.
 
 [personio]
 tenant = "onesi"

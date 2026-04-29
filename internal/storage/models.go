@@ -1,14 +1,24 @@
 // Package storage provides the SQLite-backed persistence layer.
 //
 // All times are stored in UTC. The package exposes typed repositories
-// (FocusBlockRepo, TagRepo, RuleRepo, SettingsRepo) behind interfaces declared
-// in interfaces.go for easy testing and clear ownership.
+// (ProcessTrackRepo, TagBlockRepo, TagRepo, RuleRepo, SettingsRepo) behind
+// interfaces declared in interfaces.go for easy testing and clear ownership.
+//
+// Process tracks and tag blocks are deliberately separate concerns:
+//   - ProcessTrack represents a raw window-focus event from the polling loop.
+//     It carries process / window metadata and reflects exactly what was on
+//     screen, with no granularity snapping or tagging state.
+//   - TagBlock represents a tagged span (manual or auto). It snaps to the
+//     configured granularity, lives independently of any process event, and
+//     is the unit synced to Personio.
 package storage
 
 import "time"
 
-// FocusBlock is a single tracked focus interval.
-type FocusBlock struct {
+// ProcessTrack is a single window-focus interval recorded by the tracker.
+// Process tracks are immutable once closed and are never split or trimmed
+// by tagging operations — tag spans overlay them rather than mutating them.
+type ProcessTrack struct {
 	ID          int64      `json:"id"`
 	ProcessName string     `json:"process_name"`
 	ProcessPath string     `json:"process_path,omitempty"`
@@ -17,20 +27,32 @@ type FocusBlock struct {
 	EndTime     *time.Time `json:"end_time,omitempty"`
 	DurationSec int64      `json:"duration_sec"`
 	IsIdle      bool       `json:"is_idle"`
-	TagID       *int64     `json:"tag_id,omitempty"`
-	AutoTagged  bool       `json:"auto_tagged"`
-	Description *string    `json:"description,omitempty"`
-	PersonioID  *string    `json:"personio_id,omitempty"`
-	SyncedAt    *time.Time `json:"synced_at,omitempty"`
-	// IsPlaceholder marks synthetic blocks the user created via the timeline
-	// drag-range workflow to extend a tagged period past actually tracked
-	// activity. They have no real process metadata and are deleted again when
-	// their tag is cleared.
-	IsPlaceholder bool `json:"is_placeholder"`
 }
 
-// IsOpen returns true while the block is still being recorded (no end time).
-func (b FocusBlock) IsOpen() bool { return b.EndTime == nil }
+// IsOpen returns true while the track is still being recorded.
+func (p ProcessTrack) IsOpen() bool { return p.EndTime == nil }
+
+// TagBlock is a tagging span. Manual blocks come from explicit user
+// assignment (tray submenu, drag-and-tag); auto blocks are emitted by the
+// tagging orchestrator when a process matches a rule.
+//
+// At most one open-ended manual tag block exists at any time — the
+// orchestrator enforces that invariant. End times are floored to the
+// configured granularity; zero-length spans are never persisted.
+type TagBlock struct {
+	ID          int64      `json:"id"`
+	TagID       int64      `json:"tag_id"`
+	Description *string    `json:"description,omitempty"`
+	StartTime   time.Time  `json:"start_time"`
+	EndTime     *time.Time `json:"end_time,omitempty"`
+	DurationSec int64      `json:"duration_sec"`
+	IsManual    bool       `json:"is_manual"`
+	PersonioID  *string    `json:"personio_id,omitempty"`
+	SyncedAt    *time.Time `json:"synced_at,omitempty"`
+}
+
+// IsOpen returns true while the tag block is still active (no end time).
+func (b TagBlock) IsOpen() bool { return b.EndTime == nil }
 
 // Tag represents a hierarchical tag (Parent or Sub).
 type Tag struct {

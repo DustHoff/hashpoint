@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { FocusBlock, Tag } from "../types";
+import type { ProcessTrack, Tag, TagBlock } from "../types";
 import {
   dateInputValue,
   formatDuration,
@@ -9,10 +9,8 @@ import {
   startOfDayUTCISO,
 } from "../lib/time";
 
-// Day-in-ms helpers — the timeline strip maps the visible day [00:00, 24:00)
-// in local time to a 0..1 percentage along the strip width.
 const MS_PER_DAY = 24 * 3600 * 1000;
-const MIN_VIEW_SPAN_MS = 5 * 60 * 1000; // 5 min — clamp for wheel zoom-in
+const MIN_VIEW_SPAN_MS = 5 * 60 * 1000;
 const UNTAGGED_COLOR = "#475569";
 
 function dayBounds(day: Date): { from: number; to: number } {
@@ -24,14 +22,19 @@ function clampPct(pct: number): number {
   return Math.max(0, Math.min(1, pct));
 }
 
-function blockBounds(b: FocusBlock): { start: number; end: number } {
+function tagBlockBounds(b: TagBlock): { start: number; end: number } {
   const start = new Date(b.start_time).getTime();
   const end = b.end_time ? new Date(b.end_time).getTime() : Date.now();
   return { start, end: Math.max(end, start + 1000) };
 }
 
-// Hash a process name to a deterministic muted color so untagged segments
-// remain visually distinguishable from one another.
+function trackBounds(t: ProcessTrack): { start: number; end: number } {
+  const start = new Date(t.start_time).getTime();
+  const end = t.end_time ? new Date(t.end_time).getTime() : Date.now();
+  return { start, end: Math.max(end, start + 1000) };
+}
+
+// Hash a process name to a deterministic muted color.
 function colorFromName(name: string): string {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
@@ -39,167 +42,88 @@ function colorFromName(name: string): string {
   return `hsl(${hue} 35% 45%)`;
 }
 
-// A contiguous segment groups adjacent blocks that share tag, process AND
-// description — same-program neighbours collapse into one rectangle on the
-// strip and share a single hover/select target. Including the description
-// in the merge key keeps the strip honest: a description added to one
-// block doesn't visually paint adjacent same-tag blocks that don't carry
-// it.
-interface Segment {
-  tagID: number | null;
-  processName: string;
-  blockIDs: number[];
+interface MsRange {
   start: number;
   end: number;
-  description: string;
-  allPlaceholder: boolean;
 }
 
-function buildSegments(blocks: FocusBlock[]): Segment[] {
-  const out: Segment[] = [];
-  let cur: Segment | null = null;
-  for (const b of blocks) {
-    if (b.is_idle) {
-      cur = null;
-      continue;
-    }
-    const { start, end } = blockBounds(b);
-    const tagID = b.tag_id ?? null;
-    const description = b.description ?? "";
-    if (
-      cur &&
-      cur.tagID === tagID &&
-      cur.processName === b.process_name &&
-      cur.description === description
-    ) {
-      cur.blockIDs.push(b.id);
-      cur.end = Math.max(cur.end, end);
-      cur.allPlaceholder = cur.allPlaceholder && b.is_placeholder;
-    } else {
-      cur = {
-        tagID,
-        processName: b.process_name,
-        blockIDs: [b.id],
-        start,
-        end,
-        description,
-        allPlaceholder: b.is_placeholder,
-      };
-      out.push(cur);
-    }
-  }
-  return out;
-}
-
-// A row in the table view: collapses adjacent blocks that share program, tag
-// and description so a long run of identical entries reads as one line.
-interface BlockGroup {
-  blockIDs: number[];
+// Group adjacent process tracks with the same process name + tag state for
+// table display.
+interface TrackGroup {
+  trackIDs: number[];
   startMs: number;
   endMs: number;
   durationSec: number;
   processName: string;
   windowTitle: string;
-  tagID: number | null;
-  description: string;
   isIdle: boolean;
-  isPlaceholder: boolean;
-  autoTagged: boolean;
-  // Original blocks the group was built from — used to expand a collapsed
-  // row and show the individual window titles inline.
-  members: FocusBlock[];
+  members: ProcessTrack[];
 }
 
-function groupBlocksForTable(blocks: FocusBlock[]): BlockGroup[] {
-  const out: BlockGroup[] = [];
-  for (const b of blocks) {
-    const { start, end } = blockBounds(b);
+function groupTracksForTable(tracks: ProcessTrack[]): TrackGroup[] {
+  const out: TrackGroup[] = [];
+  for (const t of tracks) {
+    const { start, end } = trackBounds(t);
     const last = out[out.length - 1];
     const sameKey =
       last &&
-      last.processName === b.process_name &&
-      last.tagID === (b.tag_id ?? null) &&
-      last.description === (b.description ?? "") &&
-      last.isIdle === b.is_idle &&
-      last.isPlaceholder === b.is_placeholder;
+      last.processName === t.process_name &&
+      last.isIdle === t.is_idle;
     if (last && sameKey) {
-      last.blockIDs.push(b.id);
+      last.trackIDs.push(t.id);
       last.endMs = Math.max(last.endMs, end);
-      last.durationSec += b.duration_sec;
-      last.autoTagged = last.autoTagged || b.auto_tagged;
-      last.members.push(b);
+      last.durationSec += t.duration_sec;
+      last.members.push(t);
     } else {
       out.push({
-        blockIDs: [b.id],
+        trackIDs: [t.id],
         startMs: start,
         endMs: end,
-        durationSec: b.duration_sec,
-        processName: b.process_name,
-        windowTitle: b.window_title,
-        tagID: b.tag_id ?? null,
-        description: b.description ?? "",
-        isIdle: b.is_idle,
-        isPlaceholder: b.is_placeholder,
-        autoTagged: b.auto_tagged,
-        members: [b],
+        durationSec: t.duration_sec,
+        processName: t.process_name,
+        windowTitle: t.window_title,
+        isIdle: t.is_idle,
+        members: [t],
       });
     }
   }
   return out;
 }
 
-interface MsRange {
-  start: number;
-  end: number;
-}
-
 export default function Timeline() {
   const [day, setDay] = useState<Date>(new Date());
-  const [blocks, setBlocks] = useState<FocusBlock[]>([]);
+  const [tagBlocks, setTagBlocks] = useState<TagBlock[]>([]);
+  const [processTracks, setProcessTracks] = useState<ProcessTrack[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
-  // Tag-block grid step in ms — mirrors tracking.tag_block_granularity_min.
-  // Drag-range commits (mouseUp + edge resize) snap to this grid so manually
-  // tagged ranges line up with tracker-created blocks.
   const [granularityMs, setGranularityMs] = useState<number>(0);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-  // Active hover range — used to filter the table to apps within it.
+
+  // Currently-selected tag-blocks (click on top strip / table row).
+  const [selectedBlockIDs, setSelectedBlockIDs] = useState<Set<number>>(new Set());
+  // Active hover range (used by readout + table filter).
   const [hoverRange, setHoverRange] = useState<MsRange | null>(null);
-  // Range committed by the last mouse-drag. Forwarded to the backend so any
-  // gap between the dragged time window and actual tracked blocks is filled
-  // with placeholder blocks (which then sync as a contiguous Personio period).
+  // Drag-committed range awaiting tag pick.
   const [selectedRange, setSelectedRange] = useState<MsRange | null>(null);
-  // Groups whose individual block titles are currently revealed in the table.
-  // Keyed by the first block ID of the group (stable across refreshes for
-  // an unchanged block sequence).
   const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
   const [description, setDescription] = useState<string>("");
   const [paused, setPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
-  // Independent of `error`: refresh() clears `error` on success, which would
-  // otherwise wipe the sync result a few hundred ms after the user clicks.
   const [syncMessage, setSyncMessage] = useState<
     { level: "success" | "info" | "error"; text: string } | null
   >(null);
 
-  // Visible window for the strip — wheel zoom narrows it; shift+wheel pans;
-  // double-click resets to the full day.
+  // Shared view window for both strips.
   const [viewStart, setViewStart] = useState<number>(() => dayBounds(new Date()).from);
   const [viewEnd, setViewEnd] = useState<number>(() => dayBounds(new Date()).to);
 
-  const stripRef = useRef<HTMLDivElement>(null);
+  const tagStripRef = useRef<HTMLDivElement>(null);
+  const trackStripRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const dragStartPctRef = useRef<number | null>(null);
   const [dragRange, setDragRange] = useState<{ a: number; b: number } | null>(
     null,
   );
-  // Cursor position over the strip (0..1) — drives the time readout when
-  // hovering empty (untagged) areas where there is no segment to anchor to.
   const [cursorPctX, setCursorPctX] = useState<number | null>(null);
-  // Active edge while the user is resizing the committed selected-range from
-  // either of its edge handles. Null when no resize is in progress. The range
-  // can only be resized while it is still untagged — once a tag is assigned,
-  // `clearSelection()` drops `selectedRange` and the handles disappear.
   const resizeEdgeRef = useRef<"start" | "end" | null>(null);
 
   const tagsByID = useMemo(() => {
@@ -208,12 +132,11 @@ export default function Timeline() {
     return m;
   }, [tags]);
 
-  const segments = useMemo(() => buildSegments(blocks), [blocks]);
   const { from: dayFromMs, to: dayToMs } = useMemo(() => dayBounds(day), [day]);
 
   const selectedBlocks = useMemo(
-    () => blocks.filter((b) => selected.has(b.id)),
-    [blocks, selected],
+    () => tagBlocks.filter((b) => selectedBlockIDs.has(b.id)),
+    [tagBlocks, selectedBlockIDs],
   );
 
   // Reset zoom whenever the day changes.
@@ -222,14 +145,13 @@ export default function Timeline() {
     setViewEnd(dayToMs);
   }, [dayFromMs, dayToMs]);
 
-  // Single-tag detection: when all selected blocks share one tag, the
-  // description editor targets the contiguous tag segment as a whole.
+  // Detect shared tag/description across selection so the editor can target
+  // the whole group.
   const sharedTagID = useMemo<number | null | "mixed">(() => {
     if (selectedBlocks.length === 0) return null;
-    const first = selectedBlocks[0].tag_id ?? null;
+    const first = selectedBlocks[0].tag_id;
     for (const b of selectedBlocks) {
-      const cur = b.tag_id ?? null;
-      if (cur !== first) return "mixed";
+      if (b.tag_id !== first) return "mixed";
     }
     return first;
   }, [selectedBlocks]);
@@ -243,20 +165,21 @@ export default function Timeline() {
     return first;
   }, [selectedBlocks]);
 
-  // Sync the description editor to the current selection's shared value.
   useEffect(() => {
     setDescription(sharedDescription);
   }, [sharedDescription]);
 
   async function refresh() {
     try {
-      const [b, t, p, cfg] = await Promise.all([
-        api.blocksByDay(startOfDayUTCISO(day)),
+      const [blocks, tracks, t, p, cfg] = await Promise.all([
+        api.tagBlocksByDay(startOfDayUTCISO(day)),
+        api.processTracksByDay(startOfDayUTCISO(day)),
         api.listTags(),
         api.isTrackingPaused(),
         api.getConfig(),
       ]);
-      setBlocks(b ?? []);
+      setTagBlocks(blocks ?? []);
+      setProcessTracks(tracks ?? []);
       setTags(t ?? []);
       setPaused(p);
       setGranularityMs(
@@ -275,75 +198,28 @@ export default function Timeline() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [day]);
 
-  // Auto-scroll the page back to the editor panel whenever a fresh selection
-  // appears — saves the user from scrolling up after picking a row in a long
-  // table.
+  // Auto-scroll back to editor whenever a fresh selection appears.
   const hadSelectionRef = useRef(false);
   useEffect(() => {
-    const has = selected.size > 0 || selectedRange != null;
+    const has = selectedBlockIDs.size > 0 || selectedRange != null;
     if (has && !hadSelectionRef.current) {
       panelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
     hadSelectionRef.current = has;
-  }, [selected, selectedRange]);
+  }, [selectedBlockIDs, selectedRange]);
 
   function clearSelection() {
-    setSelected(new Set());
+    setSelectedBlockIDs(new Set());
     setSelectedRange(null);
     setDescription("");
   }
 
-  function toggleGroup(g: BlockGroup, range: boolean) {
+  function toggleBlock(id: number, additive: boolean) {
     setSelectedRange(null);
-    const next = new Set(selected);
-    if (range && selected.size > 0) {
-      // Range select across groups: extend selection to cover all blocks
-      // between the last picked block and this group's first block.
-      const ids = blocks.map((b) => b.id);
-      const lastSelected = [...selected].pop()!;
-      const a = ids.indexOf(lastSelected);
-      const b = ids.indexOf(g.blockIDs[0]);
-      if (a >= 0 && b >= 0) {
-        const [lo, hi] = a < b ? [a, b] : [b, a];
-        for (let i = lo; i <= hi; i++) next.add(ids[i]);
-      }
-      for (const id of g.blockIDs) next.add(id);
-    } else {
-      const allSelected = g.blockIDs.every((id) => next.has(id));
-      if (allSelected) {
-        for (const id of g.blockIDs) next.delete(id);
-      } else {
-        for (const id of g.blockIDs) next.add(id);
-      }
-    }
-    setSelected(next);
-  }
-
-  function toggleExpandGroup(g: BlockGroup) {
-    const key = g.blockIDs[0];
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }
-
-  function toggleSingleBlock(id: number) {
-    setSelectedRange(null);
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function selectSegment(seg: Segment, additive: boolean) {
-    setSelectedRange(null);
-    const next = additive ? new Set(selected) : new Set<number>();
-    for (const id of seg.blockIDs) next.add(id);
-    setSelected(next);
+    const next = additive ? new Set(selectedBlockIDs) : new Set<number>();
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedBlockIDs(next);
   }
 
   function rangeToISO(r: MsRange | null): { start: string; end: string } {
@@ -354,17 +230,23 @@ export default function Timeline() {
     };
   }
 
-  async function assignTag(tagID: number) {
-    if (selected.size === 0 && !selectedRange) return;
-    const { start, end } = rangeToISO(selectedRange);
+  async function applyTag(tagID: number) {
     try {
-      await api.assignTagAndDescription(
-        [...selected],
-        tagID,
-        description,
-        start,
-        end,
-      );
+      // 1) Drag-committed range: create a manual tag range (orchestrator
+      // handles overlap with auto-tag blocks, snaps to granularity).
+      if (selectedRange) {
+        const { start, end } = rangeToISO(selectedRange);
+        await api.createManualTagRange(start, end, tagID, description);
+      }
+      // 2) Selected existing blocks: re-point their tag (and update description).
+      for (const b of selectedBlocks) {
+        if (b.tag_id !== tagID) {
+          await api.setTagBlockTag(b.id, tagID);
+        }
+        if ((b.description ?? "") !== description) {
+          await api.setTagBlockDescription(b.id, description);
+        }
+      }
       clearSelection();
       await refresh();
     } catch (e) {
@@ -373,17 +255,10 @@ export default function Timeline() {
   }
 
   async function saveDescriptionOnly() {
-    if (selected.size === 0) return;
     try {
-      // tagID = -1 leaves the existing tag(s) untouched; only writes description.
-      // No range is forwarded — description-only edits never spawn placeholders.
-      await api.assignTagAndDescription(
-        [...selected],
-        -1,
-        description,
-        "",
-        "",
-      );
+      for (const b of selectedBlocks) {
+        await api.setTagBlockDescription(b.id, description);
+      }
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -391,17 +266,17 @@ export default function Timeline() {
   }
 
   async function deleteSelectedBlocks() {
-    const ids = [...selected];
+    const ids = [...selectedBlockIDs];
     if (ids.length === 0) return;
     const ok = window.confirm(
-      `${ids.length} Eintrag/Einträge wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.`,
+      `${ids.length} Tag-Block/Blöcke wirklich löschen?`,
     );
     if (!ok) return;
     try {
-      const removed = await api.deleteBlocks(ids);
+      const removed = await api.deleteTagBlocks(ids);
       if (removed !== ids.length) {
         setError(
-          `Es wurden nur ${removed} von ${ids.length} Einträgen gelöscht — bitte Logfile prüfen.`,
+          `Es wurden nur ${removed} von ${ids.length} Tag-Blöcken gelöscht.`,
         );
       } else {
         setError(null);
@@ -425,15 +300,9 @@ export default function Timeline() {
     try {
       const r = await api.syncDay(startOfDayUTCISO(day));
       if (!r) {
-        setSyncMessage({
-          level: "error",
-          text: "Sync fehlgeschlagen — keine Antwort vom Backend.",
-        });
+        setSyncMessage({ level: "error", text: "Sync fehlgeschlagen — keine Antwort vom Backend." });
       } else if (r.Errors && r.Errors.length > 0) {
-        setSyncMessage({
-          level: "error",
-          text: `Sync fehlgeschlagen: ${r.Errors.join("; ")}`,
-        });
+        setSyncMessage({ level: "error", text: `Sync fehlgeschlagen: ${r.Errors.join("; ")}` });
       } else if (r.Periods > 0) {
         setSyncMessage({
           level: "success",
@@ -444,30 +313,22 @@ export default function Timeline() {
       } else if (r.BlocksSkipped > 0) {
         setSyncMessage({
           level: "info",
-          text: `Nichts an Personio gesendet — alle ${r.BlocksSkipped} Block/Blöcke übersprungen. Tags müssen "Zu Personio synchronisieren" aktiviert haben (Idle- und offene Blöcke werden immer übersprungen).`,
+          text: `Nichts an Personio gesendet — alle ${r.BlocksSkipped} Block/Blöcke übersprungen.`,
         });
       } else {
-        setSyncMessage({
-          level: "info",
-          text: "Keine getaggten Blöcke für diesen Tag — bitte zuerst Blöcke taggen.",
-        });
+        setSyncMessage({ level: "info", text: "Keine getaggten Blöcke für diesen Tag." });
       }
     } catch (e) {
-      setSyncMessage({
-        level: "error",
-        text: `Sync fehlgeschlagen: ${String(e)}`,
-      });
+      setSyncMessage({ level: "error", text: `Sync fehlgeschlagen: ${String(e)}` });
     } finally {
       setSyncing(false);
       refresh();
     }
   }
 
-  const totalSec = blocks
-    .filter((b) => !b.is_idle)
-    .reduce((s, b) => s + b.duration_sec, 0);
+  const totalTaggedSec = tagBlocks.reduce((s, b) => s + b.duration_sec, 0);
 
-  // -- Strip geometry helpers (view-window aware) -------------------------
+  // -- Strip geometry helpers -----------------------------------------------
 
   const viewSpan = Math.max(1, viewEnd - viewStart);
 
@@ -475,8 +336,11 @@ export default function Timeline() {
     return clampPct((ms - viewStart) / viewSpan);
   }
 
-  function pctFromEvent(e: React.MouseEvent | MouseEvent): number {
-    const rect = stripRef.current?.getBoundingClientRect();
+  function pctFromEvent(
+    e: React.MouseEvent | MouseEvent,
+    ref: React.RefObject<HTMLDivElement | null>,
+  ): number {
+    const rect = ref.current?.getBoundingClientRect();
     if (!rect) return 0;
     return clampPct((e.clientX - rect.left) / rect.width);
   }
@@ -487,18 +351,6 @@ export default function Timeline() {
     return { start: viewStart + lo * viewSpan, end: viewStart + hi * viewSpan };
   }
 
-  function blocksInMsRange(r: MsRange): FocusBlock[] {
-    return blocks.filter((bl) => {
-      if (bl.is_idle) return false;
-      const { start, end } = blockBounds(bl);
-      return end > r.start && start < r.end;
-    });
-  }
-
-  // Snap a wall-clock ms value to the configured grid (tag_block_granularity_min)
-  // anchored at local midnight of the same day — the same anchoring the Go
-  // tracker uses, so drag-ranges land on the same boundaries (e. g. :00/:15/
-  // :30/:45 with a 15-min step). Returns ms unchanged when granularity is 0.
   function snapMsToGrid(ms: number, mode: "floor" | "ceil"): number {
     if (granularityMs <= 0) return ms;
     const d = new Date(ms);
@@ -518,18 +370,20 @@ export default function Timeline() {
     return { start, end };
   }
 
-  // -- Wheel zoom + pan ---------------------------------------------------
+  // -- Wheel zoom + pan (active on both strips) -----------------------------
 
   useEffect(() => {
-    const el = stripRef.current;
-    if (!el) return;
+    const els = [tagStripRef.current, trackStripRef.current].filter(
+      (e): e is HTMLDivElement => e !== null,
+    );
+    if (els.length === 0) return;
     function onWheel(e: WheelEvent) {
       e.preventDefault();
-      const rect = el!.getBoundingClientRect();
+      const target = e.currentTarget as HTMLDivElement;
+      const rect = target.getBoundingClientRect();
       const cursorPct = clampPct((e.clientX - rect.left) / rect.width);
       const span = viewEnd - viewStart;
       if (e.shiftKey) {
-        // Pan: 1 wheel step ≈ 10% of the visible span horizontally.
         const dx = (e.deltaY / 100) * span * 0.5;
         let ns = viewStart + dx;
         let ne = viewEnd + dx;
@@ -561,8 +415,8 @@ export default function Timeline() {
       setViewStart(ns);
       setViewEnd(ne);
     }
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    els.forEach((el) => el.addEventListener("wheel", onWheel, { passive: false }));
+    return () => els.forEach((el) => el.removeEventListener("wheel", onWheel));
   }, [viewStart, viewEnd, dayFromMs, dayToMs]);
 
   function resetZoom() {
@@ -570,11 +424,11 @@ export default function Timeline() {
     setViewEnd(dayToMs);
   }
 
-  // -- Strip mouse handlers ------------------------------------------------
+  // -- Tag-strip mouse handlers (drag to create manual range) ---------------
 
-  function onStripMouseDown(e: React.MouseEvent) {
+  function onTagStripMouseDown(e: React.MouseEvent) {
     if (e.button !== 0) return;
-    const pct = pctFromEvent(e);
+    const pct = pctFromEvent(e, tagStripRef);
     dragStartPctRef.current = pct;
     setDragRange({ a: pct, b: pct });
     setHoverRange(pctRangeToMs(pct, pct));
@@ -582,17 +436,15 @@ export default function Timeline() {
     e.preventDefault();
   }
 
-  function onStripMouseMove(e: React.MouseEvent) {
-    setCursorPctX(pctFromEvent(e));
+  function onTagStripMouseMove(e: React.MouseEvent) {
+    setCursorPctX(pctFromEvent(e, tagStripRef));
   }
 
-  function onStripMouseLeave() {
+  function onTagStripMouseLeave() {
     if (dragStartPctRef.current == null) setCursorPctX(null);
   }
 
   useEffect(() => {
-    // Convert a snapped ms-range back to dragRange's pct-form so the live
-    // overlay band tracks the grid instead of the raw mouse position.
     function snappedDragPct(startPct: number, endPct: number): { a: number; b: number } {
       if (granularityMs <= 0) return { a: startPct, b: endPct };
       const span = viewEnd - viewStart;
@@ -605,10 +457,8 @@ export default function Timeline() {
     }
     function onMove(e: MouseEvent) {
       if (dragStartPctRef.current == null) return;
-      const pct = pctFromEvent(e);
+      const pct = pctFromEvent(e, tagStripRef);
       const startPct = dragStartPctRef.current;
-      // Snap visually during drag so the user sees the grid-aligned band
-      // they're actually committing on mouseUp.
       setDragRange(snappedDragPct(startPct, pct));
       setHoverRange(snapRange(pctRangeToMs(startPct, pct)));
       setCursorPctX(pct);
@@ -616,17 +466,12 @@ export default function Timeline() {
     function onUp(e: MouseEvent) {
       if (dragStartPctRef.current == null) return;
       const startPct = dragStartPctRef.current;
-      const endPct = pctFromEvent(e);
+      const endPct = pctFromEvent(e, tagStripRef);
       dragStartPctRef.current = null;
       const moved = Math.abs(endPct - startPct) > 0.001;
-      // Snap the committed range so manually tagged spans land on the same
-      // grid the tracker uses (matches the backend's defensive snap).
       const r = snapRange(pctRangeToMs(startPct, endPct));
-      const matched = moved ? blocksInMsRange(r) : [];
       if (moved) {
-        const next = e.shiftKey ? new Set(selected) : new Set<number>();
-        for (const b of matched) next.add(b.id);
-        setSelected(next);
+        setSelectedBlockIDs(new Set());
         setSelectedRange(r);
       }
       setDragRange(null);
@@ -639,16 +484,14 @@ export default function Timeline() {
       window.removeEventListener("mouseup", onUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blocks, selected, viewStart, viewEnd, granularityMs]);
+  }, [viewStart, viewEnd, granularityMs]);
 
-  // Resize the still-untagged committed range by dragging one of its edge
-  // handles. Selection is rebuilt from the new range so the editor panel
-  // stays consistent with the visible bounds.
+  // Resize the still-uncommitted selectedRange via edge handles.
   useEffect(() => {
     function onMove(e: MouseEvent) {
       const edge = resizeEdgeRef.current;
       if (edge == null || !selectedRange) return;
-      const pct = pctFromEvent(e);
+      const pct = pctFromEvent(e, tagStripRef);
       let ms = viewStart + pct * (viewEnd - viewStart);
       ms = Math.max(dayFromMs, Math.min(dayToMs, ms));
       let start = selectedRange.start;
@@ -661,12 +504,7 @@ export default function Timeline() {
         end = t;
         resizeEdgeRef.current = edge === "start" ? "end" : "start";
       }
-      // Snap the resized range to the configured tag-block grid so edge-drag
-      // commits stay aligned with mouseUp commits and tracker-created blocks.
-      const newRange = snapRange({ start, end });
-      setSelectedRange(newRange);
-      const matched = blocksInMsRange(newRange);
-      setSelected(new Set(matched.map((b) => b.id)));
+      setSelectedRange(snapRange({ start, end }));
     }
     function onUp() {
       resizeEdgeRef.current = null;
@@ -678,45 +516,39 @@ export default function Timeline() {
       window.removeEventListener("mouseup", onUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedRange, viewStart, viewEnd, dayFromMs, dayToMs, blocks, granularityMs]);
+  }, [selectedRange, viewStart, viewEnd, dayFromMs, dayToMs, granularityMs]);
 
-  function onResizeHandleDown(
-    e: React.MouseEvent,
-    edge: "start" | "end",
-  ) {
-    // Stop the strip's drag-select from also kicking in; the handle owns this
-    // gesture from now until mouseup.
+  function onResizeHandleDown(e: React.MouseEvent, edge: "start" | "end") {
     e.stopPropagation();
     e.preventDefault();
     resizeEdgeRef.current = edge;
   }
 
-  function onSegmentMouseEnter(seg: Segment) {
-    if (dragStartPctRef.current != null) return;
-    setHoverRange({ start: seg.start, end: seg.end });
+  // -- Track strip mouse handlers (read-only hover only) -------------------
+
+  function onTrackStripMouseMove(e: React.MouseEvent) {
+    setCursorPctX(pctFromEvent(e, trackStripRef));
   }
 
-  function onSegmentMouseLeave() {
-    if (dragStartPctRef.current != null) return;
-    setHoverRange(null);
+  function onTrackStripMouseLeave() {
+    if (dragStartPctRef.current == null) setCursorPctX(null);
   }
 
-  // -- Table filtering & grouping -----------------------------------------
+  // -- Table grouping & filtering ------------------------------------------
 
-  const visibleBlocks = useMemo<FocusBlock[]>(() => {
-    if (!hoverRange) return blocks;
-    return blocks.filter((b) => {
-      const { start, end } = blockBounds(b);
+  const visibleTracks = useMemo<ProcessTrack[]>(() => {
+    if (!hoverRange) return processTracks;
+    return processTracks.filter((t) => {
+      const { start, end } = trackBounds(t);
       return end > hoverRange.start && start < hoverRange.end;
     });
-  }, [blocks, hoverRange]);
+  }, [processTracks, hoverRange]);
 
-  const visibleGroups = useMemo<BlockGroup[]>(
-    () => groupBlocksForTable(visibleBlocks),
-    [visibleBlocks],
+  const visibleTrackGroups = useMemo<TrackGroup[]>(
+    () => groupTracksForTable(visibleTracks),
+    [visibleTracks],
   );
 
-  // Visible time-axis ticks: hours falling within the current view window.
   const hourTicks = useMemo<number[]>(() => {
     const ticks: number[] = [];
     for (let h = 0; h <= 24; h++) {
@@ -726,7 +558,6 @@ export default function Timeline() {
     return ticks;
   }, [dayFromMs, viewStart, viewEnd]);
 
-  // Top-axis labels: 5 evenly-spaced timestamps across the visible window.
   const axisLabels = useMemo<string[]>(() => {
     const out: string[] = [];
     for (let i = 0; i < 5; i++) {
@@ -736,9 +567,19 @@ export default function Timeline() {
     return out;
   }, [viewStart, viewEnd]);
 
+  function toggleExpandGroup(g: TrackGroup) {
+    const key = g.trackIDs[0];
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
   // -- Render --------------------------------------------------------------
 
-  const hasSelection = selected.size > 0 || selectedRange != null;
+  const hasSelection = selectedBlockIDs.size > 0 || selectedRange != null;
   const rangeMsLabel = (r: MsRange) =>
     `${formatHHMM(new Date(r.start).toISOString())}–${formatHHMM(new Date(r.end).toISOString())}`;
   const isZoomed = viewStart > dayFromMs || viewEnd < dayToMs;
@@ -753,23 +594,19 @@ export default function Timeline() {
           className="rounded bg-surface px-2 py-1 text-sm text-slate-100"
         />
         <button
-          onClick={() =>
-            setDay((d) => new Date(d.getTime() - 24 * 3600 * 1000))
-          }
+          onClick={() => setDay((d) => new Date(d.getTime() - 24 * 3600 * 1000))}
           className="rounded bg-surface px-3 py-1 text-sm hover:bg-slate-700"
         >
           ← Vortag
         </button>
         <button
-          onClick={() =>
-            setDay((d) => new Date(d.getTime() + 24 * 3600 * 1000))
-          }
+          onClick={() => setDay((d) => new Date(d.getTime() + 24 * 3600 * 1000))}
           className="rounded bg-surface px-3 py-1 text-sm hover:bg-slate-700"
         >
           Folgetag →
         </button>
         <span className="ml-auto text-sm text-slate-400">
-          Summe: {formatDuration(totalSec)}
+          Getaggt: {formatDuration(totalTaggedSec)}
         </span>
         <button
           onClick={togglePause}
@@ -815,15 +652,15 @@ export default function Timeline() {
         </div>
       )}
 
-      {/* --- Selection / tagging panel ------------------------------------ */}
+      {/* --- Selection / tagging panel ---------------------------------- */}
       <div ref={panelRef}>
         {hasSelection && (
           <div className="space-y-2 rounded bg-surface px-3 py-3">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm text-slate-300">
-                {selected.size > 0 && (
+                {selectedBlockIDs.size > 0 && (
                   <>
-                    {selected.size} Block(s) markiert
+                    {selectedBlockIDs.size} Tag-Block/Blöcke markiert
                     {sharedTagID === "mixed" && (
                       <span className="ml-2 text-xs text-amber-300">
                         (verschiedene Tags)
@@ -834,7 +671,6 @@ export default function Timeline() {
                 {selectedRange && (
                   <span className="ml-2 text-xs text-slate-400">
                     · Bereich {rangeMsLabel(selectedRange)}
-                    {selected.size === 0 && " (ohne Programme)"}
                   </span>
                 )}
                 <span className="ml-1">→</span>
@@ -842,20 +678,13 @@ export default function Timeline() {
               {tags.map((t) => (
                 <button
                   key={t.id}
-                  onClick={() => assignTag(t.id)}
+                  onClick={() => applyTag(t.id)}
                   className="rounded px-2 py-1 text-xs text-white hover:opacity-80"
                   style={{ background: t.color ?? "#4f8cff" }}
                 >
                   {t.name}
                 </button>
               ))}
-              <button
-                onClick={() => assignTag(0)}
-                className="rounded bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600"
-                title="Tag entfernen — Platzhalterblöcke werden gelöscht"
-              >
-                Tag entfernen
-              </button>
               <button
                 onClick={clearSelection}
                 className="ml-auto rounded bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600"
@@ -867,45 +696,41 @@ export default function Timeline() {
               <textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="Tätigkeitsbeschreibung — wird allen markierten Blöcken zugewiesen"
+                placeholder="Tätigkeitsbeschreibung — wird beim Taggen mit zugewiesen"
                 rows={2}
                 className="flex-1 resize-y rounded bg-slate-900/60 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500"
               />
               <div className="flex flex-col gap-1">
                 <button
                   onClick={saveDescriptionOnly}
-                  disabled={selected.size === 0}
+                  disabled={selectedBlockIDs.size === 0}
                   className="rounded bg-accent px-3 py-1 text-xs text-white hover:bg-accent/80 disabled:opacity-50"
-                  title="Beschreibung speichern (Tag bleibt unverändert)"
+                  title="Beschreibung speichern"
                 >
                   Speichern
                 </button>
                 <button
                   onClick={deleteSelectedBlocks}
-                  disabled={selected.size === 0}
+                  disabled={selectedBlockIDs.size === 0}
                   className="rounded bg-red-700 px-3 py-1 text-xs text-white hover:bg-red-600 disabled:opacity-50"
-                  title="Markierte Einträge endgültig löschen"
                 >
                   Löschen
                 </button>
               </div>
             </div>
             <p className="text-[11px] text-slate-500">
-              „Tag wählen" speichert Tag und Beschreibung in einem Schritt;
-              „Speichern" lässt das bestehende Tagging unverändert. „Löschen"
-              entfernt die markierten Einträge dauerhaft. Bei einem gezogenen
-              Bereich ohne Programme wird beim Taggen ein Platzhalter erzeugt —
-              „Tag entfernen" löscht ihn wieder.
+              Tag wählen erstellt aus dem gezogenen Bereich einen manuellen
+              Tag-Block oder ändert das Tagging der markierten Blöcke. Ein
+              gezogener Bereich ersetzt überlappende Auto-Tag-Blöcke; eine
+              Überschneidung mit einem manuellen Tag-Block wird abgelehnt.
             </p>
           </div>
         )}
       </div>
 
-      {/* --- Timeline strip ------------------------------------------------ */}
-      <div className="rounded bg-surface px-3 py-3">
-        {/* Axis labels — overlaid by a precise time-range readout while
-            hovering a segment or dragging, so the user sees the exact span
-            being targeted before committing a tag. */}
+      {/* --- Tag-block strip (top) + Process-track strip (bottom) -------- */}
+      <div className="rounded bg-surface px-3 py-3 space-y-2">
+        {/* Axis labels with hover/cursor readout */}
         <div className="relative mb-1 flex justify-between text-[10px] text-slate-500">
           {axisLabels.map((l, i) => (
             <span key={i}>{l}</span>
@@ -920,9 +745,7 @@ export default function Timeline() {
                 return (
                   <div
                     className="pointer-events-none absolute -top-0.5 z-10 -translate-x-1/2 whitespace-nowrap rounded bg-slate-900/95 px-2 py-0.5 font-medium text-slate-100 shadow ring-1 ring-slate-700"
-                    style={{
-                      left: `${Math.max(0.06, Math.min(0.94, midPct)) * 100}%`,
-                    }}
+                    style={{ left: `${Math.max(0.06, Math.min(0.94, midPct)) * 100}%` }}
                   >
                     {formatHHMM(new Date(start).toISOString())}–
                     {formatHHMM(new Date(end).toISOString())}
@@ -936,32 +759,29 @@ export default function Timeline() {
               })()
             : cursorPctX != null &&
               (() => {
-                // No segment under the cursor — show the precise time at the
-                // cursor instead, so the user can still judge where to start a
-                // drag-select on an untagged area of the strip.
                 const ms = viewStart + cursorPctX * (viewEnd - viewStart);
                 return (
                   <div
                     className="pointer-events-none absolute -top-0.5 z-10 -translate-x-1/2 whitespace-nowrap rounded bg-slate-900/95 px-2 py-0.5 font-medium text-slate-100 shadow ring-1 ring-slate-700"
-                    style={{
-                      left: `${Math.max(0.04, Math.min(0.96, cursorPctX)) * 100}%`,
-                    }}
+                    style={{ left: `${Math.max(0.04, Math.min(0.96, cursorPctX)) * 100}%` }}
                   >
                     {formatHHMM(new Date(ms).toISOString())}
                   </div>
                 );
               })()}
         </div>
+
+        {/* Top strip: Tag blocks (drag to create manual range tag) */}
+        <div className="text-[10px] uppercase tracking-wide text-slate-500">Tags</div>
         <div
-          ref={stripRef}
-          onMouseDown={onStripMouseDown}
-          onMouseMove={onStripMouseMove}
-          onMouseLeave={onStripMouseLeave}
+          ref={tagStripRef}
+          onMouseDown={onTagStripMouseDown}
+          onMouseMove={onTagStripMouseMove}
+          onMouseLeave={onTagStripMouseLeave}
           onDoubleClick={resetZoom}
           className="relative h-10 cursor-crosshair select-none rounded bg-slate-900/60"
-          title="Zeitspanne ziehen, um Blöcke zu markieren · Mausrad: zoom · Shift+Mausrad: schwenken · Doppelklick: Reset"
+          title="Bereich ziehen, um manuell zu taggen · Mausrad: zoom · Shift+Mausrad: schwenken · Doppelklick: Reset"
         >
-          {/* Hour gridlines (only those visible in the current zoom window). */}
           {hourTicks.map((ms) => (
             <div
               key={ms}
@@ -970,77 +790,42 @@ export default function Timeline() {
             />
           ))}
 
-          {/* Idle blocks (faint) */}
-          {blocks
-            .filter((b) => b.is_idle)
-            .map((b) => {
-              const { start, end } = blockBounds(b);
-              if (end <= viewStart || start >= viewEnd) return null;
-              const left = pctOfMs(start) * 100;
-              const width = (pctOfMs(end) - pctOfMs(start)) * 100;
-              return (
-                <div
-                  key={`idle-${b.id}`}
-                  className="absolute inset-y-2 rounded bg-slate-700/40"
-                  style={{ left: `${left}%`, width: `${width}%` }}
-                  title="Idle"
-                />
-              );
-            })}
-
-          {/* Tag/program segments — color = tag color (untagged uses a stable
-              per-program hue so consecutive different programs read apart). */}
-          {segments.map((seg, i) => {
-            if (seg.end <= viewStart || seg.start >= viewEnd) return null;
-            const left = pctOfMs(seg.start) * 100;
-            const width = (pctOfMs(seg.end) - pctOfMs(seg.start)) * 100;
-            const tag = seg.tagID != null ? tagsByID[seg.tagID] : undefined;
-            const bg =
-              tag?.color ??
-              (seg.tagID == null
-                ? colorFromName(seg.processName || "untagged")
-                : UNTAGGED_COLOR);
-            const isHovered =
-              hoverRange != null &&
-              seg.end > hoverRange.start &&
-              seg.start < hoverRange.end;
-            const isSelected = seg.blockIDs.every((id) => selected.has(id));
+          {tagBlocks.map((b) => {
+            const { start, end } = tagBlockBounds(b);
+            if (end <= viewStart || start >= viewEnd) return null;
+            const left = pctOfMs(start) * 100;
+            const width = (pctOfMs(end) - pctOfMs(start)) * 100;
+            const tag = tagsByID[b.tag_id];
+            const bg = tag?.color ?? UNTAGGED_COLOR;
+            const isSelected = selectedBlockIDs.has(b.id);
             return (
               <div
-                key={`seg-${i}`}
+                key={`tb-${b.id}`}
                 onClick={(e) => {
                   e.stopPropagation();
-                  selectSegment(seg, e.shiftKey);
+                  toggleBlock(b.id, e.shiftKey);
                 }}
-                onMouseEnter={() => onSegmentMouseEnter(seg)}
-                onMouseLeave={onSegmentMouseLeave}
+                onMouseEnter={() => setHoverRange({ start, end })}
+                onMouseLeave={() => setHoverRange(null)}
                 className={`absolute top-1 bottom-1 cursor-pointer rounded transition-[outline] ${
                   isSelected
                     ? "outline outline-2 outline-white"
-                    : isHovered
-                      ? "outline outline-1 outline-white/70"
-                      : ""
-                } ${seg.tagID == null ? "opacity-70" : ""} ${
-                  seg.allPlaceholder
-                    ? "border border-dashed border-white/60"
-                    : ""
-                }`}
+                    : "hover:outline hover:outline-1 hover:outline-white/70"
+                } ${b.is_manual ? "" : "border border-dashed border-white/40"}`}
                 style={{
                   left: `${left}%`,
                   width: `${Math.max(width, 0.2)}%`,
                   background: bg,
                 }}
                 title={
-                  `${formatHHMM(new Date(seg.start).toISOString())}–${formatHHMM(new Date(seg.end).toISOString())} · ${formatDuration(Math.round((seg.end - seg.start) / 1000))}\n` +
-                  `${seg.processName || "(Platzhalter)"} · ${tag ? tag.name : "ohne Tag"}` +
-                  (seg.allPlaceholder ? " · manuelle Zeitspanne" : "") +
-                  (seg.description ? `\n${seg.description}` : "")
+                  `${formatHHMM(new Date(start).toISOString())}–${formatHHMM(new Date(end).toISOString())} · ${formatDuration(Math.round((end - start) / 1000))}\n` +
+                  `${tag ? tag.name : "?"} · ${b.is_manual ? "manuell" : "auto"}` +
+                  (b.description ? `\n${b.description}` : "")
                 }
               />
             );
           })}
 
-          {/* Active drag-range overlay */}
           {dragRange && (
             <div
               className="pointer-events-none absolute inset-y-0 rounded bg-accent/30 outline outline-1 outline-accent"
@@ -1051,9 +836,6 @@ export default function Timeline() {
             />
           )}
 
-          {/* Committed selected-range marker (after mouse-up). Edge handles
-              let the user fine-tune the bounds before tagging — once a tag is
-              assigned, `selectedRange` clears and the handles disappear. */}
           {!dragRange && selectedRange && (
             <>
               <div
@@ -1066,27 +848,68 @@ export default function Timeline() {
               <div
                 onMouseDown={(e) => onResizeHandleDown(e, "start")}
                 className="absolute inset-y-0 z-20 w-1.5 cursor-ew-resize rounded-l bg-accent hover:bg-white"
-                style={{
-                  left: `calc(${pctOfMs(selectedRange.start) * 100}% - 3px)`,
-                }}
+                style={{ left: `calc(${pctOfMs(selectedRange.start) * 100}% - 3px)` }}
                 title="Bereich-Anfang ziehen"
               />
               <div
                 onMouseDown={(e) => onResizeHandleDown(e, "end")}
                 className="absolute inset-y-0 z-20 w-1.5 cursor-ew-resize rounded-r bg-accent hover:bg-white"
-                style={{
-                  left: `calc(${pctOfMs(selectedRange.end) * 100}% - 3px)`,
-                }}
+                style={{ left: `calc(${pctOfMs(selectedRange.end) * 100}% - 3px)` }}
                 title="Bereich-Ende ziehen"
               />
             </>
           )}
         </div>
+
+        {/* Bottom strip: Process tracks (read-only) */}
+        <div className="text-[10px] uppercase tracking-wide text-slate-500">Prozesse</div>
+        <div
+          ref={trackStripRef}
+          onMouseMove={onTrackStripMouseMove}
+          onMouseLeave={onTrackStripMouseLeave}
+          onDoubleClick={resetZoom}
+          className="relative h-8 select-none rounded bg-slate-900/60"
+          title="Aufgezeichnete Prozesse · Mausrad zoomt, Shift+Mausrad schwenkt"
+        >
+          {hourTicks.map((ms) => (
+            <div
+              key={`pt-tick-${ms}`}
+              className="absolute inset-y-0 w-px bg-slate-700/40"
+              style={{ left: `${pctOfMs(ms) * 100}%` }}
+            />
+          ))}
+
+          {processTracks.map((t) => {
+            const { start, end } = trackBounds(t);
+            if (end <= viewStart || start >= viewEnd) return null;
+            const left = pctOfMs(start) * 100;
+            const width = (pctOfMs(end) - pctOfMs(start)) * 100;
+            const bg = t.is_idle ? "#1f2937" : colorFromName(t.process_name || "?");
+            return (
+              <div
+                key={`pt-${t.id}`}
+                onMouseEnter={() => setHoverRange({ start, end })}
+                onMouseLeave={() => setHoverRange(null)}
+                className={`absolute inset-y-1 rounded ${t.is_idle ? "opacity-50" : "opacity-80"}`}
+                style={{
+                  left: `${left}%`,
+                  width: `${Math.max(width, 0.2)}%`,
+                  background: bg,
+                }}
+                title={
+                  `${formatHHMM(new Date(start).toISOString())}–${formatHHMM(new Date(end).toISOString())} · ${formatDuration(t.duration_sec)}\n` +
+                  `${t.is_idle ? "Idle" : t.process_name}` +
+                  (t.window_title ? `\n${t.window_title}` : "")
+                }
+              />
+            );
+          })}
+        </div>
+
         <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
           <span>
-            Tipp: Zeitspanne ziehen, um zu markieren · Hover gruppiert gleiche
-            Programme automatisch · Mausrad zoomt, Shift+Mausrad schwenkt,
-            Doppelklick setzt zurück.
+            Top: Tag-Blöcke (manuell + auto). Bottom: Prozesse (nur Anzeige).
+            Mausrad zoomt, Shift+Mausrad schwenkt, Doppelklick setzt zurück.
           </span>
           {isZoomed && (
             <button
@@ -1099,76 +922,48 @@ export default function Timeline() {
         </div>
       </div>
 
-      {/* --- Block list (table view) -------------------------------------- */}
-      <ul className="divide-y divide-slate-700 rounded bg-surface">
-        {visibleGroups.length === 0 && (
-          <li className="px-3 py-6 text-center text-sm text-slate-400">
-            {hoverRange
-              ? "Keine Programme im markierten Zeitraum."
-              : "Keine Blöcke an diesem Tag."}
-          </li>
-        )}
-        {visibleGroups.map((g) => {
-          const tag = g.tagID != null ? tagsByID[g.tagID] : undefined;
-          const parentTag =
-            tag && tag.parent_id != null ? tagsByID[tag.parent_id] : undefined;
-          const isSel = g.blockIDs.every((id) => selected.has(id));
-          const startISO = new Date(g.startMs).toISOString();
-          const endISO = new Date(g.endMs).toISOString();
-          const expandable = g.blockIDs.length > 1;
-          const expanded = expandable && expandedGroups.has(g.blockIDs[0]);
-          return (
-            <Fragment key={g.blockIDs[0]}>
+      {/* --- Tag-block table -------------------------------------------- */}
+      <div>
+        <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">
+          Tag-Blöcke
+        </div>
+        <ul className="divide-y divide-slate-700 rounded bg-surface">
+          {tagBlocks.length === 0 && (
+            <li className="px-3 py-6 text-center text-sm text-slate-400">
+              Keine Tag-Blöcke an diesem Tag.
+            </li>
+          )}
+          {tagBlocks.map((b) => {
+            const tag = tagsByID[b.tag_id];
+            const parentTag = tag?.parent_id != null ? tagsByID[tag.parent_id] : undefined;
+            const isSel = selectedBlockIDs.has(b.id);
+            const { start, end } = tagBlockBounds(b);
+            const startISO = new Date(start).toISOString();
+            const endISO = new Date(end).toISOString();
+            return (
               <li
-                onClick={(e) => toggleGroup(g, e.shiftKey)}
+                key={`tb-row-${b.id}`}
+                onClick={(e) => toggleBlock(b.id, e.shiftKey)}
                 className={`cursor-pointer px-3 py-2 text-sm transition-colors ${
                   isSel ? "bg-accent/20" : "hover:bg-slate-700/40"
-                } ${g.isIdle ? "opacity-50" : ""} ${
-                  g.isPlaceholder ? "italic" : ""
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (expandable) toggleExpandGroup(g);
-                    }}
-                    aria-label={expanded ? "Einklappen" : "Ausklappen"}
-                    className={`w-3 text-[10px] text-slate-500 ${
-                      expandable
-                        ? "cursor-pointer hover:text-slate-300"
-                        : "invisible"
-                    }`}
-                    tabIndex={expandable ? 0 : -1}
-                  >
-                    {expanded ? "▾" : "▸"}
-                  </button>
                   <span className="w-24 font-mono text-xs text-slate-400">
                     {formatHHMM(startISO)}–{formatHHMM(endISO)}
                   </span>
                   <span className="w-16 text-xs text-slate-500">
-                    {formatDuration(g.durationSec)}
+                    {formatDuration(b.duration_sec)}
                   </span>
-                  <span className="w-40 truncate text-slate-300">
-                    {g.isPlaceholder ? "(Manueller Eintrag)" : g.processName}
+                  <span className="w-20 text-xs text-slate-500">
+                    {b.is_manual ? "manuell" : "auto"}
                   </span>
-                  <span className="flex-1 truncate text-slate-400">
-                    {g.isPlaceholder ? "—" : g.windowTitle}
-                  </span>
-                  {expandable && (
-                    <span className="text-[10px] text-slate-500">
-                      ×{g.blockIDs.length}
+                  {b.description && (
+                    <span className="flex-1 truncate text-xs italic text-slate-500" title={b.description}>
+                      📝 {b.description}
                     </span>
                   )}
-                  {g.description && (
-                    <span
-                      className="max-w-[20%] truncate text-xs italic text-slate-500"
-                      title={g.description}
-                    >
-                      📝 {g.description}
-                    </span>
-                  )}
+                  {!b.description && <span className="flex-1" />}
                   {parentTag && (
                     <span
                       className="rounded px-2 py-0.5 text-xs"
@@ -1183,47 +978,90 @@ export default function Timeline() {
                       style={{ background: tag.color ?? "#4f8cff" }}
                     >
                       {tag.name}
-                      {g.autoTagged ? " ⚙" : ""}
                     </span>
                   )}
                 </div>
               </li>
-              {expanded &&
-                g.members.map((m) => {
-                  const mb = blockBounds(m);
-                  const childSel = selected.has(m.id);
-                  return (
-                    <li
-                      key={`m-${m.id}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleSingleBlock(m.id);
+            );
+          })}
+        </ul>
+      </div>
+
+      {/* --- Process-track table ---------------------------------------- */}
+      <div>
+        <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">
+          Prozesse {hoverRange && "(im markierten Zeitraum)"}
+        </div>
+        <ul className="divide-y divide-slate-700 rounded bg-surface">
+          {visibleTrackGroups.length === 0 && (
+            <li className="px-3 py-6 text-center text-sm text-slate-400">
+              {hoverRange ? "Keine Prozesse im markierten Zeitraum." : "Keine Prozessdaten."}
+            </li>
+          )}
+          {visibleTrackGroups.map((g) => {
+            const expandable = g.trackIDs.length > 1;
+            const expanded = expandable && expandedGroups.has(g.trackIDs[0]);
+            const startISO = new Date(g.startMs).toISOString();
+            const endISO = new Date(g.endMs).toISOString();
+            return (
+              <Fragment key={g.trackIDs[0]}>
+                <li
+                  className={`px-3 py-2 text-sm ${g.isIdle ? "opacity-50" : ""}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (expandable) toggleExpandGroup(g);
                       }}
-                      className={`cursor-pointer px-3 py-1 pl-12 text-xs transition-colors ${
-                        childSel
-                          ? "bg-accent/10"
-                          : "bg-slate-900/40 hover:bg-slate-700/30"
+                      aria-label={expanded ? "Einklappen" : "Ausklappen"}
+                      className={`w-3 text-[10px] text-slate-500 ${
+                        expandable ? "cursor-pointer hover:text-slate-300" : "invisible"
                       }`}
+                      tabIndex={expandable ? 0 : -1}
                     >
-                      <div className="flex items-center gap-3">
-                        <span className="w-24 font-mono text-[11px] text-slate-500">
-                          {formatHHMM(new Date(mb.start).toISOString())}–
-                          {formatHHMM(new Date(mb.end).toISOString())}
-                        </span>
-                        <span className="w-16 text-[11px] text-slate-600">
-                          {formatDuration(m.duration_sec)}
-                        </span>
-                        <span className="flex-1 truncate text-slate-400">
-                          {m.window_title || "—"}
-                        </span>
-                      </div>
-                    </li>
-                  );
-                })}
-            </Fragment>
-          );
-        })}
-      </ul>
+                      {expanded ? "▾" : "▸"}
+                    </button>
+                    <span className="w-24 font-mono text-xs text-slate-400">
+                      {formatHHMM(startISO)}–{formatHHMM(endISO)}
+                    </span>
+                    <span className="w-16 text-xs text-slate-500">
+                      {formatDuration(g.durationSec)}
+                    </span>
+                    <span className="w-40 truncate text-slate-300">
+                      {g.processName || "—"}
+                    </span>
+                    <span className="flex-1 truncate text-slate-400">{g.windowTitle}</span>
+                    {expandable && (
+                      <span className="text-[10px] text-slate-500">×{g.trackIDs.length}</span>
+                    )}
+                  </div>
+                </li>
+                {expanded &&
+                  g.members.map((m) => {
+                    const mb = trackBounds(m);
+                    return (
+                      <li key={`m-${m.id}`} className="px-3 py-1 pl-12 text-xs bg-slate-900/40">
+                        <div className="flex items-center gap-3">
+                          <span className="w-24 font-mono text-[11px] text-slate-500">
+                            {formatHHMM(new Date(mb.start).toISOString())}–
+                            {formatHHMM(new Date(mb.end).toISOString())}
+                          </span>
+                          <span className="w-16 text-[11px] text-slate-600">
+                            {formatDuration(m.duration_sec)}
+                          </span>
+                          <span className="flex-1 truncate text-slate-400">
+                            {m.window_title || "—"}
+                          </span>
+                        </div>
+                      </li>
+                    );
+                  })}
+              </Fragment>
+            );
+          })}
+        </ul>
+      </div>
     </div>
   );
 }

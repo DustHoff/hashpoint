@@ -1,26 +1,24 @@
 # Zeitachse & Zeiterfassung
 
-Der Tab **Zeitachse** ist die zentrale Arbeitsfläche im Alltag. Hier sehen Sie alle erfassten Blöcke eines Tages, taggen sie und stoßen die Personio-Synchronisation an.
+Der Tab **Zeitachse** ist die zentrale Arbeitsfläche im Alltag. Hier sehen Sie zwei übereinander liegende Zeitstrahlen — oben die **Tag-Blöcke** (manuell und automatisch vergeben), unten die **Prozessaktivität** (was Sie tatsächlich auf dem Bildschirm hatten) — und können beides taggen, korrigieren oder an Personio übertragen.
 
 ## Wie wird erfasst?
 
-Die Erfassung läuft automatisch im Hintergrund:
+Die Erfassung ist in zwei Schichten unterteilt, die unabhängig voneinander gepflegt werden:
 
-- Alle paar Sekunden (Standard: 2 s) prüft der TimeTracker, welches Fenster im Vordergrund ist.
-- Wechselt das aktive Fenster (anderer Prozess oder anderer Fenstertitel), wird der bisherige **Fokus-Block** geschlossen und ein neuer geöffnet.
-- Erfasst werden: Prozessname (z. B. `chrome.exe`), Prozesspfad, Fenstertitel, Start- und Endzeit (UTC).
-- Erkennt das System eine längere Idle-Phase (Standard: 5 Minuten ohne Tastatur-/Maus-Eingabe), wird der laufende Block beendet und als **Idle** markiert.
-- Bildschirmsperre oder Logout schließen den aktuellen Block sofort.
-- Stürzt die Anwendung ab, wird beim nächsten Start ein offen gebliebener Block automatisch sauber abgeschlossen.
+- **Process-Tracks** (rohe Fokus-Daten): Alle paar Sekunden (Standard: 2 s) prüft der TimeTracker, welches Fenster im Vordergrund ist. Wechselt das Fenster, wird der bisherige Track geschlossen und ein neuer geöffnet. Diese Schicht kennt **keine** Granularität — die Zeiten sind sekundengenau.
+- **Tag-Blöcke** (Tagging-Spannen): Auf einer separaten Ebene werden Tag-Blöcke gepflegt, entweder automatisch durch Auto-Tagging-Regeln oder manuell. Tag-Blöcke snappen auf das eingestellte Granularitätsraster (`:00/:15/:30/:45` bei `15`). Sie sind die Quelle für den Personio-Sync.
+
+Idle-Erkennung, Bildschirmsperre und Crash-Recovery wirken auf der Process-Track-Ebene; offene manuelle Tag-Blöcke werden beim nächsten Start automatisch geschlossen.
 
 ## Aufbau des Tabs
 
-Der Tab ist dreigeteilt:
+Der Tab besteht aus:
 
 1. **Kopfbereich** – Datum, Pause/Sync.
-2. **Zeitstrahl-Streifen** – horizontaler 24-Stunden-Strip mit allen Blöcken.
-3. **Tabellenliste** – jeder Block einzeln mit Prozess, Titel, Tag und
-   Beschreibung.
+2. **Zwei Zeitstrahl-Streifen** – oben die Tag-Blöcke, unten die Process-Tracks. Beide teilen sich Zoom und Scroll.
+3. **Tag-Block-Tabelle** – ein Eintrag pro Tag-Block (manuell oder auto), mit Beschreibung und Tag-Chips.
+4. **Process-Track-Tabelle** – gruppiert die rohen Fokus-Events nach Programm.
 
 ### Kopfbereich
 
@@ -29,144 +27,90 @@ Der Tab ist dreigeteilt:
 | **Datums-Eingabe** | Datum wählen (klicken oder `YYYY-MM-DD` eingeben). |
 | **← Vortag** | Springt einen Tag zurück. |
 | **Folgetag →** | Springt einen Tag vor. |
-| **Summe: X h Y m** | Summe der erfassten Zeit (ohne Idle-Blöcke). |
+| **Getaggt: X h Y m** | Summe der getaggten Zeit (Summe aller Tag-Blöcke). |
 | **Pausieren / Fortsetzen** | Hält die Erfassung an oder setzt sie fort. |
-| **Sync zu Personio** | Überträgt den aktuellen Tag an Personio. Während der Übertragung steht *Synchronisiere…*. |
+| **Sync zu Personio** | Überträgt die Tag-Blöcke des aktuellen Tages an Personio. Während der Übertragung steht *Synchronisiere…*. |
 
 ### Zeitstrahl-Streifen
 
-Direkt unter dem Kopfbereich liegt ein horizontaler **Zeitstrahl** vom Tagesanfang
-(00:00) bis Tagesende (24:00):
+Direkt unter dem Kopfbereich liegen zwei horizontale Streifen vom Tagesanfang (00:00) bis Tagesende (24:00):
 
-- **Tag-Segmente:** Direkt aufeinanderfolgende Blöcke mit dem **gleichen Tag**
-  werden zu einem zusammenhängenden farbigen Segment in der Tag-Farbe verschmolzen.
-- **Idle-Blöcke** erscheinen als blasser, ausgegrauter Streifen.
-- **Ungetaggte Blöcke** werden grau dargestellt.
-- **Stundenraster:** feine Trennlinien alle 60 Minuten, Beschriftung 00 / 06 / 12 / 18 / 24.
-- **Zeit-Anzeige beim Hover/Drag:** Über dem Strip blendet sich beim
-  Überfahren eines Segments oder beim Aufziehen eines Bereichs eine kleine
-  Zeit-Box ein (`HH:MM–HH:MM · Dauer`). Auf leeren Strip-Bereichen zeigt sie
-  die exakte Uhrzeit unter dem Cursor — praktisch, um einen Drag punktgenau
-  zu starten.
+#### Top-Strip — Tags
 
-#### Selektion via Strip
+- **Tag-Blöcke** werden in der Tag-Farbe als farbige Balken dargestellt.
+- **Auto-Tag-Blöcke** haben eine **gestrichelte Umrandung**, manuelle Tag-Blöcke sind ohne Umrandung.
+- **Stundenraster:** feine Trennlinien alle 60 Minuten.
+- **Drag (linke Maustaste):** Zieht eine Zeitspanne auf. Die Auswahl snappt live auf das Granularitätsraster.
+- **Klick auf einen Tag-Block:** Selektiert den Block (Shift = additiv).
+- **Hover:** Filtert die Process-Tabelle auf den Zeitraum des Blocks.
+
+#### Bottom-Strip — Prozesse
+
+- **Read-only**: zeigt die rohen Fokus-Events des Trackers.
+- **Idle-Bereiche** erscheinen blass und ausgegraut.
+- Jeder Prozessname bekommt eine deterministische Farbe, damit aufeinanderfolgende verschiedene Programme visuell trennbar sind.
+- **Hover** filtert die Process-Tabelle auf den Zeitraum des Tracks.
+
+#### Zoom & Pan
 
 | Geste | Wirkung |
 | --- | --- |
-| **Klick auf ein Tag-Segment** | Selektiert alle Blöcke des Segments. |
-| **Shift+Klick auf ein Segment** | Erweitert die bestehende Auswahl additiv. |
-| **Drag (linke Maustaste)** | Zieht eine Zeitspanne auf. Beim Loslassen werden alle Blöcke, die diesen Bereich schneiden, ausgewählt. Liegt der Bereich (teilweise) auf nicht-erfasster Zeit, wird beim Taggen automatisch ein **Platzhalter-Block** erzeugt, der die Lücke füllt — sinnvoll für Tätigkeiten ohne Bildschirmkontakt (Meetings, Telefonate). |
-| **Shift+Drag** | Wie Drag, aber additiv zur bestehenden Auswahl. |
-| **Drag-Range an den Kanten ziehen** | Die Auswahl-Markierung lässt sich nachträglich an den blauen Kanten greifen und in der Breite verändern. So passen Sie die getaggte Zeitspanne präzise an, ohne neu zu ziehen. |
+| **Mausrad** | Zoomt cursor-anchored in beide Strips gleichzeitig. |
+| **Shift + Mausrad** | Schwenkt horizontal. |
+| **Doppelklick** | Setzt Zoom auf den ganzen Tag zurück. |
 
-Der aktive Auswahlbereich wird während des Ziehens als blaues Overlay
-hervorgehoben.
+### Tag-Block-Tabelle
 
-#### Hover-Highlight
+Pro Eintrag:
 
-Beim **Mouse-Over auf ein Tag-Segment** werden in der darunterliegenden
-Tabelle die zugehörigen Programmzeilen farblich hervorgehoben. So sehen Sie auf
-einen Blick, welche konkreten Programme zu einem Tag-Block gehören – auch wenn
-mehrere Anwendungen (z. B. IDE, Browser, Terminal) ineinandergreifen.
+- **Zeitraum** `HH:MM–HH:MM`
+- **Dauer** `X m Y s`
+- **manuell|auto** — markiert die Herkunft
+- **Beschreibung** (sofern vergeben, mit 📝 abgekürzt)
+- **Tag-Chip** (bei Sub-Tags zusätzlich der Eltern-Tag-Chip)
 
-### Block-Liste
+Klick toggelt die Selektion (Shift = additiv).
 
-Jeder Eintrag in der Liste fasst aufeinanderfolgende Blöcke mit gleichem
-Programm, Tag und gleicher Beschreibung zu einer Zeile zusammen. Sie zeigt:
+### Process-Track-Tabelle
 
-- **Zeitraum:** `HH:MM–HH:MM` (oder nur Startzeit bei laufendem Block)
-- **Dauer:** `X m Y s` (Summe der zusammengefassten Blöcke)
-- **Prozessname:** z. B. `code.exe`. Bei Manual-Tag-Blöcken steht hier
-  *(Manueller Eintrag)* in kursiv.
-- **Fenstertitel:** abgeschnitten, vollständig im Tooltip
-- **Beschreibung:** sofern vergeben, mit Stift-Symbol 📝 abgekürzt eingeblendet
-- **Tag:** Farb-Chip mit Tag-Name. Bei Sub-Tags wird zusätzlich der Eltern-Tag
-  als Chip daneben dargestellt. **⚙** kennzeichnet automatisch zugewiesene Tags.
-- **Gruppen aufklappen:** Klick auf den kleinen Pfeil in der zusammengefassten
-  Zeile zeigt jeden einzelnen ursprünglichen Fenstertitel — nützlich, wenn
-  man lange Browser-Sitzungen mit vielen Tabs nachvollziehen will.
-- **Idle-Blöcke:** abgeblendet (50 % Deckkraft)
-- **Hover aus dem Strip:** wird die zugehörige Zeile leicht hervorgehoben
+Aufeinanderfolgende Tracks mit gleichem Programm werden zu einer Zeile zusammengefasst. Der Pfeil-Button expandiert die Gruppe und zeigt jeden ursprünglichen Fenstertitel — nützlich, um lange Browser-Sitzungen mit vielen Tabs nachzuvollziehen.
 
-Die Zeitachse aktualisiert sich automatisch alle 5 Sekunden, solange der Tab geöffnet ist.
+Diese Tabelle ist read-only — Process-Tracks repräsentieren die Realität und können nicht editiert werden. Korrekturen passieren auf der Tag-Block-Ebene.
 
-## Blöcke taggen
+## Tag-Blöcke anlegen oder ändern
 
-1. Auswahl treffen – wahlweise:
-   - In der Tabelle einen Block anklicken (Shift-Klick = Bereich)
-   - Im Strip ein Tag-Segment klicken (Shift-Klick = additiv)
-   - Im Strip mit der Maus eine Zeitspanne ziehen (Shift-Drag = additiv) —
-     auch über nicht erfasste Bereiche hinweg
-2. Sobald mindestens ein Block oder ein Bereich markiert ist, erscheint das
-   Panel *„N Block(s) markiert →"* mit den verfügbaren Tags und einem
-   Textfeld für die **Tätigkeitsbeschreibung**. Bei einem reinen
-   Zeitbereich ohne Programme steht zusätzlich „· Bereich HH:MM–HH:MM
-   (ohne Programme)" im Header.
-3. Optional eine Beschreibung tippen.
-4. Auf einen Tag-Button klicken → Tag **und** Beschreibung werden in einem
-   Schritt allen markierten Blöcken zugewiesen. Liegt die Auswahl auf
-   nicht erfasster Zeit, wird ein Platzhalter-Block erzeugt, der die Lücke
-   füllt und mit dem gewählten Tag versehen wird (so entsteht ein
-   zusammenhängender Sync-Eintrag in Personio).
-5. Soll nur die Beschreibung geändert werden, ohne den Tag anzufassen,
-   die Beschreibung tippen und **Speichern** klicken.
-6. **Tag entfernen** → entfernt das Tagging der ausgewählten Blöcke (die
-   Beschreibung bleibt erhalten). Reine Platzhalter-Blöcke werden dabei
-   gelöscht.
-7. **Löschen** → entfernt die markierten Blöcke endgültig aus der
-   Datenbank. Wird vor allem genutzt, um versehentlich erfasste oder
-   irrelevante Einträge zu bereinigen.
-8. **Auswahl aufheben** → leert die Markierung.
+### Manuelle Range über Drag
 
-> Manuell vergebene Tags überschreiben Auto-Tags und werden bei späterem Lauf der Auto-Tagging-Engine **nicht** überschrieben.
+1. Im Top-Strip mit der Maus eine Zeitspanne aufziehen. Die Auswahl snappt auf das Granularitätsraster (sichtbar als blaues Overlay).
+2. Optional die Kanten der Range mit den Greifern fein nachziehen.
+3. Im Auswahl-Panel optional eine Beschreibung eingeben.
+4. Auf einen Tag-Button klicken → ein **manueller** Tag-Block entsteht.
+   - Überlappende Auto-Tag-Blöcke werden automatisch getrimmt, gesplittet oder gelöscht (Manual gewinnt).
+   - Überlappung mit einem bestehenden manuellen Tag-Block wird abgelehnt — den Konflikt-Block zuerst löschen oder ändern.
+
+### Bestehende Tag-Blöcke nachbearbeiten
+
+1. Im Top-Strip oder in der Tag-Block-Tabelle den/die Block(s) anklicken.
+2. Im Auswahl-Panel:
+   - **Tag-Button** ändert den Tag (und schreibt die Beschreibung).
+   - **Speichern** ändert nur die Beschreibung.
+   - **Löschen** entfernt die ausgewählten Tag-Blöcke endgültig (Process-Tracks bleiben unberührt).
+   - **Auswahl aufheben** leert die Markierung.
 
 ### Tätigkeitsbeschreibung
 
-Jeder Block kann zusätzlich zum Tag eine freie Tätigkeitsbeschreibung tragen
-(z. B. „Refactoring Login-Flow", „Code-Review PR #123"). Die typische Anwendung
-ist ein zusammenhängender Tag-Block, der mehrere Programme umfasst — IDE,
-Browser, Terminal — und bei dem Sie der Gesamttätigkeit einen einzelnen
-Beschreibungstext geben möchten:
+Jeder Tag-Block kann eine freie Tätigkeitsbeschreibung tragen (z. B. „Refactoring Login-Flow", „Code-Review PR #123"). Die Beschreibung wird beim Personio-Sync an den aus den Tag-Namen erzeugten Kommentar angehängt:
 
-1. Auf dem Strip das Tag-Segment anklicken oder die Zeitspanne aufziehen.
-2. Im Auswahlpanel die Beschreibung tippen.
-3. **Tag-Button** drücken (überschreibt Tag + Beschreibung) oder
-   **Speichern** (lässt vorhandenes Tagging unverändert, schreibt nur die
-   Beschreibung).
+`#projekta #frontend Refactoring Login-Flow — Login-Bug aus Ticket #123`
 
-Bei der Personio-Synchronisation wird die Beschreibung an den aus den
-Tag-Namen erzeugten Kommentar angehängt:
-`#projekta #frontend Refactoring Login-Flow — Login-Bug aus Ticket #123`.
+Bei einem **offenen** manuellen Tag (siehe [Systemtray](tray.md)) wird die beim Start hinterlegte Beschreibung auch nach einer Auto-Tag-Unterbrechung erneut in den fortgesetzten manuellen Block übernommen.
 
 ## Pause & Fortsetzen
 
-- **Pausieren:** Schließt den aktuell laufenden Block sofort und beendet die
-  Hintergrund-Erfassung. Während der Pause werden keine neuen Programm-Blöcke
-  geöffnet und auch keine Auto-Tagging-Regeln ausgeführt.
-- **Fortsetzen:** Aktiviert die Erfassung wieder. Der nächste Fensterwechsel
-  öffnet einen neuen Block.
+- **Pausieren:** Schließt den aktuellen Process-Track sofort und beendet die Hintergrund-Erfassung. Während der Pause öffnen sich keine neuen Process-Tracks und keine Auto-Tag-Blöcke. Ein offener manueller Tag-Block bleibt unangetastet — er gilt weiter, bis Sie ihn explizit stoppen oder die Erfassung wieder läuft.
+- **Fortsetzen:** Aktiviert die Erfassung wieder. Der nächste Fensterwechsel öffnet einen neuen Process-Track; passende Auto-Tag-Regeln greifen wieder.
 
-Pausieren ist nützlich, wenn Sie an etwas Privatem oder nicht erfasswürdigem
-arbeiten. Der Status lässt sich auch über das Tray-Menü („Pause Tracking")
-oder die Einstellungen umschalten und wird persistiert — nach einem Neustart
-bleibt die letzte Wahl erhalten.
-
-> **Manuelles Tagging über das Tray-Submenü** funktioniert in beiden
-> Zuständen (siehe [Systemtray](tray.md)). Bei aktiver Erfassung erbt jeder
-> neu erfasste Programm-Block den manuellen Tag; bei pausierter Erfassung
-> bleibt nur der Platzhalter-Block der manuellen Sitzung.
-
-## Bestehende Blöcke korrigieren
-
-Über die Backend-Schnittstelle stehen folgende Operationen bereit (in der UI werden Sie unter „Bearbeiten"-Aktionen am Block sichtbar):
-
-- **Block teilen** – Splittet einen Block an einer beliebigen Uhrzeit in zwei separate Blöcke. Praktisch, wenn ein Auto-Tag-Wechsel innerhalb eines langen Blocks gewünscht ist.
-- **Block bearbeiten** – Ändern von Startzeit, Endzeit und Fenstertitel.
-- **Block löschen** – Entfernt den Block komplett. Eine Wiederherstellung ist nicht möglich.
-
-> Nicht editierbar sind Prozessname, Dauer (wird automatisch berechnet) und der Idle-Status. Diese Felder werden ausschließlich von der Erfassung gesetzt.
-
-> **Überlappungen sind nicht erlaubt:** Eine Bearbeitung, die einen Block in den Zeitbereich eines anderen schiebt, wird mit dem Hinweis „Block überschneidet einen bestehenden Block" (intern `storage: focus block overlaps existing block`) abgelehnt. Personio würde überlappende Arbeitszeiten serverseitig zurückweisen, daher verhindert die App das bereits beim Speichern. Vor dem Vergrößern eines Blocks daher zuerst den Nachbarn entsprechend verkleinern oder löschen.
+Pausieren ist nützlich, wenn Sie an etwas Privatem oder nicht erfasswürdigem arbeiten. Der Status lässt sich auch über das Tray-Menü („Pause Tracking") oder die Einstellungen umschalten und wird persistiert — nach einem Neustart bleibt die letzte Wahl erhalten.
 
 ## Fehlerbanner
 
@@ -175,5 +119,6 @@ Schlägt eine Aktion fehl (z. B. Sync mit Personio), erscheint im Tab ein rotes 
 - Personio-Zugangsdaten unvollständig oder ungültig
 - Keine Internet-Verbindung
 - Tag ohne gültige Personio-Projekt-/Aktivitäts-ID
+- Versuch, einen manuellen Range-Tag auf einem bestehenden manuellen Block anzulegen (Konflikt)
 
 Details siehe [Personio-Synchronisation](personio.md).

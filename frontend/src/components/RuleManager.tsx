@@ -19,7 +19,7 @@ export default function RuleManager() {
   const [testDay, setTestDay] = useState(new Date());
   const [testResult, setTestResult] = useState<
     Array<{
-      block_id: number;
+      track_id: number;
       process_name: string;
       window_title: string;
       matched: boolean;
@@ -76,15 +76,6 @@ export default function RuleManager() {
     }
   }
 
-  async function applyHistory(id: number) {
-    try {
-      const n = await api.applyRuleToHistory(id);
-      alert(`${n} Blöcke nachträglich getaggt`);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr,420px]">
       <div>
@@ -111,12 +102,6 @@ export default function RuleManager() {
                     className="ml-auto text-xs text-accent hover:underline"
                   >
                     Bearbeiten
-                  </button>
-                  <button
-                    onClick={() => applyHistory(r.id)}
-                    className="text-xs text-emerald-400 hover:underline"
-                  >
-                    Auf Historie anwenden
                   </button>
                   <button
                     onClick={() => remove(r.id)}
@@ -245,7 +230,7 @@ export default function RuleManager() {
             <ul className="mt-2 max-h-48 overflow-auto rounded bg-bg text-xs">
               {testResult.map((r) => (
                 <li
-                  key={r.block_id}
+                  key={r.track_id}
                   className={`flex gap-2 px-2 py-1 ${
                     r.matched ? "text-emerald-300" : "text-slate-500"
                   }`}
