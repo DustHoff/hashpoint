@@ -61,6 +61,7 @@ export interface TrackingConfig {
   poll_interval_sec: number;
   idle_threshold_min: number;
   enabled: boolean;
+  tag_block_granularity_min: number;
 }
 
 export interface PersonioConfig {

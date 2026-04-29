@@ -10,7 +10,7 @@ nötig.
 
 Der Tab ist in drei Abschnitte unterteilt:
 
-1. **Erfassung** — Polling-Intervall und Idle-Schwelle.
+1. **Erfassung** — globaler Erfassungs-Schalter, Polling-Intervall, Idle-Schwelle und Tag-Block-Granularität.
 2. **Oberfläche** — Autostart-Schalter.
 3. **Personio** — Tenant-Subdomain und interaktive Anmeldung.
 

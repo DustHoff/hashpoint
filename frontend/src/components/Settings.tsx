@@ -4,7 +4,12 @@ import { log } from "../lib/log";
 import type { AppConfig, PersonioStatus } from "../types";
 
 const emptyConfig: AppConfig = {
-  tracking: { poll_interval_sec: 2, idle_threshold_min: 5, enabled: true },
+  tracking: {
+    poll_interval_sec: 2,
+    idle_threshold_min: 5,
+    enabled: true,
+    tag_block_granularity_min: 0,
+  },
   personio: { tenant: "" },
   ui: { autostart: true },
 };
@@ -19,6 +24,9 @@ function normalize(c: Partial<AppConfig> | null | undefined): AppConfig {
       idle_threshold_min:
         c?.tracking?.idle_threshold_min ?? emptyConfig.tracking.idle_threshold_min,
       enabled: c?.tracking?.enabled ?? emptyConfig.tracking.enabled,
+      tag_block_granularity_min:
+        c?.tracking?.tag_block_granularity_min ??
+        emptyConfig.tracking.tag_block_granularity_min,
     },
     personio: { tenant: c?.personio?.tenant ?? "" },
     ui: { autostart: c?.ui?.autostart ?? emptyConfig.ui.autostart },
@@ -164,6 +172,24 @@ export default function Settings() {
               update("tracking", {
                 ...config.tracking,
                 idle_threshold_min: Number(e.target.value),
+              })
+            }
+            className="w-24 rounded bg-slate-900/60 px-2 py-1 text-sm"
+          />
+        </Field>
+        <Field
+          label="Tag-Block-Granularität (Minuten)"
+          help="Slot-Raster für Tag-Blöcke und Personio-Sync, verankert an lokaler Mitternacht. Start wird abgerundet, Ende aufgerundet — eine angefangene Periode zählt als voller Slot. 0 = aus, typischer Wert 15. Greift ab dem nächsten Block-Boundary."
+        >
+          <input
+            type="number"
+            min={0}
+            max={60}
+            value={config.tracking.tag_block_granularity_min}
+            onChange={(e) =>
+              update("tracking", {
+                ...config.tracking,
+                tag_block_granularity_min: Number(e.target.value),
               })
             }
             className="w-24 rounded bg-slate-900/60 px-2 py-1 text-sm"
