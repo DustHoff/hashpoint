@@ -591,11 +591,26 @@ export default function Timeline() {
   }
 
   useEffect(() => {
+    // Convert a snapped ms-range back to dragRange's pct-form so the live
+    // overlay band tracks the grid instead of the raw mouse position.
+    function snappedDragPct(startPct: number, endPct: number): { a: number; b: number } {
+      if (granularityMs <= 0) return { a: startPct, b: endPct };
+      const span = viewEnd - viewStart;
+      if (span <= 0) return { a: startPct, b: endPct };
+      const r = snapRange(pctRangeToMs(startPct, endPct));
+      return {
+        a: (r.start - viewStart) / span,
+        b: (r.end - viewStart) / span,
+      };
+    }
     function onMove(e: MouseEvent) {
       if (dragStartPctRef.current == null) return;
       const pct = pctFromEvent(e);
-      setDragRange({ a: dragStartPctRef.current, b: pct });
-      setHoverRange(pctRangeToMs(dragStartPctRef.current, pct));
+      const startPct = dragStartPctRef.current;
+      // Snap visually during drag so the user sees the grid-aligned band
+      // they're actually committing on mouseUp.
+      setDragRange(snappedDragPct(startPct, pct));
+      setHoverRange(snapRange(pctRangeToMs(startPct, pct)));
       setCursorPctX(pct);
     }
     function onUp(e: MouseEvent) {
@@ -624,7 +639,7 @@ export default function Timeline() {
       window.removeEventListener("mouseup", onUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blocks, selected, viewStart, viewEnd]);
+  }, [blocks, selected, viewStart, viewEnd, granularityMs]);
 
   // Resize the still-untagged committed range by dragging one of its edge
   // handles. Selection is rebuilt from the new range so the editor panel
@@ -663,7 +678,7 @@ export default function Timeline() {
       window.removeEventListener("mouseup", onUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedRange, viewStart, viewEnd, dayFromMs, dayToMs, blocks]);
+  }, [selectedRange, viewStart, viewEnd, dayFromMs, dayToMs, blocks, granularityMs]);
 
   function onResizeHandleDown(
     e: React.MouseEvent,
