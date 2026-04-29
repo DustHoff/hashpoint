@@ -252,17 +252,50 @@ func (a *App) AssignTagAndDescription(blockIDs []int64, tagID int64, description
 		}
 		rs = rs.UTC()
 		re = re.UTC()
+		// Snap the drag-range to the configured tag-block grid so resulting
+		// placeholder blocks line up with tracker-created blocks (and with
+		// what the strip visualizes after the snap on the frontend).
+		a.mu.Lock()
+		cfg := a.cfg
+		a.mu.Unlock()
+		if cfg != nil {
+			rs = cfg.Tracking.SnapStart(rs).UTC()
+			re = cfg.Tracking.SnapEnd(re).UTC()
+		}
 		if re.After(rs) {
+			// covers must include EVERY block intersecting [rs, re), not just
+			// the selected ones — otherwise a placeholder fill for a "gap"
+			// would collide with an unselected real block and the storage
+			// layer would refuse the whole Open with ErrOverlap.
+			seen := make(map[int64]struct{})
 			covers := make([]storage.FocusBlock, 0, len(blockIDs))
+			addCover := func(b *storage.FocusBlock) {
+				if b == nil || b.IsIdle || b.EndTime == nil {
+					return
+				}
+				if _, dup := seen[b.ID]; dup {
+					return
+				}
+				seen[b.ID] = struct{}{}
+				covers = append(covers, *b)
+			}
+			// Pull selected blocks first — those may start before rs (range
+			// drags often anchor on an existing block) and ListBetween's
+			// start_time >= rs filter would miss them.
 			for _, id := range blockIDs {
 				b, err := a.deps.Blocks.Get(a.ctx, id)
 				if err != nil {
 					return fmt.Errorf("get block %d: %w", id, err)
 				}
-				if b == nil || b.IsIdle || b.EndTime == nil {
-					continue
-				}
-				covers = append(covers, *b)
+				addCover(b)
+			}
+			// Add every other block whose start falls inside [rs, re).
+			between, err := a.deps.Blocks.ListBetween(a.ctx, rs, re)
+			if err != nil {
+				return fmt.Errorf("list blocks in range: %w", err)
+			}
+			for i := range between {
+				addCover(&between[i])
 			}
 			sort.Slice(covers, func(i, j int) bool {
 				return covers[i].StartTime.Before(covers[j].StartTime)
@@ -279,6 +312,17 @@ func (a *App) AssignTagAndDescription(blockIDs []int64, tagID int64, description
 					Description:   descPtr,
 				}
 				if err := a.deps.Blocks.Open(a.ctx, ph); err != nil {
+					// Defense in depth: a stray block we didn't see in covers
+					// (e.g. opened by the tracker between the read and the
+					// write) shouldn't sink the whole tag assignment. Log,
+					// skip the placeholder, keep going.
+					if errors.Is(err, storage.ErrOverlap) {
+						a.logger.Warn("skipping placeholder: overlaps existing block",
+							"start", gap.start.Format(time.RFC3339),
+							"end", gap.end.Format(time.RFC3339),
+							"err", err)
+						continue
+					}
 					return fmt.Errorf("create placeholder block: %w", err)
 				}
 			}

@@ -157,6 +157,10 @@ export default function Timeline() {
   const [day, setDay] = useState<Date>(new Date());
   const [blocks, setBlocks] = useState<FocusBlock[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
+  // Tag-block grid step in ms — mirrors tracking.tag_block_granularity_min.
+  // Drag-range commits (mouseUp + edge resize) snap to this grid so manually
+  // tagged ranges line up with tracker-created blocks.
+  const [granularityMs, setGranularityMs] = useState<number>(0);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   // Active hover range — used to filter the table to apps within it.
   const [hoverRange, setHoverRange] = useState<MsRange | null>(null);
@@ -246,14 +250,18 @@ export default function Timeline() {
 
   async function refresh() {
     try {
-      const [b, t, p] = await Promise.all([
+      const [b, t, p, cfg] = await Promise.all([
         api.blocksByDay(startOfDayUTCISO(day)),
         api.listTags(),
         api.isTrackingPaused(),
+        api.getConfig(),
       ]);
       setBlocks(b ?? []);
       setTags(t ?? []);
       setPaused(p);
+      setGranularityMs(
+        Math.max(0, cfg?.tracking?.tag_block_granularity_min ?? 0) * 60_000,
+      );
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -487,6 +495,29 @@ export default function Timeline() {
     });
   }
 
+  // Snap a wall-clock ms value to the configured grid (tag_block_granularity_min)
+  // anchored at local midnight of the same day — the same anchoring the Go
+  // tracker uses, so drag-ranges land on the same boundaries (e. g. :00/:15/
+  // :30/:45 with a 15-min step). Returns ms unchanged when granularity is 0.
+  function snapMsToGrid(ms: number, mode: "floor" | "ceil"): number {
+    if (granularityMs <= 0) return ms;
+    const d = new Date(ms);
+    const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const delta = ms - midnight;
+    const remainder = delta % granularityMs;
+    if (remainder === 0) return ms;
+    if (mode === "floor") return midnight + (delta - remainder);
+    return midnight + (delta - remainder + granularityMs);
+  }
+
+  function snapRange(r: MsRange): MsRange {
+    if (granularityMs <= 0) return r;
+    const start = snapMsToGrid(r.start, "floor");
+    let end = snapMsToGrid(r.end, "ceil");
+    if (end <= start) end = start + granularityMs;
+    return { start, end };
+  }
+
   // -- Wheel zoom + pan ---------------------------------------------------
 
   useEffect(() => {
@@ -573,7 +604,9 @@ export default function Timeline() {
       const endPct = pctFromEvent(e);
       dragStartPctRef.current = null;
       const moved = Math.abs(endPct - startPct) > 0.001;
-      const r = pctRangeToMs(startPct, endPct);
+      // Snap the committed range so manually tagged spans land on the same
+      // grid the tracker uses (matches the backend's defensive snap).
+      const r = snapRange(pctRangeToMs(startPct, endPct));
       const matched = moved ? blocksInMsRange(r) : [];
       if (moved) {
         const next = e.shiftKey ? new Set(selected) : new Set<number>();
@@ -613,7 +646,9 @@ export default function Timeline() {
         end = t;
         resizeEdgeRef.current = edge === "start" ? "end" : "start";
       }
-      const newRange = { start, end };
+      // Snap the resized range to the configured tag-block grid so edge-drag
+      // commits stay aligned with mouseUp commits and tracker-created blocks.
+      const newRange = snapRange({ start, end });
       setSelectedRange(newRange);
       const matched = blocksInMsRange(newRange);
       setSelected(new Set(matched.map((b) => b.id)));

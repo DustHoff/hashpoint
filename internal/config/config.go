@@ -88,6 +88,35 @@ func (t TrackingConfig) TagBlockGranularity() time.Duration {
 	return time.Duration(t.TagBlockGranularityMin) * time.Minute
 }
 
+// SnapStart returns the largest grid boundary <= ts with the rounding step
+// (TagBlockGranularity) anchored at local midnight — the inverse of SnapEnd.
+// Returns ts unchanged when granularity is 0.
+func (t TrackingConfig) SnapStart(ts time.Time) time.Time {
+	step := t.TagBlockGranularity()
+	if step <= 0 {
+		return ts
+	}
+	local := ts.Local()
+	midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, local.Location())
+	delta := local.Sub(midnight)
+	return midnight.Add(delta - (delta % step))
+}
+
+// SnapEnd returns the smallest grid boundary >= ts with the rounding step
+// (TagBlockGranularity) anchored at local midnight. Returns ts unchanged when
+// granularity is 0 or ts already sits on the grid.
+func (t TrackingConfig) SnapEnd(ts time.Time) time.Time {
+	step := t.TagBlockGranularity()
+	if step <= 0 {
+		return ts
+	}
+	floor := t.SnapStart(ts)
+	if floor.Equal(ts) {
+		return ts
+	}
+	return floor.Add(step)
+}
+
 // AppURL returns the Personio web app URL for the configured tenant. Returns
 // the empty string when no tenant is configured yet.
 func (p PersonioConfig) AppURL() string {
