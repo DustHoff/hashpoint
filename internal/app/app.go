@@ -109,6 +109,21 @@ func (a *App) ShowWindow() {
 	wailsruntime.WindowUnminimise(ctx)
 }
 
+// Quit triggers a graceful Wails shutdown so OnShutdown runs (closing open
+// blocks and flushing today's sync to Personio). Returns false when Wails
+// has not finished Startup yet — in that case the caller must fall back to
+// cancelling the root context directly.
+func (a *App) Quit() bool {
+	a.mu.Lock()
+	ctx, ready := a.ctx, a.started
+	a.mu.Unlock()
+	if !ready || ctx == nil {
+		return false
+	}
+	wailsruntime.Quit(ctx)
+	return true
+}
+
 // Version returns build metadata.
 func (a *App) Version() VersionInfo { return a.deps.Version }
 

@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	hashpoint "github.com/onesi/hashpoint"
 	"github.com/onesi/hashpoint/internal/app"
@@ -170,12 +171,16 @@ func run() error {
 		}
 	}()
 
-	// OS signals → graceful shutdown.
+	// OS signals → graceful shutdown via Wails so OnShutdown's flush-and-sync
+	// runs. If Wails has not finished Startup yet, fall back to cancelling
+	// the root context directly.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		cancel()
+		if !a.Quit() {
+			cancel()
+		}
 	}()
 
 	// Tray runs on Windows only (no-op on other GOOS via build tag).
@@ -192,9 +197,58 @@ func run() error {
 		OnStartup:        a.Startup,
 		OnShutdown: func(c context.Context) {
 			a.Shutdown(c)
+			flushAndSyncOnShutdown(trk, sessionStore, syncerFor, slog.Default())
 			cancel()
 		},
 		HideWindowOnClose: true,
 		Bind:              []any{a},
 	})
+}
+
+// flushAndSyncOnShutdown closes any currently open process track and tag
+// blocks via the tracker's Pause path, then pushes today's (local-day) tag
+// blocks to Personio. Bounded by a hard timeout so shutdown never hangs.
+// Skips silently when no Personio session is configured.
+func flushAndSyncOnShutdown(
+	trk *tracker.Tracker,
+	sessions personio.SessionStore,
+	syncerFor func(*personio.Session) *personio.Syncer,
+	logger *slog.Logger,
+) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if trk != nil {
+		// Closes the open process track and triggers OnFocusCleared, which
+		// in turn closes any open auto/manual tag block at a snapped time.
+		trk.Pause(ctx)
+	}
+
+	if sessions == nil || syncerFor == nil {
+		return
+	}
+	sess, err := sessions.Get()
+	if err != nil || sess == nil {
+		logger.Info("shutdown sync: no Personio session — skipping")
+		return
+	}
+	syncer := syncerFor(sess)
+	if syncer == nil {
+		logger.Info("shutdown sync: syncer unavailable — skipping")
+		return
+	}
+
+	now := time.Now()
+	from := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	to := from.Add(24 * time.Hour)
+	res, err := syncer.SyncRange(ctx, from, to)
+	if err != nil {
+		logger.Warn("shutdown sync failed", "err", err)
+		return
+	}
+	logger.Info("shutdown sync done",
+		"periods", res.Periods,
+		"blocks", res.BlocksProcessed,
+		"skipped", res.BlocksSkipped,
+		"errors", len(res.Errors))
 }

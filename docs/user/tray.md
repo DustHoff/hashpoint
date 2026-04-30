@@ -29,7 +29,7 @@ Per **Rechtsklick** auf das Tray-Icon öffnet sich das Menü:
 | **Manueller Tag** *(Submenü)* | Startet oder beendet eine offene manuelle Tag-Sitzung. Siehe Abschnitt **Manuelles Tagging**. |
 | **Autostart** *(Checkbox)* | Aktiviert/deaktiviert den automatischen Start beim Windows-Login. Schreibt/entfernt den entsprechenden Registry-Eintrag. |
 | **Über (Hashpoint <version>)** | Loggt Versionsinformationen. (Kein Dialog – Details siehe Tab **Über** im Hauptfenster.) |
-| **Beenden** | Schließt das Programm vollständig. Offene Process-Tracks werden vorher sauber beendet. |
+| **Beenden** | Schließt das Programm vollständig. Offene Process-Tracks und Tag-Blöcke werden vorher sauber beendet, und die Tag-Blöcke des heutigen Tages werden automatisch ein letztes Mal an Personio synchronisiert (siehe Abschnitt **Sync beim Beenden**). |
 
 ## Manuelles Tagging
 
@@ -81,7 +81,30 @@ Falls beim Beenden des Programms eine offene manuelle Sitzung nicht gestoppt wur
 | --- | --- | --- |
 | Hauptfenster schließen (X) | Läuft weiter | Bleibt im Tray |
 | **Pause Tracking** | Pausiert Process-Tracking + Auto-Tags | Bleibt im Tray |
-| **Beenden** | Pausiert + offener Track geschlossen | Anwendung wird vollständig beendet |
+| **Beenden** | Offene Tracks + Tag-Blöcke werden geschlossen, heutiger Tag wird ein letztes Mal an Personio synchronisiert | Anwendung wird vollständig beendet |
+
+## Sync beim Beenden
+
+Klicken Sie im Tray-Menü auf **Beenden**, läuft kurz vor dem Schließen
+automatisch ein Sync des **heutigen Tages** an Personio:
+
+1. Der laufende Process-Track wird beendet, und alle noch offenen
+   Auto-/Manuell-Tag-Blöcke werden auf das Granularitätsraster
+   geschlossen — exakt so, als hätten Sie zuvor *Pause Tracking* gewählt.
+2. Anschließend werden die heute getaggten Blöcke übertragen, genau wie
+   beim manuellen *Sync zu Personio*. Die Übertragung ist auf 15 s gedeckelt;
+   gibt es Netz- oder Personio-Probleme, wird der Sync abgebrochen und
+   die App fährt trotzdem herunter.
+3. Ist (noch) keine Personio-Sitzung hinterlegt, wird der Sync
+   **stillschweigend übersprungen**. Beenden klappt also auch ohne
+   eingerichtetes Personio.
+
+> Der Sync greift nur beim regulären **Beenden** (Tray-Menü, Strg+C in
+> der Konsole, geordnetes Service-Stop). Wird der Prozess hart beendet
+> (Task-Manager *„Task beenden"*, Stromausfall, Blue-Screen), kann kein
+> Code mehr laufen — beim nächsten Start schließt der TimeTracker die
+> dangling Blöcke automatisch, der Sync muss dann aber manuell
+> ausgelöst werden.
 
 ## Wenn das Tray-Icon fehlt
 

@@ -115,8 +115,13 @@ func onTrayReady(ctx context.Context, a *app.App, version string) {
 		case <-mAbout.ClickedCh:
 			slog.Info("about clicked", "version", version)
 		case <-mQuit.ClickedCh:
-			systray.Quit()
-			os.Exit(0)
+			// Route through Wails OnShutdown so today's tag blocks get
+			// flushed and synced to Personio before the process exits.
+			if !a.Quit() {
+				systray.Quit()
+				os.Exit(0)
+			}
+			return
 		}
 	}
 }

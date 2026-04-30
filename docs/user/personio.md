@@ -75,19 +75,25 @@ Einstellungen zu wechseln.
 
 ## Synchronisation auslösen
 
-Der eigentliche Sync funktioniert wie zuvor:
+Es gibt drei Wege, einen Sync auszulösen:
 
-1. Tab **Zeitachse** öffnen, Datum wählen.
-2. Auf **Sync zu Personio** klicken (oder im Tray-Menü
-   **Sync zu Personio (heute)**).
-3. Der TimeTracker holt zunächst das **Timesheet** für den/die gewählten
-   Tag(e) (`GET /svc/attendance-bff/v1/timesheet/{employee_id}`), gruppiert
-   die getaggten Blöcke pro Tag und Personio-Projekt-ID, und schreibt pro Tag
-   ein `PUT /svc/attendance-api/v1/days/{day_id}?autoFix=true&usedInTimesheet=true`
-   mit den Perioden. Hat ein Tag noch keinen Personio-Datensatz, generiert
-   der Client eine UUID und legt den Tag damit an (Upsert).
-4. Die Antwort wird im Banner unter der Zeitachse angezeigt:
-   `Periode(n): X, Blöcke verarbeitet: Y, Blöcke übersprungen: Z`.
+- **Manuell aus der Zeitachse:** Tab **Zeitachse** öffnen, Datum wählen, auf
+  **Sync zu Personio** klicken. Banner unter der Zeitachse zeigt das Ergebnis:
+  `Periode(n): X, Blöcke verarbeitet: Y, Blöcke übersprungen: Z`.
+- **Aus dem Tray-Menü:** **Sync zu Personio (heute)** synchronisiert den
+  heutigen Tag, ohne dass das Hauptfenster offen sein muss.
+- **Automatisch beim Beenden:** Wenn Sie die Anwendung über das Tray-Menü
+  **Beenden** schließen (oder Windows die App geordnet beendet), wird der
+  heutige Tag noch einmal automatisch synchronisiert. Details und
+  Einschränkungen siehe [Systemtray → Sync beim Beenden](tray.md#sync-beim-beenden).
+
+In allen drei Fällen läuft technisch derselbe Ablauf: der TimeTracker holt
+zunächst das **Timesheet** für den/die gewählten Tag(e)
+(`GET /svc/attendance-bff/v1/timesheet/{employee_id}`), gruppiert die
+getaggten Blöcke pro Tag und Personio-Projekt-ID, und schreibt pro Tag
+ein `PUT /svc/attendance-api/v1/days/{day_id}?autoFix=true&usedInTimesheet=true`
+mit den Perioden. Hat ein Tag noch keinen Personio-Datensatz, generiert
+der Client eine UUID und legt den Tag damit an (Upsert).
 
 ## Was wird übertragen?
 
