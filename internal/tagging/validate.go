@@ -35,3 +35,36 @@ func NormalizeName(raw string) (string, error) {
 
 // IsValidName reports whether the given (already-normalized) name is valid.
 func IsValidName(s string) bool { return nameRegex.MatchString(s) }
+
+// MaxRuleDescriptionLength caps the optional rule description so it stays
+// reasonable for inline display and the Personio comment.
+const MaxRuleDescriptionLength = 250
+
+// ErrRuleDescriptionTooLong is returned when the rule description exceeds
+// MaxRuleDescriptionLength runes.
+var ErrRuleDescriptionTooLong = errors.New("rule description exceeds 250 characters")
+
+// NormalizeRuleDescription trims surrounding whitespace and validates the
+// rule description. Returns nil for empty/whitespace-only input (treated as
+// "no description") and an error if the trimmed value exceeds 250 runes.
+func NormalizeRuleDescription(raw *string) (*string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if utf8RuneCount(trimmed) > MaxRuleDescriptionLength {
+		return nil, ErrRuleDescriptionTooLong
+	}
+	return &trimmed, nil
+}
+
+func utf8RuneCount(s string) int {
+	n := 0
+	for range s {
+		n++
+	}
+	return n
+}

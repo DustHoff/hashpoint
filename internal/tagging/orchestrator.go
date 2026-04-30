@@ -421,10 +421,17 @@ func (o *Orchestrator) closeAuto(ctx context.Context, snappedEnd time.Time) {
 }
 
 func (o *Orchestrator) startAuto(ctx context.Context, rule storage.Rule, snappedStart time.Time) {
+	var dptr *string
+	if rule.Description != nil {
+		if d := strings.TrimSpace(*rule.Description); d != "" {
+			dptr = &d
+		}
+	}
 	block := &storage.TagBlock{
-		TagID:     rule.TagID,
-		StartTime: snappedStart,
-		IsManual:  false,
+		TagID:       rule.TagID,
+		Description: dptr,
+		StartTime:   snappedStart,
+		IsManual:    false,
 	}
 	if err := o.blocks.Open(ctx, block); err != nil {
 		o.logger.Warn("open auto failed", "rule_id", rule.ID, "err", err)

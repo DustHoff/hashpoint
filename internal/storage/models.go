@@ -93,13 +93,19 @@ const (
 )
 
 // Rule is an auto-tagging rule.
+//
+// Description, when non-empty, is copied verbatim onto the
+// tag_blocks.description of every auto-tag block opened by this rule.
+// It is appended to the Personio comment via the standard comment
+// pipeline (see §2.5.3).
 type Rule struct {
-	ID         int64      `json:"id"`
-	MatchField MatchField `json:"match_field"`
-	MatchType  MatchType  `json:"match_type"`
-	Pattern    string     `json:"pattern"`
-	TagID      int64      `json:"tag_id"`
-	Priority   int        `json:"priority"`
-	Enabled    bool       `json:"enabled"`
-	CreatedAt  time.Time  `json:"created_at"`
+	ID          int64      `json:"id"`
+	MatchField  MatchField `json:"match_field"`
+	MatchType   MatchType  `json:"match_type"`
+	Pattern     string     `json:"pattern"`
+	TagID       int64      `json:"tag_id"`
+	Description *string    `json:"description,omitempty"`
+	Priority    int        `json:"priority"`
+	Enabled     bool       `json:"enabled"`
+	CreatedAt   time.Time  `json:"created_at"`
 }

@@ -7,9 +7,12 @@ const empty: Partial<Rule> = {
   match_field: "process_name",
   match_type: "contains",
   pattern: "",
+  description: "",
   priority: 0,
   enabled: true,
 };
+
+const MAX_DESCRIPTION = 250;
 
 export default function RuleManager() {
   const [rules, setRules] = useState<Rule[]>([]);
@@ -52,8 +55,14 @@ export default function RuleManager() {
         setError("Bitte Ziel-Tag wählen");
         return;
       }
-      if (draft.id) await api.updateRule(draft as Rule);
-      else await api.createRule(draft);
+      const desc = (draft.description ?? "").trim();
+      if (desc.length > MAX_DESCRIPTION) {
+        setError(`Beschreibung darf max. ${MAX_DESCRIPTION} Zeichen haben`);
+        return;
+      }
+      const payload: Partial<Rule> = { ...draft, description: desc || undefined };
+      if (payload.id) await api.updateRule(payload as Rule);
+      else await api.createRule(payload);
       setDraft(empty);
       refresh();
     } catch (e) {
@@ -65,6 +74,15 @@ export default function RuleManager() {
     if (!confirm("Regel löschen?")) return;
     await api.deleteRule(id);
     refresh();
+  }
+
+  async function toggleEnabled(rule: Rule, next: boolean) {
+    try {
+      await api.updateRule({ ...rule, enabled: next });
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    }
   }
 
   async function test() {
@@ -89,17 +107,31 @@ export default function RuleManager() {
                   <span className="font-mono text-xs text-slate-400">
                     P{r.priority}
                   </span>
-                  <span className="text-slate-300">
+                  <span className={r.enabled ? "text-slate-300" : "text-slate-500"}>
                     {r.match_field} {r.match_type}{" "}
                     <code className="rounded bg-bg px-1">{r.pattern}</code> →{" "}
                     {tag ? tag.name : `tag ${r.tag_id}`}
                   </span>
-                  {!r.enabled && (
-                    <span className="text-xs text-amber-400">deaktiviert</span>
-                  )}
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={r.enabled}
+                    aria-label={r.enabled ? "Regel deaktivieren" : "Regel aktivieren"}
+                    title={r.enabled ? "Regel deaktivieren" : "Regel aktivieren"}
+                    onClick={() => toggleEnabled(r, !r.enabled)}
+                    className={`ml-auto inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors ${
+                      r.enabled ? "bg-accent" : "bg-slate-600"
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        r.enabled ? "translate-x-4" : "translate-x-0.5"
+                      }`}
+                    />
+                  </button>
                   <button
                     onClick={() => setDraft(r)}
-                    className="ml-auto text-xs text-accent hover:underline"
+                    className="text-xs text-accent hover:underline"
                   >
                     Bearbeiten
                   </button>
@@ -110,6 +142,14 @@ export default function RuleManager() {
                     Löschen
                   </button>
                 </div>
+                {r.description && (
+                  <div
+                    className="ml-6 mt-1 truncate text-xs text-slate-400"
+                    title={r.description}
+                  >
+                    Beschreibung: {r.description}
+                  </div>
+                )}
               </li>
             );
           })}
@@ -173,6 +213,29 @@ export default function RuleManager() {
             ))}
           </select>
         </label>
+        <label className="block text-xs text-slate-400">
+          <div className="flex items-baseline justify-between">
+            <span>Beschreibung (optional)</span>
+            <span
+              className={
+                (draft.description ?? "").length > MAX_DESCRIPTION
+                  ? "text-red-400"
+                  : "text-slate-500"
+              }
+            >
+              {(draft.description ?? "").length}/{MAX_DESCRIPTION}
+            </span>
+          </div>
+          <input
+            value={draft.description ?? ""}
+            maxLength={MAX_DESCRIPTION}
+            placeholder="Wird in Auto-Tag-Blöcke übernommen"
+            onChange={(e) =>
+              setDraft({ ...draft, description: e.target.value })
+            }
+            className="mt-1 w-full rounded bg-bg px-2 py-1 text-sm"
+          />
+        </label>
         <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
           <label>
             Priorität
@@ -228,18 +291,29 @@ export default function RuleManager() {
           </div>
           {testResult.length > 0 && (
             <ul className="mt-2 max-h-48 overflow-auto rounded bg-bg text-xs">
-              {testResult.map((r) => (
-                <li
-                  key={r.track_id}
-                  className={`flex gap-2 px-2 py-1 ${
-                    r.matched ? "text-emerald-300" : "text-slate-500"
-                  }`}
-                >
-                  <span className="w-3">{r.matched ? "✓" : "·"}</span>
-                  <span className="w-32 truncate">{r.process_name}</span>
-                  <span className="flex-1 truncate">{r.window_title}</span>
-                </li>
-              ))}
+              {testResult.map((r) => {
+                const desc = (draft.description ?? "").trim();
+                return (
+                  <li
+                    key={r.track_id}
+                    className={`flex gap-2 px-2 py-1 ${
+                      r.matched ? "text-emerald-300" : "text-slate-500"
+                    }`}
+                  >
+                    <span className="w-3">{r.matched ? "✓" : "·"}</span>
+                    <span className="w-32 truncate">{r.process_name}</span>
+                    <span className="flex-1 truncate">{r.window_title}</span>
+                    {r.matched && desc && (
+                      <span
+                        className="ml-2 truncate text-slate-400"
+                        title={desc}
+                      >
+                        → „{desc}"
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>

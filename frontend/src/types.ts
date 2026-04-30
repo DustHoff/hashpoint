@@ -45,6 +45,7 @@ export interface Rule {
   match_type: MatchType;
   pattern: string;
   tag_id: number;
+  description?: string;
   priority: number;
   enabled: boolean;
   created_at: string;

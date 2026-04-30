@@ -299,6 +299,11 @@ func (a *App) CreateRule(r storage.Rule) (*storage.Rule, error) {
 	if err := tagging.ValidatePattern(r.MatchType, r.Pattern); err != nil {
 		return nil, err
 	}
+	desc, err := tagging.NormalizeRuleDescription(r.Description)
+	if err != nil {
+		return nil, err
+	}
+	r.Description = desc
 	if err := a.deps.Rules.Create(a.ctx, &r); err != nil {
 		return nil, err
 	}
@@ -310,6 +315,11 @@ func (a *App) UpdateRule(r storage.Rule) error {
 	if err := tagging.ValidatePattern(r.MatchType, r.Pattern); err != nil {
 		return err
 	}
+	desc, err := tagging.NormalizeRuleDescription(r.Description)
+	if err != nil {
+		return err
+	}
+	r.Description = desc
 	return a.deps.Rules.Update(a.ctx, &r)
 }
 

@@ -123,6 +123,41 @@ func TestAutoTagOpensAndCloses(t *testing.T) {
 	}
 }
 
+// TestAutoTagInheritsRuleDescription: a rule with a non-empty description
+// copies it onto the auto-tag block. Manual blocks paused by the auto run
+// keep their original description (verified by the interruption test).
+func TestAutoTagInheritsRuleDescription(t *testing.T) {
+	e := newOrchEnv(t, 5*time.Minute)
+
+	desc := "Recherche"
+	descRule := storage.Rule{
+		MatchField:  storage.MatchProcessName,
+		MatchType:   storage.MatchContains,
+		Pattern:     "editor",
+		TagID:       e.tagCode,
+		Description: &desc,
+		Priority:    20,
+		Enabled:     true,
+	}
+	if err := e.rules.Create(e.ctx, &descRule); err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+
+	at1 := time.Date(2026, 4, 29, 10, 3, 0, 0, time.UTC) // floors to 10:00
+	e.orch.OnFocusChanged(e.ctx, "editor.exe", "main.go", at1)
+
+	at2 := time.Date(2026, 4, 29, 10, 8, 0, 0, time.UTC) // floors to 10:05
+	e.orch.OnFocusChanged(e.ctx, "shell.exe", "bash", at2)
+
+	bs := e.listTagBlocks()
+	if len(bs) != 1 {
+		t.Fatalf("expected 1 block, got %d: %+v", len(bs), bs)
+	}
+	if bs[0].Description == nil || *bs[0].Description != desc {
+		t.Fatalf("description: want %q, got %v", desc, bs[0].Description)
+	}
+}
+
 // TestZeroLengthAutoTagSuppressed: a sub-granularity match produces no block.
 func TestZeroLengthAutoTagSuppressed(t *testing.T) {
 	e := newOrchEnv(t, 5*time.Minute)

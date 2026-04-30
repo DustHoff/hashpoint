@@ -18,15 +18,15 @@ func NewRuleRepo(db *sql.DB) *RuleRepo {
 }
 
 const (
-	ruleColumns = `id, match_field, match_type, pattern, tag_id, priority, enabled, created_at`
+	ruleColumns = `id, match_field, match_type, pattern, tag_id, description, priority, enabled, created_at`
 
 	insertRule = `INSERT INTO tagging_rules (
-		match_field, match_type, pattern, tag_id, priority, enabled
-	) VALUES (?, ?, ?, ?, ?, ?)`
+		match_field, match_type, pattern, tag_id, description, priority, enabled
+	) VALUES (?, ?, ?, ?, ?, ?, ?)`
 
 	updateRuleSQL = `UPDATE tagging_rules SET
 		match_field = ?, match_type = ?, pattern = ?, tag_id = ?,
-		priority = ?, enabled = ?
+		description = ?, priority = ?, enabled = ?
 		WHERE id = ?`
 
 	deleteRuleSQL = `DELETE FROM tagging_rules WHERE id = ?`
@@ -43,6 +43,7 @@ func (r *RuleRepo) Create(ctx context.Context, rule *Rule) error {
 		string(rule.MatchType),
 		rule.Pattern,
 		rule.TagID,
+		nullableStringPtr(rule.Description),
 		rule.Priority,
 		boolToInt(rule.Enabled),
 	)
@@ -68,6 +69,7 @@ func (r *RuleRepo) Update(ctx context.Context, rule *Rule) error {
 		string(rule.MatchType),
 		rule.Pattern,
 		rule.TagID,
+		nullableStringPtr(rule.Description),
 		rule.Priority,
 		boolToInt(rule.Enabled),
 		rule.ID,
@@ -122,12 +124,14 @@ func scanRule(row *sql.Row) (*Rule, error) {
 	var rule Rule
 	var enabled int64
 	var matchField, matchType string
+	var description sql.NullString
 	if err := row.Scan(&rule.ID, &matchField, &matchType, &rule.Pattern,
-		&rule.TagID, &rule.Priority, &enabled, &rule.CreatedAt); err != nil {
+		&rule.TagID, &description, &rule.Priority, &enabled, &rule.CreatedAt); err != nil {
 		return nil, err
 	}
 	rule.MatchField = MatchField(matchField)
 	rule.MatchType = MatchType(matchType)
+	rule.Description = nsToString(description)
 	rule.Enabled = enabled != 0
 	rule.CreatedAt = rule.CreatedAt.UTC()
 	return &rule, nil
@@ -137,12 +141,14 @@ func scanRuleRows(rows *sql.Rows) (*Rule, error) {
 	var rule Rule
 	var enabled int64
 	var matchField, matchType string
+	var description sql.NullString
 	if err := rows.Scan(&rule.ID, &matchField, &matchType, &rule.Pattern,
-		&rule.TagID, &rule.Priority, &enabled, &rule.CreatedAt); err != nil {
+		&rule.TagID, &description, &rule.Priority, &enabled, &rule.CreatedAt); err != nil {
 		return nil, err
 	}
 	rule.MatchField = MatchField(matchField)
 	rule.MatchType = MatchType(matchType)
+	rule.Description = nsToString(description)
 	rule.Enabled = enabled != 0
 	rule.CreatedAt = rule.CreatedAt.UTC()
 	return &rule, nil

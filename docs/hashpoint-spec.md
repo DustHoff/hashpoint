@@ -124,8 +124,14 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
   - `match_type`: `contains` | `equals` | `regex`
   - `pattern`: Suchstring/Regex
   - `tag_id`: Ziel-Tag (Parent oder Sub)
+  - `description`: optionaler Freitext (max. 250 Zeichen). Wird beim
+    Öffnen eines Auto-Tag-Blocks als `tag_blocks.description` übernommen
+    und damit per §2.5.3 in den Personio-Comment angehängt. Whitespace-
+    only wird als „keine Description" behandelt (`NULL` in der DB).
   - `priority`: Integer; höhere Priorität gewinnt bei Mehrfach-Match
-  - `enabled`: bool
+  - `enabled`: bool (Default `true`). Deaktivierte Regeln werden im
+    Matching ignoriert; Toggling ist im Regel-Listeneintrag direkt per
+    Schalter möglich (UI feuert `UpdateRule` ohne Speichern-Klick).
 - **Lebenszyklus:**
   1. Tracker meldet `OnFocusChanged(name, title, at)`.
   2. Orchestrator prüft Regeln in Priorität-DESC-Reihenfolge.
@@ -133,8 +139,13 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
      offen, wird er weitergeführt. Sonst wird ein offener Auto-Block der
      anderen Regel geschlossen (Floor-Snap auf Granularität, siehe §2.4.3)
      und ein neuer Auto-Block für die treffende Regel geöffnet (Floor-Snap
-     auf Granularität).
+     auf Granularität, mit `description` aus der Regel falls gesetzt).
   4. Trifft keine Regel: ein offener Auto-Block wird geschlossen.
+- **Auto-Description vs. manuelle Sitzung:** Bei einer Auto-Tag-
+  Unterbrechung (§2.4.2) erhält der **Auto-Block** die Description aus
+  der Regel; der pausierte manuelle Block behält seine ursprüngliche
+  Description und nimmt sie beim Wiederanlauf (§2.4.2 Schritt 6) erneut
+  in den fortgesetzten manuellen Block.
 - **Regex-Engine:** Go-Standardbibliothek `regexp` (RE2-Syntax) — kein
   Backtracking, lineare Laufzeit. Ungültige Patterns werden beim Speichern
   via `regexp.Compile` validiert und abgelehnt.
@@ -268,8 +279,12 @@ Pro Request:
 - `period_type` ist immer `"work"`. Pausen werden aktuell nicht synchronisiert.
 - Kommentar-Format: `"<parent_name> <sub_name> <sub_description>"` aus dem
   Tag-Mapping, plus optional ` — <block_description>` aus
-  `tag_blocks.description`. Innerhalb eines Laufs gehören alle Blöcke per
-  Konstruktion zum selben Kommentar.
+  `tag_blocks.description`. Die Block-Description kann aus einem
+  manuellen Block, einer manuellen Range oder einer Auto-Tag-Regel mit
+  `description`-Feld stammen. Innerhalb eines Laufs gehören alle Blöcke
+  per Konstruktion zum selben Kommentar — Auto-Blöcke mit Rule-
+  Description erzeugen damit eine eigene Period gegenüber Auto-Blöcken
+  ohne Description (unterschiedlicher Comment-Schlüssel).
 
 #### 2.5.4 Fehlerbehandlung
 - Antwort `401`/`403` oder `30x → /login` ⇒ `ErrSessionExpired`. Im UI: rotes Banner mit Hinweis auf erneute Anmeldung; Tray-Sync schreibt nur ins Log.
@@ -442,6 +457,7 @@ CREATE TABLE tagging_rules (
   match_type   TEXT NOT NULL CHECK (match_type IN ('contains','equals','regex')),
   pattern      TEXT NOT NULL,
   tag_id       INTEGER NOT NULL,
+  description  TEXT,                  -- optional, max 250 Zeichen; wird auf Auto-Blöcke übernommen
   priority     INTEGER NOT NULL DEFAULT 0,
   enabled      BOOLEAN DEFAULT 1,
   created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,

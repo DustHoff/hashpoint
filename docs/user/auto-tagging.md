@@ -36,8 +36,20 @@ Der Tab **Auto-Tagging** ist zweispaltig:
 | **Typ** | `enthält`, `gleich`, `Regex (RE2)` | Wie der Pattern-Vergleich erfolgt. `enthält` und `gleich` sind case-insensitiv. |
 | **Pattern** | Text oder Regex | Der zu vergleichende Wert. Bei `Regex` Go-RE2-Syntax (kein Backtracking). |
 | **Ziel-Tag** | Tag aus Liste | Welcher Tag dem Auto-Tag-Block zugewiesen wird. |
+| **Beschreibung** | Freitext, optional, max. 250 Zeichen | Wird beim automatischen Anlegen eines Auto-Tag-Blocks als dessen Beschreibung übernommen und beim Personio-Sync an den Comment angehängt (`"<tag> — <Beschreibung>"`). Leer lassen, wenn keine automatische Beschreibung gewünscht ist. |
 | **Priorität** | Integer (Default `0`) | Höhere Werte werden zuerst geprüft. Erste passende Regel gewinnt. |
-| **aktiviert** | Checkbox (Default an) | Deaktivierte Regeln werden ignoriert. |
+| **aktiviert** | Checkbox (Default an) | Deaktivierte Regeln werden ignoriert. Lässt sich auch direkt im Listeneintrag per Schalter ein-/ausschalten — keine Speichern-Aktion nötig. |
+
+> **Hinweis zur automatischen Beschreibung:** Wird ein laufender manueller
+> Tag mit eigener Beschreibung von einer Auto-Regel mit Beschreibung
+> unterbrochen, bekommt der **Auto-Block** die Regel-Beschreibung. Der
+> pausierte manuelle Block behält seine ursprüngliche Beschreibung und
+> nimmt sie beim Wiederaufnehmen (nach Ende des Auto-Matches) erneut auf.
+>
+> Auto-Blöcke ohne Rule-Beschreibung und Auto-Blöcke mit Rule-Beschreibung
+> werden beim Personio-Sync **nicht** zu einer Period zusammengefasst,
+> selbst wenn sie unmittelbar aneinander grenzen — sie haben unterschied-
+> liche Comment-Texte und damit unterschiedliche Aggregations-Schlüssel.
 
 ### Match-Typen im Detail
 
@@ -74,18 +86,19 @@ Vor dem Speichern können Sie eine Regel gegen reale Daten testen:
 
 > Der Live-Test schreibt **nichts** in die Datenbank – er zeigt nur, welche Process-Tracks matchen würden.
 
-## Regel bearbeiten oder löschen
+## Regel bearbeiten, deaktivieren oder löschen
 
 - **Bearbeiten:** Auf den Eintrag in der Regel-Liste klicken → Felder im Editor anpassen → **Speichern**.
+- **Aktivieren/Deaktivieren:** Schalter links neben dem **Bearbeiten**-Knopf umlegen. Die Änderung wird sofort gespeichert; deaktivierte Regeln greifen ab der nächsten Fokus-Änderung nicht mehr.
 - **Löschen:** **Löschen**-Button am Eintrag → Sicherheitsabfrage bestätigen.
 
 ## Beispiele
 
-| Anwendungsfall | Feld | Typ | Pattern | Priorität |
-| --- | --- | --- | --- | --- |
-| Alles in IntelliJ → `#Coding` | Prozess | enthält | `idea` | 10 |
-| Slack → `#Communication` | Prozess | gleich | `slack.exe` | 20 |
-| Browser-Tickets in Jira → `#TicketWork` | Fenstertitel | Regex | `(?i)\bjira\b` | 30 |
-| Alle Browser → `#Recherche` (Fallback) | Prozess | Regex | `^(chrome\|firefox\|edge)\.exe$` | 0 |
+| Anwendungsfall | Feld | Typ | Pattern | Beschreibung | Priorität |
+| --- | --- | --- | --- | --- | --- |
+| Alles in IntelliJ → `#Coding` | Prozess | enthält | `idea` | – | 10 |
+| Slack → `#Communication` | Prozess | gleich | `slack.exe` | `Team-Chat` | 20 |
+| Browser-Tickets in Jira → `#TicketWork` | Fenstertitel | Regex | `(?i)\bjira\b` | `Ticket-Bearbeitung` | 30 |
+| Alle Browser → `#Recherche` (Fallback) | Prozess | Regex | `^(chrome\|firefox\|edge)\.exe$` | – | 0 |
 
 In diesem Beispiel würde ein Browser-Fenster mit Jira-Titel den Tag `#TicketWork` bekommen (höhere Priorität), andere Browser-Fenster fallen auf `#Recherche` zurück.
