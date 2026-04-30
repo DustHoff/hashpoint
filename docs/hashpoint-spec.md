@@ -68,6 +68,13 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
 - **Klick auf einen Tag-Block** im Top-Strip selektiert ihn (Shift = additiv).
   Ausgewählte Blöcke können neu getagt werden (`SetTagBlockTag`),
   beschriftet (`SetTagBlockDescription`) oder gelöscht (`DeleteTagBlock`).
+- **Tag-Picker im Auswahl-Panel:** Die Tag-Buttons werden **nach Eltern-Tag
+  gruppiert** gerendert (Eltern zuerst, danach unmittelbar dessen Sub-Tags).
+  Sub-Tag-Buttons stellen den Eltern-Namen als gedimmtes Präfix
+  („`<Parent> › <Sub>`") voran, damit gleichnamige Sub-Tags unterschiedlicher
+  Eltern (z. B. `#projekta › #meeting` vs. `#projektb › #meeting`)
+  unterscheidbar bleiben. Der vollständige Pfad steht zusätzlich im
+  Tooltip (`title`).
 - **Hover** auf einem Tag-Block oder Process-Track filtert die untere
   Process-Tabelle auf den Zeitraum.
 - **Mausrad zoomt** (cursor-anchored), **Shift+Mausrad schwenkt**,

@@ -97,6 +97,16 @@ Diese Tabelle ist read-only — Process-Tracks repräsentieren die Realität und
    - **Löschen** entfernt die ausgewählten Tag-Blöcke endgültig (Process-Tracks bleiben unberührt).
    - **Auswahl aufheben** leert die Markierung.
 
+### Tag-Buttons im Auswahl-Panel
+
+Die Tag-Buttons sind **nach Eltern-Tag gruppiert**: Erst der Eltern-Tag, direkt dahinter dessen Sub-Tags. Sub-Tag-Buttons zeigen zusätzlich den **Eltern-Namen als gedimmtes Präfix**, getrennt durch ein `›`:
+
+```
+#projekta   #projekta › #frontend   #projekta › #meeting   #projektb   #projektb › #meeting
+```
+
+So bleiben gleichnamige Sub-Tags unterschiedlicher Projekte (z. B. zwei `#meeting` unter verschiedenen Eltern) eindeutig unterscheidbar. Der vollständige Pfad `Eltern › Sub` steht zusätzlich im Tooltip, falls der Button-Text abgeschnitten ist.
+
 ### Tätigkeitsbeschreibung
 
 Jeder Tag-Block kann eine freie Tätigkeitsbeschreibung tragen (z. B. „Refactoring Login-Flow", „Code-Review PR #123"). Die Beschreibung wird beim Personio-Sync an den aus den Tag-Namen erzeugten Kommentar angehängt:

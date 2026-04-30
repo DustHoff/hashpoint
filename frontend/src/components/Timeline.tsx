@@ -132,6 +132,30 @@ export default function Timeline() {
     return m;
   }, [tags]);
 
+  // Tags grouped under their parent (top-level first, then their children),
+  // so the picker keeps subtags visually anchored to the parent that gives
+  // them meaning.
+  const orderedTags = useMemo<Tag[]>(() => {
+    const parents = tags.filter((t) => t.parent_id == null);
+    const childrenByParent: Record<number, Tag[]> = {};
+    for (const t of tags) {
+      if (t.parent_id != null) {
+        (childrenByParent[t.parent_id] ??= []).push(t);
+      }
+    }
+    const out: Tag[] = [];
+    for (const p of parents) {
+      out.push(p);
+      const kids = childrenByParent[p.id] ?? [];
+      for (const k of kids) out.push(k);
+    }
+    // Orphan subtags (parent missing) — keep them visible at the end.
+    for (const t of tags) {
+      if (t.parent_id != null && !tagsByID[t.parent_id]) out.push(t);
+    }
+    return out;
+  }, [tags, tagsByID]);
+
   const { from: dayFromMs, to: dayToMs } = useMemo(() => dayBounds(day), [day]);
 
   const selectedBlocks = useMemo(
@@ -675,16 +699,26 @@ export default function Timeline() {
                 )}
                 <span className="ml-1">→</span>
               </span>
-              {tags.map((t) => (
-                <button
-                  key={t.id}
-                  onClick={() => applyTag(t.id)}
-                  className="rounded px-2 py-1 text-xs text-white hover:opacity-80"
-                  style={{ background: t.color ?? "#4f8cff" }}
-                >
-                  {t.name}
-                </button>
-              ))}
+              {orderedTags.map((t) => {
+                const parent = t.parent_id != null ? tagsByID[t.parent_id] : undefined;
+                const fullLabel = parent ? `${parent.name} › ${t.name}` : t.name;
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => applyTag(t.id)}
+                    className="rounded px-2 py-1 text-xs text-white hover:opacity-80"
+                    style={{ background: t.color ?? "#4f8cff" }}
+                    title={fullLabel}
+                  >
+                    {parent && (
+                      <span className="mr-1 text-[10px] text-white/60">
+                        {parent.name} ›
+                      </span>
+                    )}
+                    {t.name}
+                  </button>
+                );
+              })}
               <button
                 onClick={clearSelection}
                 className="ml-auto rounded bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600"
