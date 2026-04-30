@@ -204,8 +204,10 @@ func (s *manualTagSlots) refresh() {
 		return
 	}
 
+	ordered := groupTagsByParent(tags)
+
 	visible := 0
-	for _, t := range tags {
+	for _, t := range ordered {
 		if t.Name == "" {
 			continue
 		}
@@ -214,9 +216,10 @@ func (s *manualTagSlots) refresh() {
 				"slots", len(s.items), "tag_count", len(tags))
 			break
 		}
+		label := manualTagLabel(t, ordered)
 		item := s.items[visible]
-		item.SetTitle(t.Name)
-		item.SetTooltip("Zeit dem Tag '" + t.Name + "' zuordnen")
+		item.SetTitle(label)
+		item.SetTooltip("Zeit dem Tag '" + label + "' zuordnen")
 		item.Show()
 		s.tagID[visible] = t.ID
 		visible++
@@ -228,15 +231,69 @@ func (s *manualTagSlots) refresh() {
 	s.last = append(s.last[:0], tags...)
 }
 
+// groupTagsByParent returns tags ordered so each top-level tag is
+// immediately followed by its own children. Orphaned sub-tags (parent
+// missing) are appended at the end so they still appear in the menu.
+func groupTagsByParent(tags []storage.Tag) []storage.Tag {
+	byID := make(map[int64]storage.Tag, len(tags))
+	for _, t := range tags {
+		byID[t.ID] = t
+	}
+	childrenByParent := make(map[int64][]storage.Tag)
+	var parents []storage.Tag
+	for _, t := range tags {
+		if t.ParentID == nil {
+			parents = append(parents, t)
+		} else {
+			childrenByParent[*t.ParentID] = append(childrenByParent[*t.ParentID], t)
+		}
+	}
+	out := make([]storage.Tag, 0, len(tags))
+	for _, p := range parents {
+		out = append(out, p)
+		out = append(out, childrenByParent[p.ID]...)
+	}
+	for _, t := range tags {
+		if t.ParentID != nil {
+			if _, ok := byID[*t.ParentID]; !ok {
+				out = append(out, t)
+			}
+		}
+	}
+	return out
+}
+
+// manualTagLabel renders a sub-tag as "Parent › Sub" so identically-named
+// sub-tags under different parents stay distinguishable in the tray menu.
+// Top-level tags render as just their name.
+func manualTagLabel(t storage.Tag, all []storage.Tag) string {
+	if t.ParentID == nil {
+		return t.Name
+	}
+	for _, p := range all {
+		if p.ID == *t.ParentID {
+			return p.Name + " › " + t.Name
+		}
+	}
+	return t.Name
+}
+
 // tagsEqual is a cheap equality check on the fields the manual-tag menu
-// actually renders (id + name). It intentionally ignores fields like
-// Color or PersonioProjectID that don't affect the submenu.
+// actually renders (id, name, parent). It intentionally ignores fields
+// like Color or PersonioProjectID that don't affect the submenu.
 func tagsEqual(a, b []storage.Tag) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
 		if a[i].ID != b[i].ID || a[i].Name != b[i].Name {
+			return false
+		}
+		ap, bp := a[i].ParentID, b[i].ParentID
+		if (ap == nil) != (bp == nil) {
+			return false
+		}
+		if ap != nil && *ap != *bp {
 			return false
 		}
 	}

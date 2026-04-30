@@ -43,6 +43,10 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
 - **Autostart**-Option (Registry-Eintrag unter `HKCU\...\Run`).
 - Die Tag-Liste im Submenü wird beim Tray-Start erfasst — neu angelegte
   Tags erscheinen erst nach Neustart der Anwendung.
+- **Submenü-Reihenfolge:** Tags werden **nach Eltern-Tag gruppiert**
+  (Eltern-Tag zuerst, danach unmittelbar dessen Sub-Tags). Sub-Tag-Einträge
+  tragen den Eltern-Namen als Präfix („`<Parent> › <Sub>`"), damit
+  gleichnamige Sub-Tags unterschiedlicher Eltern eindeutig wählbar bleiben.
 
 ### 2.3 Hauptfenster (Zeitachse)
 - Tagesansicht: **zwei übereinander liegende Strips** mit gemeinsamer

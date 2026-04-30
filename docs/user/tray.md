@@ -38,6 +38,7 @@ Das Submenü **Manueller Tag** ist die schnellste Möglichkeit, eine laufende T�
 ### Sitzung starten
 
 - Jeder konfigurierte Tag erscheint als eigener Eintrag im Submenü (Stand bei Tray-Start — neu angelegte Tags benötigen einen Anwendungs-Neustart, um aufzutauchen).
+- Die Einträge sind **nach Eltern-Tag gruppiert**: zuerst der Eltern-Tag, direkt danach dessen Sub-Tags. Sub-Tags erscheinen mit dem Eltern-Namen als Präfix (`#projekta › #frontend`), damit gleichnamige Sub-Tags unterschiedlicher Eltern unterscheidbar bleiben.
 - **Klick auf einen Tag** öffnet einen manuellen Tag-Block ab „jetzt" (gerundet auf das Granularitätsraster).
 - War bereits ein anderer manueller Tag offen, wird er sauber geschlossen, bevor der neue beginnt.
 
