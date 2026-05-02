@@ -55,6 +55,31 @@ type Orchestrator struct {
 
 type focusInfo struct{ name, title string }
 
+// Reason codes recorded on every "tag block closed" log entry. Keep these
+// stable — they are grepped from log files when diagnosing why a block
+// transitioned from open to closed.
+const (
+	reasonAutoFocusLost             = "auto_focus_lost"
+	reasonAutoFocusLostZero         = "auto_focus_lost_zero_length"
+	reasonAutoRuleSwitched          = "auto_rule_switched"
+	reasonAutoRuleSwitchedZero      = "auto_rule_switched_zero_length"
+	reasonManualPausedForAuto       = "manual_paused_for_auto"
+	reasonManualPausedForAutoZero   = "manual_paused_for_auto_zero_length"
+	reasonManualPausedForIdle       = "manual_paused_for_idle"
+	reasonManualPausedForIdleZero   = "manual_paused_for_idle_zero_length"
+	reasonManualReplaced            = "manual_replaced"
+	reasonManualReplacedZero        = "manual_replaced_zero_length"
+	reasonManualStoppedByUser       = "manual_stopped_by_user"
+	reasonManualStoppedByUserZero   = "manual_stopped_by_user_zero_length"
+	reasonRangeCarveDelete          = "range_carve_delete"
+	reasonRangeCarveLeft            = "range_carve_left"
+	reasonRangeCarveRight           = "range_carve_right"
+	reasonRecoverCrash              = "recover_crash"
+	reasonRecoverCrashZero          = "recover_crash_zero_length"
+	reasonStartupDanglingManual     = "startup_dangling_manual"
+	reasonStartupDanglingManualZero = "startup_dangling_manual_zero_length"
+)
+
 type autoState struct {
 	blockID int64
 	ruleID  int64
@@ -108,6 +133,31 @@ func (o *Orchestrator) SetGranularity(d time.Duration) {
 	o.mu.Unlock()
 }
 
+// logBlockClosed emits a single structured Info entry whenever an open
+// tag block transitions to a closed (or deleted-as-zero-length) state.
+// The reason code disambiguates the call site; extra fields carry call-site
+// specific context (rule id, paused-manual presence, etc). Caller holds o.mu.
+func (o *Orchestrator) logBlockClosed(b storage.TagBlock, end time.Time, reason string, extra ...any) {
+	dur := int64(0)
+	if !end.Before(b.StartTime) {
+		dur = int64(end.Sub(b.StartTime).Round(time.Second).Seconds())
+	}
+	args := []any{
+		"id", b.ID,
+		"tag_id", b.TagID,
+		"is_manual", b.IsManual,
+		"start", b.StartTime,
+		"end", end,
+		"duration_sec", dur,
+		"reason", reason,
+		"focus_active", o.focusActive,
+		"focus_process", o.focusedProcess.name,
+		"had_paused_manual", o.pausedManual != nil,
+	}
+	args = append(args, extra...)
+	o.logger.Info("tag block closed", args...)
+}
+
 // Recover closes every tag block left open by a previous crash. Manual
 // blocks are closed at the last process-track end (or `now` when no tracking
 // data exists); auto blocks are closed at the same instant — the
@@ -133,12 +183,16 @@ func (o *Orchestrator) Recover(ctx context.Context) error {
 		if !end.After(b.StartTime) {
 			if err := o.blocks.Delete(ctx, b.ID); err != nil {
 				o.logger.Warn("recover: delete zero-length open block failed", "id", b.ID, "err", err)
+				continue
 			}
+			o.logBlockClosed(b, end, reasonRecoverCrashZero)
 			continue
 		}
 		if err := o.blocks.SetEnd(ctx, b.ID, end); err != nil {
 			o.logger.Warn("recover: close open tag block failed", "id", b.ID, "err", err)
+			continue
 		}
+		o.logBlockClosed(b, end, reasonRecoverCrash)
 	}
 	return nil
 }
@@ -168,22 +222,26 @@ func (o *Orchestrator) advance(ctx context.Context, at time.Time, rule *storage.
 	snap := o.snapFloor(at)
 
 	if o.openAuto != nil {
+		reason := reasonAutoFocusLost
 		if rule != nil && rule.ID == o.openAuto.ruleID {
 			return
 		}
-		o.closeAuto(ctx, snap)
+		if rule != nil {
+			reason = reasonAutoRuleSwitched
+		}
+		o.closeAuto(ctx, snap, reason)
 	}
 
 	if rule != nil {
 		if o.openManual != nil {
-			o.pauseManual(ctx, snap)
+			o.pauseManual(ctx, snap, reasonManualPausedForAuto)
 		}
 		o.startAuto(ctx, *rule, snap)
 		return
 	}
 
 	if !o.focusActive && o.openManual != nil {
-		o.pauseManual(ctx, snap)
+		o.pauseManual(ctx, snap, reasonManualPausedForIdle)
 		return
 	}
 
@@ -203,7 +261,7 @@ func (o *Orchestrator) StartManualOpenEnded(ctx context.Context, tagID int64, de
 	snap := o.snapFloor(o.clock())
 
 	if o.openManual != nil {
-		o.closeManual(ctx, snap)
+		o.closeManual(ctx, snap, reasonManualReplaced)
 	}
 	o.pausedManual = nil
 
@@ -220,7 +278,7 @@ func (o *Orchestrator) StopManualOpenEnded(ctx context.Context) error {
 	defer o.mu.Unlock()
 	snap := o.snapFloor(o.clock())
 	if o.openManual != nil {
-		o.closeManual(ctx, snap)
+		o.closeManual(ctx, snap, reasonManualStoppedByUser)
 	}
 	o.pausedManual = nil
 	return nil
@@ -249,12 +307,16 @@ func (o *Orchestrator) CloseDanglingManualAtStartup(ctx context.Context, fallbac
 		if !end.After(b.StartTime) {
 			if err := o.blocks.Delete(ctx, b.ID); err != nil {
 				o.logger.Warn("startup: delete zero-length manual failed", "id", b.ID, "err", err)
+				continue
 			}
+			o.logBlockClosed(b, end, reasonStartupDanglingManualZero)
 			continue
 		}
 		if err := o.blocks.SetEnd(ctx, b.ID, end); err != nil {
 			o.logger.Warn("startup: close dangling manual failed", "id", b.ID, "err", err)
+			continue
 		}
+		o.logBlockClosed(b, end, reasonStartupDanglingManual)
 	}
 	return nil
 }
@@ -346,12 +408,25 @@ func (o *Orchestrator) carveAuto(ctx context.Context, b storage.TagBlock, from, 
 		if o.openAuto != nil && o.openAuto.blockID == b.ID {
 			o.openAuto = nil
 		}
-		return o.blocks.Delete(ctx, b.ID)
+		if err := o.blocks.Delete(ctx, b.ID); err != nil {
+			return err
+		}
+		closeAt := to
+		if b.EndTime != nil {
+			closeAt = bend
+		}
+		o.logBlockClosed(b, closeAt, reasonRangeCarveDelete,
+			"was_open", b.EndTime == nil,
+			"manual_range_from", from, "manual_range_to", to)
+		return nil
 	}
 	if bstart.Before(from) && (b.EndTime == nil || bend.After(to)) {
 		if err := o.blocks.SetEnd(ctx, b.ID, from); err != nil {
 			return err
 		}
+		o.logBlockClosed(b, from, reasonRangeCarveLeft,
+			"was_open", b.EndTime == nil,
+			"manual_range_from", from, "manual_range_to", to)
 		var rightEnd *time.Time
 		var dur int64
 		if b.EndTime != nil {
@@ -376,9 +451,21 @@ func (o *Orchestrator) carveAuto(ctx context.Context, b storage.TagBlock, from, 
 		return nil
 	}
 	if bstart.Before(from) {
-		return o.blocks.SetEnd(ctx, b.ID, from)
+		if err := o.blocks.SetEnd(ctx, b.ID, from); err != nil {
+			return err
+		}
+		o.logBlockClosed(b, from, reasonRangeCarveLeft,
+			"was_open", b.EndTime == nil,
+			"manual_range_from", from, "manual_range_to", to)
+		return nil
 	}
-	return o.blocks.SetStart(ctx, b.ID, to)
+	if err := o.blocks.SetStart(ctx, b.ID, to); err != nil {
+		return err
+	}
+	o.logBlockClosed(b, to, reasonRangeCarveRight,
+		"was_open", b.EndTime == nil,
+		"manual_range_from", from, "manual_range_to", to)
+	return nil
 }
 
 func (o *Orchestrator) refreshAutoState(ctx context.Context) {
@@ -391,7 +478,7 @@ func (o *Orchestrator) refreshAutoState(ctx context.Context) {
 	}
 }
 
-func (o *Orchestrator) closeAuto(ctx context.Context, snappedEnd time.Time) {
+func (o *Orchestrator) closeAuto(ctx context.Context, snappedEnd time.Time, reason string) {
 	if o.openAuto == nil {
 		return
 	}
@@ -405,7 +492,14 @@ func (o *Orchestrator) closeAuto(ctx context.Context, snappedEnd time.Time) {
 	if !snappedEnd.After(b.StartTime) {
 		if err := o.blocks.Delete(ctx, state.blockID); err != nil {
 			o.logger.Warn("close auto: delete zero-length failed", "id", state.blockID, "err", err)
+			o.openAuto = nil
+			return
 		}
+		zeroReason := reasonAutoFocusLostZero
+		if reason == reasonAutoRuleSwitched {
+			zeroReason = reasonAutoRuleSwitchedZero
+		}
+		o.logBlockClosed(*b, snappedEnd, zeroReason, "rule_id", state.ruleID)
 		o.openAuto = nil
 		return
 	}
@@ -414,6 +508,7 @@ func (o *Orchestrator) closeAuto(ctx context.Context, snappedEnd time.Time) {
 		o.openAuto = nil
 		return
 	}
+	o.logBlockClosed(*b, snappedEnd, reason, "rule_id", state.ruleID)
 	o.openAuto = nil
 	if o.pausedManual != nil && o.focusActive {
 		o.resumeManual(ctx, snappedEnd)
@@ -459,36 +554,57 @@ func (o *Orchestrator) startManual(ctx context.Context, tagID int64, description
 	return nil
 }
 
-func (o *Orchestrator) closeManual(ctx context.Context, snappedEnd time.Time) {
+func (o *Orchestrator) closeManual(ctx context.Context, snappedEnd time.Time, reason string) {
 	if o.openManual == nil {
 		return
 	}
 	m := o.openManual
 	b, err := o.blocks.Get(ctx, m.blockID)
 	if err != nil || b == nil {
+		o.logger.Warn("close manual: block missing", "id", m.blockID, "err", err)
 		o.openManual = nil
 		return
 	}
 	if !snappedEnd.After(b.StartTime) {
 		if err := o.blocks.Delete(ctx, m.blockID); err != nil {
 			o.logger.Warn("close manual: delete zero-length failed", "id", m.blockID, "err", err)
+			o.openManual = nil
+			return
 		}
+		o.logBlockClosed(*b, snappedEnd, manualZeroReason(reason))
 		o.openManual = nil
 		return
 	}
 	if err := o.blocks.Close(ctx, m.blockID, snappedEnd); err != nil {
 		o.logger.Warn("close manual failed", "id", m.blockID, "err", err)
+		o.openManual = nil
+		return
 	}
+	o.logBlockClosed(*b, snappedEnd, reason)
 	o.openManual = nil
 }
 
-func (o *Orchestrator) pauseManual(ctx context.Context, snappedEnd time.Time) {
+func manualZeroReason(reason string) string {
+	switch reason {
+	case reasonManualPausedForAuto:
+		return reasonManualPausedForAutoZero
+	case reasonManualPausedForIdle:
+		return reasonManualPausedForIdleZero
+	case reasonManualReplaced:
+		return reasonManualReplacedZero
+	case reasonManualStoppedByUser:
+		return reasonManualStoppedByUserZero
+	}
+	return reason
+}
+
+func (o *Orchestrator) pauseManual(ctx context.Context, snappedEnd time.Time, reason string) {
 	if o.openManual == nil {
 		return
 	}
 	m := o.openManual
 	o.pausedManual = &pausedManualState{tagID: m.tagID, description: m.description}
-	o.closeManual(ctx, snappedEnd)
+	o.closeManual(ctx, snappedEnd, reason)
 }
 
 func (o *Orchestrator) resumeManual(ctx context.Context, snappedStart time.Time) {
