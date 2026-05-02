@@ -8,11 +8,12 @@ nötig.
 
 ## Aufbau des Tabs
 
-Der Tab ist in drei Abschnitte unterteilt:
+Der Tab ist in vier Abschnitte unterteilt:
 
 1. **Erfassung** — globaler Erfassungs-Schalter, Polling-Intervall, Idle-Schwelle und Tag-Block-Granularität.
 2. **Oberfläche** — Autostart-Schalter.
-3. **Personio** — Tenant-Subdomain und interaktive Anmeldung.
+3. **Quick-Tag-Picker** — globaler Hotkey für die schnelle Tag-Auswahl (siehe [Quick-Tag-Picker](quick-tag.md)).
+4. **Personio** — Tenant-Subdomain und interaktive Anmeldung.
 
 Am unteren Rand befindet sich der Button **Einstellungen speichern**.
 Änderungen treten erst nach dem Speichern in Kraft. Erfolge und
@@ -32,6 +33,15 @@ Validierungsfehler werden oben im Tab als Banner angezeigt.
 | Feld | Default | Bedeutung |
 | --- | --- | --- |
 | **Mit Windows starten (Autostart)** | an | Trägt den TimeTracker als Autostart-Eintrag in die Windows-Registry ein bzw. entfernt ihn. Lässt sich auch über das Tray-Menü umschalten. |
+
+## Quick-Tag-Picker
+
+| Feld | Default | Bedeutung |
+| --- | --- | --- |
+| **Globalen Hotkey für den Quick-Tag-Picker registrieren** | an | Aktiviert/deaktiviert die Registrierung eines systemweiten Hotkeys, mit dem aus jedem Fenster heraus eine kompakte Tag-Auswahl unten rechts auf dem Cursor-Monitor geöffnet werden kann. |
+| **Hotkey** | `Ctrl+Alt+T` | Tastenkombination im Format `<Mod>+<Mod>+<Taste>`. Modifier: `Ctrl`, `Alt`, `Shift`, `Win`. Tasten: `A`–`Z`, `0`–`9`, `F1`–`F24`. Mindestens ein Modifier ist Pflicht. **Hinweis:** `Win+T` ist von Windows belegt (Taskleisten-Fokus) und sollte vermieden werden. |
+
+Funktionsweise und Bedienung sind detailliert unter [Quick-Tag-Picker](quick-tag.md) beschrieben.
 
 ## Personio
 
@@ -74,6 +84,10 @@ tenant = "onesi"
 
 [ui]
 autostart = true
+
+[quick_tag]
+enabled = true
+hotkey  = "Ctrl+Alt+T"
 ```
 
 Nach manuellen Änderungen ist ein **Neustart** der Anwendung erforderlich,

@@ -34,6 +34,7 @@ type Config struct {
 	Tracking TrackingConfig `toml:"tracking" json:"tracking"`
 	Personio PersonioConfig `toml:"personio" json:"personio"`
 	UI       UIConfig       `toml:"ui"       json:"ui"`
+	QuickTag QuickTagConfig `toml:"quick_tag" json:"quick_tag"`
 }
 
 // TrackingConfig holds polling/idle parameters.
@@ -62,6 +63,20 @@ type PersonioConfig struct {
 // UIConfig holds UI-related preferences.
 type UIConfig struct {
 	Autostart bool `toml:"autostart" json:"autostart"`
+}
+
+// QuickTagConfig configures the global Quick-Tag-Picker hotkey. When
+// Enabled is true, hashpoint registers Hotkey as a system-wide hotkey via
+// RegisterHotKey; pressing it shows a small popup at the cursor display's
+// bottom-right, listing the user's recently-used tags numbered 0–9.
+//
+// Hotkey is a human-readable string of the form "Ctrl+Alt+T" — modifiers
+// (Ctrl, Alt, Shift, Win) joined with `+`, terminated by a single key
+// (letters A-Z, digits 0-9, or function keys F1-F24). Parsing is
+// case-insensitive; serialisation re-renders to the canonical case.
+type QuickTagConfig struct {
+	Enabled bool   `toml:"enabled" json:"enabled"`
+	Hotkey  string `toml:"hotkey"  json:"hotkey"`
 }
 
 // Paths bundles resolved on-disk locations.
@@ -235,6 +250,11 @@ func (c *Config) Validate() error {
 		if !tenantRe.MatchString(strings.ToLower(t)) {
 			errs = append(errs,
 				"personio.tenant erwartet den Subdomain-Slug (z. B. \"example\"), nicht eine vollständige URL — bekommen: "+t)
+		}
+	}
+	if c.QuickTag.Enabled {
+		if _, err := ParseHotkey(c.QuickTag.Hotkey); err != nil {
+			errs = append(errs, "quick_tag.hotkey ungültig: "+err.Error())
 		}
 	}
 	if len(errs) == 0 {

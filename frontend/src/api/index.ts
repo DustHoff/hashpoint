@@ -5,6 +5,7 @@ import type {
   AppConfig,
   PersonioStatus,
   ProcessTrack,
+  QuickTagSlot,
   Rule,
   SyncResult,
   Tag,
@@ -21,9 +22,15 @@ interface WailsBridge {
   };
 }
 
+interface WailsRuntime {
+  EventsOn(name: string, callback: (...payload: unknown[]) => void): () => void;
+  EventsOff(name: string, ...names: string[]): void;
+}
+
 declare global {
   interface Window {
     go?: WailsBridge;
+    runtime?: WailsRuntime;
   }
 }
 
@@ -109,6 +116,12 @@ export const api = {
   isManualTagActive: () =>
     bridge().IsManualTagActive() as Promise<[number, boolean]>,
 
+  // Quick-tag-picker ----------------------------------------------------
+  quickTagSlots: () => bridge().QuickTagSlots() as Promise<QuickTagSlot[]>,
+  quickTagSelect: (tagId: number) =>
+    bridge().QuickTagSelect(tagId) as Promise<void>,
+  quickTagDismiss: () => bridge().QuickTagDismiss() as Promise<void>,
+
   // Sync ----------------------------------------------------------------
   syncDay: (dayISO: string) => bridge().SyncDay(dayISO) as Promise<SyncResult>,
   syncRange: (from: string, to: string) =>
@@ -131,4 +144,16 @@ export const api = {
     fields?: Record<string, unknown>,
   ) =>
     bridge().LogFrontend(level, message, fields ?? {}) as Promise<void>,
+
+  // Wails event subscription -------------------------------------------
+  // Returns an unsubscribe function. The handler receives nothing useful
+  // for our picker events (they carry no payload).
+  onEvent: (name: string, handler: () => void): (() => void) => {
+    const rt = window.runtime;
+    if (!rt) {
+      // No-op when running outside Wails (e.g. Vite dev preview).
+      return () => {};
+    }
+    return rt.EventsOn(name, () => handler());
+  },
 };

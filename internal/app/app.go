@@ -17,7 +17,20 @@ import (
 	"github.com/onesi/hashpoint/internal/storage"
 	"github.com/onesi/hashpoint/internal/tagging"
 	"github.com/onesi/hashpoint/internal/tracker"
+	"github.com/onesi/hashpoint/internal/winapi"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+)
+
+// Quick-tag-picker geometry (physical pixels). Intentionally compact —
+// the popup is keyboard-driven and lists at most 10 entries.
+const (
+	quickTagPickerWidth   = 340
+	quickTagPickerHeight  = 420
+	quickTagPickerMargin  = 12
+	quickTagRecentDays    = 30
+	quickTagSlotCount     = 10
+	quickTagOpenEvent  = "quick-tag-picker:open"
+	quickTagCloseEvent = "quick-tag-picker:close"
 )
 
 // VersionInfo describes the running build.
@@ -55,9 +68,24 @@ type App struct {
 	deps   Deps
 	logger *slog.Logger
 
-	mu      sync.Mutex
-	cfg     *config.Config
-	started bool
+	mu            sync.Mutex
+	cfg           *config.Config
+	started       bool
+	windowVisible bool
+
+	quickTagState quickTagWindowState
+}
+
+// quickTagWindowState captures the main-window placement before the
+// quick-tag-picker took over. Restored on dismiss so the user's normal
+// layout returns intact.
+type quickTagWindowState struct {
+	saved        bool
+	wasVisible   bool
+	width        int
+	height       int
+	x            int
+	y            int
 }
 
 // New constructs the app from its dependencies.
@@ -65,7 +93,13 @@ func New(deps Deps) *App {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
-	return &App{deps: deps, logger: deps.Logger, cfg: deps.Config, ctx: context.Background()}
+	return &App{
+		deps:          deps,
+		logger:        deps.Logger,
+		cfg:           deps.Config,
+		ctx:           context.Background(),
+		windowVisible: true,
+	}
 }
 
 // Startup is invoked by Wails once the runtime is ready. We piggy-back on
@@ -76,6 +110,7 @@ func (a *App) Startup(ctx context.Context) {
 	a.mu.Lock()
 	a.ctx = ctx
 	a.started = true
+	a.windowVisible = true
 	cfg := a.cfg
 	a.mu.Unlock()
 	a.logger.Info("frontend started")
@@ -100,6 +135,7 @@ func (a *App) Shutdown(_ context.Context) {}
 func (a *App) ShowWindow() {
 	a.mu.Lock()
 	ctx, ready := a.ctx, a.started
+	a.windowVisible = true
 	a.mu.Unlock()
 	if !ready || ctx == nil {
 		a.logger.Warn("app: ShowWindow called before Wails Startup — ignoring")
@@ -107,6 +143,20 @@ func (a *App) ShowWindow() {
 	}
 	wailsruntime.WindowShow(ctx)
 	wailsruntime.WindowUnminimise(ctx)
+}
+
+// OnWindowBeforeClose is wired into Wails' OnBeforeClose hook. With
+// HideWindowOnClose=true the window is hidden (not closed) when the user
+// clicks X — we use this hook to track that transition so the
+// quick-tag-picker dismiss can hide vs. restore correctly.
+//
+// Returns false (do not prevent close) so Wails proceeds with its normal
+// hide-on-close behaviour.
+func (a *App) OnWindowBeforeClose(_ context.Context) bool {
+	a.mu.Lock()
+	a.windowVisible = false
+	a.mu.Unlock()
+	return false
 }
 
 // Quit triggers a graceful Wails shutdown so OnShutdown runs (closing open
@@ -613,6 +663,212 @@ func (a *App) SyncRange(fromRFC3339, toRFC3339 string) (*personio.Result, error)
 		return nil, err
 	}
 	return syncer.SyncRange(a.ctx, from.UTC(), to.UTC())
+}
+
+// ----- Quick-tag-picker --------------------------------------------------
+
+// QuickTagSlot is a single entry in the quick-tag-picker. Up to ten are
+// returned, numbered 0..9. IsActive marks the currently open or paused
+// manual tag so the picker can highlight it.
+type QuickTagSlot struct {
+	Index    int     `json:"index"`
+	TagID    int64   `json:"tag_id"`
+	Label    string  `json:"label"`
+	Color    *string `json:"color,omitempty"`
+	IsActive bool    `json:"is_active"`
+}
+
+// QuickTagSlots returns the picker entries: recently-used tags first
+// (most-recent block within the last 30 days), then unused tags ordered
+// parent-first to mirror the rest of the UI. Capped at 10 entries.
+func (a *App) QuickTagSlots() ([]QuickTagSlot, error) {
+	since := time.Now().UTC().AddDate(0, 0, -quickTagRecentDays)
+	recent, err := a.deps.TagBlocks.RecentlyUsedTagIDs(a.ctx, since, quickTagSlotCount)
+	if err != nil {
+		return nil, fmt.Errorf("recent tags: %w", err)
+	}
+	tags, err := a.deps.Tags.List(a.ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list tags: %w", err)
+	}
+	tagsByID := make(map[int64]storage.Tag, len(tags))
+	for _, t := range tags {
+		tagsByID[t.ID] = t
+	}
+	activeTagID, _ := a.IsManualTagActive()
+
+	seen := make(map[int64]bool, quickTagSlotCount)
+	slots := make([]QuickTagSlot, 0, quickTagSlotCount)
+	add := func(t storage.Tag) {
+		if len(slots) >= quickTagSlotCount || seen[t.ID] {
+			return
+		}
+		seen[t.ID] = true
+		label := t.Name
+		if t.ParentID != nil {
+			if p, ok := tagsByID[*t.ParentID]; ok {
+				label = p.Name + " › " + t.Name
+			}
+		}
+		slots = append(slots, QuickTagSlot{
+			Index:    len(slots),
+			TagID:    t.ID,
+			Label:    label,
+			Color:    t.Color,
+			IsActive: activeTagID > 0 && t.ID == activeTagID,
+		})
+	}
+
+	for _, id := range recent {
+		if t, ok := tagsByID[id]; ok {
+			add(t)
+		}
+	}
+	for _, t := range orderedTagsForFill(tags) {
+		add(t)
+	}
+	return slots, nil
+}
+
+// orderedTagsForFill orders tags parent-first so the fill order mirrors
+// the timeline picker and tray submenu (parent followed by its children).
+func orderedTagsForFill(tags []storage.Tag) []storage.Tag {
+	parents := make([]storage.Tag, 0, len(tags))
+	childrenByParent := make(map[int64][]storage.Tag)
+	for _, t := range tags {
+		if t.ParentID == nil {
+			parents = append(parents, t)
+			continue
+		}
+		childrenByParent[*t.ParentID] = append(childrenByParent[*t.ParentID], t)
+	}
+	out := make([]storage.Tag, 0, len(tags))
+	for _, p := range parents {
+		out = append(out, p)
+		out = append(out, childrenByParent[p.ID]...)
+	}
+	// Orphan subtags (parent missing) — emit at the end so they remain
+	// visible even when their parent has been deleted.
+	for _, t := range tags {
+		if t.ParentID == nil {
+			continue
+		}
+		if _, ok := childrenByParent[*t.ParentID]; !ok {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// QuickTagOpen surfaces the quick-tag-picker. Triggered by the global
+// hotkey handler. Saves the current main-window placement, resizes the
+// window into a small popup at the cursor monitor's bottom-right, and
+// emits a frontend event so the picker UI mounts. Idempotent: a second
+// open while the picker is already up just brings it back to front.
+func (a *App) QuickTagOpen() error {
+	a.mu.Lock()
+	ctx, ready := a.ctx, a.started
+	if !ready || ctx == nil {
+		a.mu.Unlock()
+		return errors.New("frontend not ready")
+	}
+	already := a.quickTagState.saved
+	if !already {
+		w, h := wailsruntime.WindowGetSize(ctx)
+		x, y := wailsruntime.WindowGetPosition(ctx)
+		a.quickTagState = quickTagWindowState{
+			saved:      true,
+			wasVisible: a.windowVisible,
+			width:      w,
+			height:     h,
+			x:          x,
+			y:          y,
+		}
+	}
+	a.windowVisible = true
+	a.mu.Unlock()
+
+	if work, err := winapi.CursorMonitorWorkArea(); err == nil {
+		px := int(work.Right) - quickTagPickerWidth - quickTagPickerMargin
+		py := int(work.Bottom) - quickTagPickerHeight - quickTagPickerMargin
+		wailsruntime.WindowSetPosition(ctx, px, py)
+	} else {
+		a.logger.Warn("quick tag: cursor monitor lookup failed", "err", err)
+		wailsruntime.WindowCenter(ctx)
+	}
+	wailsruntime.WindowSetSize(ctx, quickTagPickerWidth, quickTagPickerHeight)
+	wailsruntime.WindowSetAlwaysOnTop(ctx, true)
+	wailsruntime.WindowShow(ctx)
+	wailsruntime.WindowUnminimise(ctx)
+	wailsruntime.EventsEmit(ctx, quickTagOpenEvent)
+	a.logger.Debug("quick tag: opened", "already", already)
+	return nil
+}
+
+// QuickTagDismiss closes the picker without changing the active tag.
+func (a *App) QuickTagDismiss() {
+	a.closeQuickTagWindow()
+}
+
+// QuickTagSelect picks the tag at the given id. No-op when the tag is
+// already the active manual tag (matches the spec). Always closes the
+// picker afterwards.
+func (a *App) QuickTagSelect(tagID int64) error {
+	if tagID <= 0 {
+		a.closeQuickTagWindow()
+		return fmt.Errorf("invalid tag id: %d", tagID)
+	}
+	activeTagID, _ := a.IsManualTagActive()
+	if tagID != activeTagID {
+		a.logger.Info("quick tag: switch", "tag_id", tagID, "previous", activeTagID)
+		if err := a.StartManualTag(tagID, ""); err != nil {
+			a.closeQuickTagWindow()
+			return err
+		}
+	} else {
+		a.logger.Debug("quick tag: same tag selected — no-op", "tag_id", tagID)
+	}
+	a.closeQuickTagWindow()
+	return nil
+}
+
+func (a *App) closeQuickTagWindow() {
+	a.mu.Lock()
+	ctx, ready := a.ctx, a.started
+	state := a.quickTagState
+	a.quickTagState = quickTagWindowState{}
+	if !state.wasVisible {
+		a.windowVisible = false
+	}
+	a.mu.Unlock()
+	if !ready || ctx == nil {
+		return
+	}
+	wailsruntime.EventsEmit(ctx, quickTagCloseEvent)
+	wailsruntime.WindowSetAlwaysOnTop(ctx, false)
+	if state.saved {
+		wailsruntime.WindowSetSize(ctx, state.width, state.height)
+		wailsruntime.WindowSetPosition(ctx, state.x, state.y)
+	}
+	if !state.wasVisible {
+		wailsruntime.WindowHide(ctx)
+	}
+}
+
+// FireQuickTag is the application-internal entry the hotkey handler calls.
+// Toggle semantics: a second press while the picker is open dismisses it,
+// matching the muscle-memory expectation users have from system pickers.
+func (a *App) FireQuickTag() {
+	a.mu.Lock()
+	open := a.quickTagState.saved
+	a.mu.Unlock()
+	if open {
+		a.closeQuickTagWindow()
+		return
+	}
+	if err := a.QuickTagOpen(); err != nil {
+		a.logger.Warn("quick tag fire: open failed", "err", err)
+	}
 }
 
 func (a *App) currentSyncer() (*personio.Syncer, error) {

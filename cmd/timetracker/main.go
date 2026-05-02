@@ -21,6 +21,7 @@ import (
 	"github.com/onesi/hashpoint/internal/storage"
 	"github.com/onesi/hashpoint/internal/tagging"
 	"github.com/onesi/hashpoint/internal/tracker"
+	"github.com/onesi/hashpoint/internal/winapi"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 
@@ -123,7 +124,10 @@ func run() error {
 		return personio.NewSyncer(cli, tagBlocks, tags, slog.Default())
 	}
 
-	a := app.New(app.Deps{
+	hotkeyMgr := winapi.NewHotkeyManager(slog.Default())
+
+	var a *app.App
+	a = app.New(app.Deps{
 		Tracks:       tracks,
 		TagBlocks:    tagBlocks,
 		Tags:         tags,
@@ -145,18 +149,27 @@ func run() error {
 				"tag_block_granularity_min", c.Tracking.TagBlockGranularityMin,
 				"tracking_enabled", c.Tracking.Enabled,
 				"personio_tenant", c.Personio.Tenant,
-				"autostart", c.UI.Autostart)
+				"autostart", c.UI.Autostart,
+				"quick_tag_enabled", c.QuickTag.Enabled,
+				"quick_tag_hotkey", c.QuickTag.Hotkey)
 			if c.Tracking.Enabled {
 				trk.Resume()
 			} else {
 				trk.Pause(ctx)
 			}
 			orchestrator.SetGranularity(c.Tracking.TagBlockGranularity())
+			applyHotkey(hotkeyMgr, c.QuickTag, a, slog.Default())
 			return nil
 		},
 		Version: app.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate},
 		Logger:  slog.Default(),
 	})
+
+	if err := hotkeyMgr.Start(); err != nil {
+		slog.Warn("hotkey: manager start failed — quick-tag-picker disabled", "err", err)
+	} else {
+		applyHotkey(hotkeyMgr, cfg.QuickTag, a, slog.Default())
+	}
 
 	// Honour the persistent Enabled flag at startup so the user's last choice
 	// in Settings survives across restarts.
@@ -197,12 +210,36 @@ func run() error {
 		OnStartup:        a.Startup,
 		OnShutdown: func(c context.Context) {
 			a.Shutdown(c)
+			hotkeyMgr.Stop()
 			flushAndSyncOnShutdown(trk, sessionStore, syncerFor, slog.Default())
 			cancel()
 		},
 		HideWindowOnClose: true,
+		OnBeforeClose:     a.OnWindowBeforeClose,
 		Bind:              []any{a},
 	})
+}
+
+// applyHotkey reconciles the configured quick-tag hotkey with the
+// HotkeyManager. Called once at boot and on every SaveConfig — invalid
+// strings are logged and the hotkey is left unregistered (the validator
+// also rejects them, so reaching this with bad input means stale state).
+func applyHotkey(mgr *winapi.HotkeyManager, qt config.QuickTagConfig, a *app.App, logger *slog.Logger) {
+	if !qt.Enabled {
+		if err := mgr.SetHotkey(false, 0, 0, nil); err != nil {
+			logger.Warn("hotkey: disable failed", "err", err)
+		}
+		return
+	}
+	parsed, err := config.ParseHotkey(qt.Hotkey)
+	if err != nil {
+		logger.Warn("hotkey: parse failed — disabling", "hotkey", qt.Hotkey, "err", err)
+		_ = mgr.SetHotkey(false, 0, 0, nil)
+		return
+	}
+	if err := mgr.SetHotkey(true, parsed.Modifiers, parsed.VirtualKey, a.FireQuickTag); err != nil {
+		logger.Warn("hotkey: register failed", "hotkey", parsed.Canonical, "err", err)
+	}
 }
 
 // flushAndSyncOnShutdown closes any currently open process track and tag

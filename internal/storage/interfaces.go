@@ -75,6 +75,10 @@ type TagBlockRepository interface {
 	Get(ctx context.Context, id int64) (*TagBlock, error)
 	// Delete removes a tag block.
 	Delete(ctx context.Context, id int64) error
+	// RecentlyUsedTagIDs returns up to `limit` tag IDs ordered by their most
+	// recent block start time, restricted to blocks started at or after
+	// `since`. Used by the quick-tag-picker.
+	RecentlyUsedTagIDs(ctx context.Context, since time.Time, limit int) ([]int64, error)
 }
 
 // TagRepository persists tag hierarchies.

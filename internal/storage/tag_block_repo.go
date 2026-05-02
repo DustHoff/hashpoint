@@ -75,6 +75,13 @@ const (
 		ORDER BY start_time ASC LIMIT 1`
 
 	deleteTagBlockSQL = `DELETE FROM tag_blocks WHERE id = ?`
+
+	selectRecentlyUsedTagIDs = `SELECT tag_id
+		FROM tag_blocks
+		WHERE start_time >= ?
+		GROUP BY tag_id
+		ORDER BY MAX(start_time) DESC
+		LIMIT ?`
 )
 
 // Open inserts a new tag block.
@@ -288,6 +295,28 @@ func (r *TagBlockRepo) Get(ctx context.Context, id int64) (*TagBlock, error) {
 func (r *TagBlockRepo) Delete(ctx context.Context, id int64) error {
 	_, err := r.db.ExecContext(ctx, deleteTagBlockSQL, id)
 	return err
+}
+
+// RecentlyUsedTagIDs returns up to `limit` tag IDs ordered by the most
+// recent block start time, restricted to blocks at or after `since`.
+func (r *TagBlockRepo) RecentlyUsedTagIDs(ctx context.Context, since time.Time, limit int) ([]int64, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := r.db.QueryContext(ctx, selectRecentlyUsedTagIDs, since.UTC(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("query recently-used tags: %w", err)
+	}
+	defer rows.Close()
+	out := make([]int64, 0, limit)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 func scanTagBlockRow(row *sql.Row) (*TagBlock, error) {

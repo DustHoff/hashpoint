@@ -79,10 +79,24 @@ export interface UIConfig {
   autostart: boolean;
 }
 
+export interface QuickTagConfig {
+  enabled: boolean;
+  hotkey: string;
+}
+
 export interface AppConfig {
   tracking: TrackingConfig;
   personio: PersonioConfig;
   ui: UIConfig;
+  quick_tag: QuickTagConfig;
+}
+
+export interface QuickTagSlot {
+  index: number;
+  tag_id: number;
+  label: string;
+  color?: string;
+  is_active: boolean;
 }
 
 export interface PersonioStatus {

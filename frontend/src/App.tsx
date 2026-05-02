@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { api } from "./api";
 import Timeline from "./components/Timeline";
 import TagManager from "./components/TagManager";
 import RuleManager from "./components/RuleManager";
 import Settings from "./components/Settings";
 import About from "./components/About";
 import PersonioBadge from "./components/PersonioBadge";
+import QuickTagPicker from "./components/QuickTagPicker";
 
 type Tab = "timeline" | "tags" | "rules" | "settings" | "about";
 
@@ -18,6 +20,20 @@ const tabs: { id: Tab; label: string }[] = [
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("timeline");
+  const [quickTagOpen, setQuickTagOpen] = useState(false);
+
+  useEffect(() => {
+    const offOpen = api.onEvent("quick-tag-picker:open", () =>
+      setQuickTagOpen(true),
+    );
+    const offClose = api.onEvent("quick-tag-picker:close", () =>
+      setQuickTagOpen(false),
+    );
+    return () => {
+      offOpen();
+      offClose();
+    };
+  }, []);
 
   return (
     <div className="flex h-full flex-col">
@@ -47,6 +63,9 @@ export default function App() {
         {tab === "settings" && <Settings />}
         {tab === "about" && <About />}
       </main>
+      {quickTagOpen && (
+        <QuickTagPicker onClose={() => setQuickTagOpen(false)} />
+      )}
     </div>
   );
 }

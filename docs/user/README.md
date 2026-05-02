@@ -20,6 +20,7 @@ Der TimeTracker ist eine Windows-Desktop-Anwendung, die im Hintergrund automatis
 | [Auto-Tagging-Regeln](auto-tagging.md) | Regeln definieren, testen und auf Historie anwenden |
 | [Personio-Synchronisation](personio.md) | Voraussetzungen, Sync-Logik, Fehlerbehandlung |
 | [Systemtray](tray.md) | Tray-Menü, Pause, manuelles Tagging, Autostart, Beenden |
+| [Quick-Tag-Picker](quick-tag.md) | Globaler Hotkey für blitzschnelles manuelles Taggen |
 
 ## Schnellstart in fünf Schritten
 

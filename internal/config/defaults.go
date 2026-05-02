@@ -14,5 +14,9 @@ func Default() *Config {
 		UI: UIConfig{
 			Autostart: true,
 		},
+		QuickTag: QuickTagConfig{
+			Enabled: true,
+			Hotkey:  "Ctrl+Alt+T",
+		},
 	}
 }

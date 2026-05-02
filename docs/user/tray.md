@@ -33,6 +33,8 @@ Per **Rechtsklick** auf das Tray-Icon öffnet sich das Menü:
 
 ## Manuelles Tagging
 
+> 💡 **Tipp:** Für blitzschnelles Wechseln zwischen häufig benutzten Tags — auch von anderen Anwendungen aus — gibt es zusätzlich den globalen [Quick-Tag-Picker](quick-tag.md) (Default-Hotkey `Strg+Alt+T`).
+
 Das Submenü **Manueller Tag** ist die schnellste Möglichkeit, eine laufende Tätigkeit explizit einer Kategorie zuzuordnen — z. B. einem Telefonat, einem Meeting oder einer Pause. Anders als der Drag-to-tag-Workflow auf der Zeitachse erzeugt es eine **offene Sitzung ohne festes Ende**: alles, was Sie in dieser Zeit tun, wird dem gewählten Tag zugeschrieben, bis Sie die Sitzung explizit beenden.
 
 ### Sitzung starten

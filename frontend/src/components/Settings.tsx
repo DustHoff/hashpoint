@@ -12,6 +12,7 @@ const emptyConfig: AppConfig = {
   },
   personio: { tenant: "" },
   ui: { autostart: true },
+  quick_tag: { enabled: true, hotkey: "Ctrl+Alt+T" },
 };
 
 // normalize defends against backends that omit (or rename) sub-objects so a
@@ -30,6 +31,10 @@ function normalize(c: Partial<AppConfig> | null | undefined): AppConfig {
     },
     personio: { tenant: c?.personio?.tenant ?? "" },
     ui: { autostart: c?.ui?.autostart ?? emptyConfig.ui.autostart },
+    quick_tag: {
+      enabled: c?.quick_tag?.enabled ?? emptyConfig.quick_tag.enabled,
+      hotkey: c?.quick_tag?.hotkey ?? emptyConfig.quick_tag.hotkey,
+    },
   };
 }
 
@@ -211,6 +216,54 @@ export default function Settings() {
           />
           Mit Windows starten (Autostart)
         </label>
+      </section>
+
+      {/* Quick-Tag section ---------------------------------------------- */}
+      <section className="space-y-3 rounded bg-surface p-4">
+        <h3 className="text-sm font-semibold text-slate-200">Quick-Tag-Picker</h3>
+        <label className="flex items-start gap-3 text-sm text-slate-300">
+          <input
+            type="checkbox"
+            checked={config.quick_tag.enabled}
+            onChange={(e) =>
+              update("quick_tag", {
+                ...config.quick_tag,
+                enabled: e.target.checked,
+              })
+            }
+            className="mt-0.5 h-4 w-4"
+          />
+          <span className="flex flex-col">
+            <span>Globalen Hotkey für den Quick-Tag-Picker registrieren</span>
+            <span className="text-[11px] text-slate-500">
+              Öffnet beim Drücken eine kleine Auswahl unten rechts auf dem
+              aktuellen Monitor mit den 10 zuletzt verwendeten Tags
+              (nummeriert 0–9, Auswahl per Zifferntaste oder Mausklick).
+            </span>
+          </span>
+        </label>
+        <Field
+          label="Hotkey"
+          help={
+            'Format: "<Mod>+<Mod>+<Taste>", z. B. "Ctrl+Alt+T", "Win+Y" oder "Shift+Ctrl+5". ' +
+            "Modifier: Ctrl, Alt, Shift, Win. Tasten: A–Z, 0–9, F1–F24. Mindestens ein Modifier ist Pflicht. " +
+            "Hinweis: Win+T ist von Windows belegt (Taskleisten-Fokus) und sollte vermieden werden."
+          }
+        >
+          <input
+            type="text"
+            value={config.quick_tag.hotkey}
+            onChange={(e) =>
+              update("quick_tag", {
+                ...config.quick_tag,
+                hotkey: e.target.value,
+              })
+            }
+            disabled={!config.quick_tag.enabled}
+            className="w-48 rounded bg-slate-900/60 px-2 py-1 font-mono text-sm disabled:opacity-50"
+            placeholder="Ctrl+Alt+T"
+          />
+        </Field>
       </section>
 
       {/* Personio section ----------------------------------------------- */}

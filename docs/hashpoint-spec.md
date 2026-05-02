@@ -48,6 +48,52 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
   tragen den Eltern-Namen als Präfix („`<Parent> › <Sub>`"), damit
   gleichnamige Sub-Tags unterschiedlicher Eltern eindeutig wählbar bleiben.
 
+### 2.2a Quick-Tag-Picker (globaler Hotkey)
+
+- Hashpoint registriert auf Wunsch einen **globalen Win32-Hotkey**
+  (`RegisterHotKey` auf einem dedizierten OS-gelockten Message-Loop-Thread
+  in `internal/winapi/hotkey_windows.go`). Drücken des Hotkeys von einer
+  beliebigen Anwendung aus öffnet einen kleinen, kompakten Tag-Picker.
+- **Default-Hotkey:** `Ctrl+Alt+T`. Konfigurierbar in den Einstellungen
+  (`config.QuickTag.Hotkey`). Format: `<Mod>+<Mod>+<Taste>` mit
+  Modifiern `Ctrl`, `Alt`, `Shift`, `Win` und Tasten `A–Z`, `0–9`,
+  `F1–F24`. Mindestens ein Modifier ist Pflicht. `Win+T` ist eine
+  Windows-Shell-Tastenkombination (Taskleisten-Fokus) und wird in
+  Doku/UI explizit als „nicht empfohlen" markiert.
+- **Aktivierung:** Über `config.QuickTag.Enabled` (Default `true`).
+  Validierung lehnt ungültige Hotkey-Strings beim Speichern ab; ist die
+  Registrierung zur Laufzeit fehlgeschlagen (z. B. weil eine andere
+  App denselben Hotkey beansprucht), wird das auf `Warn`-Level geloggt
+  und der Picker ist stumm.
+- **Picker-Fenster:** Wails v2 unterstützt nur ein Fenster — der Picker
+  übernimmt deshalb das Hauptfenster für die Dauer der Auswahl. Beim
+  Hotkey-Druck speichert das Backend Größe und Position des Hauptfensters,
+  setzt es auf `340×420` Pixel an die untere rechte Ecke des Monitors,
+  auf dem sich der Cursor befindet (`MonitorFromPoint(GetCursorPos())`,
+  Work-Area), schaltet `AlwaysOnTop` ein und feuert das Wails-Event
+  `quick-tag-picker:open` an das Frontend. Beim Schließen wird Größe,
+  Position und `AlwaysOnTop` restauriert; war das Hauptfenster vorher
+  versteckt (Tray-Modus, geprüft via `OnBeforeClose`-Hook), wird es
+  wieder versteckt.
+- **Inhalt:** Bis zu 10 Einträge, nummeriert `0`–`9`. Reihenfolge:
+  zuerst die zuletzt verwendeten Tags der **letzten 30 Tage** (sortiert
+  absteigend nach `MAX(start_time)` in `tag_blocks`), dann mit unbenutzten
+  Tags in derselben Eltern-zuerst-Reihenfolge wie das Tray-Submenü und
+  der Timeline-Picker aufgefüllt. Sub-Tags tragen den Eltern-Namen als
+  Präfix (`<Parent> › <Sub>`). Der aktuell offene oder pausierte
+  manuelle Tag wird hervorgehoben (`is_active` im DTO, „aktiv"-Badge im UI).
+- **Auswahl:** Tasten `0`–`9` oder Mausklick. `Esc` schließt ohne
+  Wechsel. Eine erneute Hotkey-Betätigung bei offenem Picker wirkt wie
+  `Esc` (Toggle).
+- **Wirkung:** Der gewählte Tag wird per `App.QuickTagSelect(tag_id)`
+  aktiviert. Wählt der User den bereits aktiven Tag, ist die Aktion
+  ein No-op (der laufende Block wird nicht neu gestartet). Bei einem
+  neuen Tag ruft das Backend `Orchestrator.StartManualOpenEnded` auf
+  — der bestehende manuelle Block wird also auf das Granularitätsraster
+  geschlossen, bevor der neue startet (siehe §2.4.2).
+- **Plattform:** Nur Windows. Der `winapi`-Stub auf anderen Plattformen
+  liefert `ErrUnsupported`; das Feature ist dort wirkungslos.
+
 ### 2.3 Hauptfenster (Zeitachse)
 - Tagesansicht: **zwei übereinander liegende Strips** mit gemeinsamer
   Zoom/Scroll-Achse, darunter zwei Tabellen.
