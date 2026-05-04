@@ -13,12 +13,17 @@ Idle-Erkennung, Bildschirmsperre und Crash-Recovery wirken auf der Process-Track
 
 ## Aufbau des Tabs
 
+Das Hashpoint-Fenster startet **maximiert**, damit beide Listen direkt nebeneinander Platz haben. Es bleibt ein normales Fenster — verschiebbar, verkleinerbar, schließbar in den Tray.
+
 Der Tab besteht aus:
 
 1. **Kopfbereich** – Datum, Pause/Sync.
 2. **Zwei Zeitstrahl-Streifen** – oben die Tag-Blöcke, unten die Process-Tracks. Beide teilen sich Zoom und Scroll.
-3. **Tag-Block-Tabelle** – ein Eintrag pro Tag-Block (manuell oder auto), mit Beschreibung und Tag-Chips.
-4. **Process-Track-Tabelle** – gruppiert die rohen Fokus-Events nach Programm.
+3. **Zwei nebeneinander liegende Listen** unterhalb der Streifen:
+   - **Links — Tag-Block-Liste:** ein Eintrag pro Tag-Block (manuell oder auto), mit Beschreibung und Tag-Chips. Bekommt 40 % der Breite.
+   - **Rechts — Process-Track-Liste:** gruppiert die rohen Fokus-Events nach Programm. Bekommt 60 % der Breite, weil Fenstertitel länger sind als Tag-Chips.
+
+   Beide Listen scrollen unabhängig voneinander (jeweils max. 65 % der Bildschirmhöhe), damit ein langer Tag links nicht die Sicht auf die Prozesse rechts verschiebt.
 
 ### Kopfbereich
 
@@ -59,7 +64,7 @@ Direkt unter dem Kopfbereich liegen zwei horizontale Streifen vom Tagesanfang (0
 | **Shift + Mausrad** | Schwenkt horizontal. |
 | **Doppelklick** | Setzt Zoom auf den ganzen Tag zurück. |
 
-### Tag-Block-Tabelle
+### Tag-Block-Liste (linke Spalte)
 
 Pro Eintrag:
 
@@ -71,11 +76,11 @@ Pro Eintrag:
 
 Klick toggelt die Selektion (Shift = additiv).
 
-### Process-Track-Tabelle
+### Process-Track-Liste (rechte Spalte)
 
 Aufeinanderfolgende Tracks mit gleichem Programm werden zu einer Zeile zusammengefasst. Der Pfeil-Button expandiert die Gruppe und zeigt jeden ursprünglichen Fenstertitel — nützlich, um lange Browser-Sitzungen mit vielen Tabs nachzuvollziehen.
 
-Diese Tabelle ist read-only — Process-Tracks repräsentieren die Realität und können nicht editiert werden. Korrekturen passieren auf der Tag-Block-Ebene.
+Diese Liste ist read-only — Process-Tracks repräsentieren die Realität und können nicht editiert werden. Korrekturen passieren auf der Tag-Block-Ebene.
 
 ## Tag-Blöcke anlegen oder ändern
 
@@ -94,8 +99,20 @@ Diese Tabelle ist read-only — Process-Tracks repräsentieren die Realität und
 2. Im Auswahl-Panel:
    - **Tag-Button** ändert den Tag (und schreibt die Beschreibung).
    - **Speichern** ändert nur die Beschreibung.
-   - **Löschen** entfernt die ausgewählten Tag-Blöcke endgültig (Process-Tracks bleiben unberührt).
+   - **Löschen** entfernt die ausgewählten Tag-Blöcke endgültig (Process-Tracks bleiben unberührt). Alternativ: Taste **Entf** / **Delete** — gleiche Sicherheitsabfrage, gleiches Verhalten. Die Tastatur-Abkürzung wird ignoriert, solange der Cursor in einem Eingabefeld (z. B. Beschreibung) steht, damit dort weiter normal Text gelöscht werden kann.
    - **Auswahl aufheben** leert die Markierung.
+
+### Tag-Block-Kanten ziehen (Resize)
+
+Sobald **genau ein abgeschlossener** Tag-Block selektiert ist, erscheinen am linken und rechten Blockrand zwei weiße Greifer. Damit lässt sich der Block in der Zeitachse strecken oder stauchen, ohne ihn neu anzulegen:
+
+- Greifer mit der Maus nach links/rechts ziehen — die Kante snappt live auf das Granularitätsraster.
+- **Nachbarschutz:** Die Kante stoppt automatisch an der Grenze des nächsten Tag-Blocks. In bereits getaggte Bereiche kann nicht gezogen werden — nur in „freien" Zeitraum (oder bis zur Tageskante 00:00 bzw. 24:00).
+- Der Block muss mindestens eine Granularitätsstufe breit bleiben — die gezogene Kante kann nicht über die gegenüberliegende Kante hinausgehen.
+- **Auto-Tag-Blöcke** werden beim Resize automatisch zu manuellen Blöcken (gestrichelte Umrandung verschwindet), damit die Auto-Tag-Engine sie nicht beim nächsten Lauf wieder regeneriert.
+- **Offene Blöcke** (der laufende Auto-Tag, der offene manuelle Tag aus dem Tray) sind nicht resizable — sie haben kein festes Ende, das man verschieben könnte.
+
+Die Greifer verschwinden, sobald mehrere Blöcke selektiert sind, ein neuer manueller Range gezogen wird, oder die Auswahl aufgehoben wird.
 
 ### Tag-Buttons im Auswahl-Panel
 

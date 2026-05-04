@@ -39,6 +39,10 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
     konfiguriertem Tag, siehe 2.4.2)
   - Autostart (Checkbox)
   - Über `<version>`
+  - **Hilfe** — öffnet das Hauptfenster und wechselt in den Tab
+    *Hilfe* (siehe §2.3a). Backend-Methode `App.OpenHelpTab` ruft
+    `ShowWindow` und feuert das Wails-Event `help:open` an das
+    Frontend.
   - Beenden (echter Exit; löst zuvor einen Sync-beim-Beenden aus, siehe §2.5.6)
 - **Autostart**-Option (Registry-Eintrag unter `HKCU\...\Run`).
 - Die Tag-Liste im Submenü wird beim Tray-Start erfasst — neu angelegte
@@ -95,8 +99,13 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
   liefert `ErrUnsupported`; das Feature ist dort wirkungslos.
 
 ### 2.3 Hauptfenster (Zeitachse)
+- Hauptfenster startet **maximiert** (`WindowStartState: Maximised`),
+  damit beide Listen direkt nebeneinander Platz haben. Das Fenster bleibt
+  ein normales Fenster (Titelleiste, verschiebbar, verkleinerbar) — kein
+  echter Fullscreen.
 - Tagesansicht: **zwei übereinander liegende Strips** mit gemeinsamer
-  Zoom/Scroll-Achse, darunter zwei Tabellen.
+  Zoom/Scroll-Achse, darunter **zwei nebeneinander liegende Tabellen**
+  (links Tag-Blöcke, rechts Prozesse — siehe unten).
 - Datums-Navigation (Vor/Zurück, Datepicker).
 - **Top-Strip — Tag-Blöcke:** Visualisiert die manuellen und automatischen
   `tag_blocks`. Auto-Blöcke werden mit gestrichelter Umrandung dargestellt,
@@ -118,6 +127,28 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
 - **Klick auf einen Tag-Block** im Top-Strip selektiert ihn (Shift = additiv).
   Ausgewählte Blöcke können neu getagt werden (`SetTagBlockTag`),
   beschriftet (`SetTagBlockDescription`) oder gelöscht (`DeleteTagBlock`).
+- **Resize bestehender Tag-Blöcke:** Sobald **genau ein** geschlossener
+  Tag-Block selektiert ist (und kein gezogener manueller Range aktiv ist),
+  erscheinen am linken und rechten Rand des Blocks Resize-Greifer. Beim
+  Ziehen:
+  - Die Live-Position **clamp**t hart an die Kante des nächsten Nachbar-
+    Tag-Blocks (links: dessen `end_time`, rechts: dessen `start_time`),
+    fällt zurück auf die Tagesgrenzen `00:00`/`24:00`, wenn kein Nachbar
+    in der jeweiligen Richtung existiert.
+  - Die gezogene Kante snappt während des Drags auf das
+    Granularitätsraster (Start floor, Ende ceil).
+  - Der Block muss mindestens eine Granularitätsstufe (oder 1 s, falls
+    `tag_block_granularity_min = 0`) breit bleiben — die gezogene Kante
+    kann nicht über die andere Kante hinaus.
+  - Beim Loslassen wird `Orchestrator.ResizeBlock` → `TagBlockRepo.Resize`
+    aufgerufen. Das Repo prüft den Non-Overlap-Invariant erneut und
+    aktualisiert `start_time`, `end_time` und `duration_sec` in **einer**
+    Transaktion.
+  - **Auto-Tag-Blöcke** werden bei Resize implizit auf `is_manual = 1`
+    gehoben — der manuelle Eingriff hat Vorrang vor erneuter
+    Auto-Tag-Reproduktion.
+  - Offene Blöcke (Auto-Run, offener manueller Tag) sind nicht resizable
+    — die Repo-Methode lehnt das ab.
 - **Tag-Picker im Auswahl-Panel:** Die Tag-Buttons werden **nach Eltern-Tag
   gruppiert** gerendert (Eltern zuerst, danach unmittelbar dessen Sub-Tags).
   Sub-Tag-Buttons stellen den Eltern-Namen als gedimmtes Präfix
@@ -130,12 +161,15 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
 - **Mausrad zoomt** (cursor-anchored), **Shift+Mausrad schwenkt**,
   **Doppelklick** setzt den Zoom zurück. Beide Strips reagieren synchron
   auf dieselbe View-Window-State.
-- **Tabellen** unterhalb der Strips:
-  - Tag-Block-Tabelle: pro `tag_block` eine Zeile mit Zeitraum, Dauer,
-    `manuell|auto`, Beschreibung, Tag-Chips (Parent + Sub).
-  - Process-Track-Tabelle: gruppiert aufeinanderfolgende Tracks mit
-    gleichem Prozess. Der Pfeil expandiert die Gruppe und zeigt die
-    einzelnen Fenstertitel.
+- **Tabellen** unterhalb der Strips, in einem zweispaltigen Flex-Container
+  (Verhältnis 40 / 60, immer nebeneinander — auch bei schmalen Fenstern;
+  jede Spalte scrollt unabhängig mit `max-h: 65vh`):
+  - **Linke Spalte — Tag-Block-Tabelle:** pro `tag_block` eine Zeile mit
+    Zeitraum, Dauer, `manuell|auto`, Beschreibung, Tag-Chips (Parent + Sub).
+  - **Rechte Spalte — Process-Track-Tabelle:** gruppiert aufeinanderfolgende
+    Tracks mit gleichem Prozess. Der Pfeil expandiert die Gruppe und zeigt
+    die einzelnen Fenstertitel. Bekommt 60 % der Breite, weil Fenstertitel
+    deutlich länger sind als Tag-Chips.
 
 ### 2.3.1 Tätigkeitsbeschreibung pro Tag-Block
 - Jeder `tag_block` hat ein optionales freies Textfeld `description`.
@@ -146,6 +180,37 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
   in den fortgesetzten manuellen Block geschrieben.
 - Beim Personio-Sync wird die Beschreibung an den aus Tag/Sub-Tag
   generierten Kommentar angehängt (Format: `"<tag-comment> — <description>"`).
+
+### 2.3a Hilfe-Tab (eingebettetes Benutzerhandbuch)
+
+- Hauptfenster hat einen Tab **Hilfe**, der das Benutzerhandbuch
+  (`docs/user/*.md`) im linken-Sidebar-/rechte-Inhalt-Layout anzeigt.
+- **Bereitstellung:** Markdown-Dateien sind in den Binary eingebettet
+  via `//go:embed docs/user/*.md` (Datei `userdocs.go` am Modul-Root,
+  da `//go:embed` keine `..`-Pfade erlaubt; identisches Muster wie
+  `frontend.go`). Damit funktioniert die Hilfe offline und passt
+  garantiert zur installierten Version.
+- **Backend-Bindings:**
+  - `App.ListUserDocs() ([]UserDocPage, error)` — liefert
+    `{slug, title}` in der durch `helpPageOrder` festgelegten
+    Sidebar-Reihenfolge. Titel wird aus dem ersten H1 der jeweiligen
+    Markdown-Datei gelesen, Fallback ist der Slug.
+  - `App.GetUserDoc(slug string) (string, error)` — liefert den rohen
+    Markdown-Inhalt. Slug wird gegen `helpPageOrder` whitelisted
+    (kein Pfad-Traversal).
+  - `App.OpenHelpTab()` — vom Tray-Eintrag *Hilfe* aufgerufen; ruft
+    `ShowWindow` und feuert das Wails-Event `help:open` an das
+    Frontend, das daraufhin in den Tab *Hilfe* wechselt.
+- **Frontend:** `react-markdown` + `remark-gfm` rendern die Datei in
+  einer dunklen, mit Tailwind-Klassen ausgezeichneten Ansicht (kein
+  `@tailwindcss/typography`, um die Dependency-Last gering zu halten).
+  Interne `*.md`-Links (z. B. `[Tags](tags.md)`) werden abgefangen
+  und navigieren in der Sidebar — sie öffnen keinen Browser.
+- **Sidebar-Reihenfolge** (`helpPageOrder` in `internal/app/app.go`):
+  `README`, `installation`, `einstellungen`, `zeiterfassung`, `tags`,
+  `auto-tagging`, `personio`, `tray`, `quick-tag`. Eine neue Doku-Seite
+  ist erst nach Eintrag in diese Liste sichtbar (bewusste
+  Zwei-Schritt-Aktion: Datei droppen + Slug eintragen).
 
 ### 2.4 Tags (mit Hierarchie)
 - Frei definierbare Tags in **zwei Ebenen**: Parent-Tag (z. B. `#projekta`) und Sub-Tag (z. B. `#frontend`, `#meeting`, `#review`).
@@ -641,8 +706,60 @@ autostart = true
 
 ## 5. Build & Deployment
 - Single-File-Executable: `go build -ldflags="-H windowsgui"` (kein Konsolenfenster).
-- Icon-Embedding via `goversioninfo`.
-- Optionaler Installer mit **Inno Setup** oder **MSIX**.
+- Icon-Embedding via `tc-hib/go-winres` (`.syso` mit Icon, Manifest und
+  VERSIONINFO; `TimeDateStamp=0` für reproduzierbare Builds).
+
+### 5.1 Release-Pipeline (`.github/workflows/release.yml`)
+
+Push auf `main` → Auto-Tag (Semver, Patch-Bump per Default) → Build →
+GitHub-Release mit folgenden Artefakten:
+
+- `hashpoint.exe` — Single-File-Build, GUI-Subsystem, reproduzierbar
+  (pinned Go/Node, `-trimpath`, `-buildid=`, commit-derived `buildDate`).
+- `hashpoint-<version>.msi` — WiX-3.14-Installer (siehe §5.2).
+- `checksums.txt` — SHA-256 für beide Artefakte.
+
+`[skip release]` oder `[skip ci]` im Commit-Message überspringt den
+Tag-Bump und damit den Build.
+
+### 5.2 MSI-Installer (WiX 3.14)
+
+- Quelle: `build/wix/hashpoint.wxs`. Sprache: `1031` (de-DE).
+- Build-Toolchain: WiX Toolset 3.14.1, im Workflow installiert via
+  `choco install wixtoolset --version=3.14.1`. `candle` kompiliert
+  `.wxs` → `.wixobj`, `light` linkt das `.wixobj` → `.msi`. Quellpfade
+  (`hashpoint.exe`, Icon, Version) werden via `-d`-Preprocessor
+  übergeben, damit die `.wxs` repo-relativ bleibt.
+- **Install-Scope:** `perMachine`. Default-Pfad
+  `%ProgramFiles%\Hashpoint\hashpoint.exe`. UAC-Prompt erforderlich;
+  `msiexec /i hashpoint-<version>.msi /quiet` für IT-Roll-Outs.
+- **Stable Identifiers** (dürfen niemals neu generiert werden, sonst
+  bricht die `MajorUpgrade`-Kette):
+  - `UpgradeCode`: `8B0A3C7E-7D1F-4B23-9A2C-1F8E5D9C0B42`
+  - `MainExecutable` GUID: `4D2E9F71-2C3B-4A5E-91F2-7E4D8B1C3A60`
+  - `StartMenuShortcut` GUID: `6F5C4E81-3B7A-4D9C-B0E2-8A5F2D7C9E31`
+  - `AutostartHKCU` GUID: `9A1B2C3D-4E5F-46A7-B8C9-D0E1F2A3B4C5`
+  - `ProductId="*"` → bei jedem Upgrade neu generiert; `MajorUpgrade`
+    sorgt dafür, dass die Vorgänger-Version vor der Installation
+    deinstalliert wird.
+- **Komponenten:**
+  1. `MainExecutable` — schreibt `hashpoint.exe` nach `INSTALLDIR`
+     (Win64, KeyPath, Checksum).
+  2. `StartMenuShortcut` — Eintrag „Hashpoint TimeTracker" im
+     Startmenü; KeyPath ist ein HKCU-Marker (`Software\onesi\Hashpoint`),
+     damit die Komponente per-User installierbar bleibt.
+  3. `AutostartHKCU` — schreibt `HKCU\Software\Microsoft\Windows\
+     CurrentVersion\Run\HashpointTimeTracker = "<install-pfad>\hashpoint.exe"`
+     für den **installierenden User**. Andere User des Systems können
+     Autostart über das Tray-Menü selbst aktivieren — dieser Toggle
+     manipuliert dieselbe HKCU-Run-Position für ihr eigenes Profil.
+- **ICE57 unterdrückt** (`light -sice:ICE57`): WiX warnt sonst, dass
+  HKCU-Registry in einem per-machine-Install nicht „sauber" ist; wir
+  akzeptieren den Trade-off bewusst (siehe Kommentar in
+  `release.yml` und `hashpoint.wxs`).
+- **Versionierung:** Git-Tag `vX.Y.Z` → MSI-`ProductVersion=X.Y.Z`. Tag
+  ohne kompatibles Format (Pre-Release-Suffix etc.) bricht den Build
+  vor dem MSI-Schritt ab.
 
 ---
 

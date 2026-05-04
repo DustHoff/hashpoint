@@ -34,8 +34,10 @@ Der TimeTracker ist eine Windows-Desktop-Anwendung, die im Hintergrund automatis
 
 - **Tray-Icon (rechts unten):** Pause umschalten, manuelles Tagging,
   Sync zu Personio, Autostart, Beenden
-- **Hauptfenster:** Fünf Tabs – Zeitachse, Tags, Auto-Tagging,
-  Einstellungen, Über; oben rechts der Personio-Status-Badge
+- **Hauptfenster:** Sechs Tabs – Zeitachse, Tags, Auto-Tagging,
+  Einstellungen, Hilfe, Über; oben rechts der Personio-Status-Badge.
+  Der Tab **Hilfe** zeigt das eingebettete Benutzerhandbuch (auch
+  direkt aus dem Tray über den Eintrag *Hilfe* erreichbar).
 - **Konfigurationsdatei:** `%APPDATA%\TimeTracker\config.toml`
 - **Datenbank & Logs:** `%LOCALAPPDATA%\TimeTracker\`
 - **Personio-Session:** Windows Credential Manager

@@ -76,6 +76,9 @@ export const api = {
   setTagBlockTag: (id: number, tagId: number) =>
     bridge().SetTagBlockTag(id, tagId) as Promise<void>,
 
+  resizeTagBlock: (id: number, startISO: string, endISO: string) =>
+    bridge().ResizeTagBlock(id, startISO, endISO) as Promise<void>,
+
   deleteTagBlock: (id: number) =>
     bridge().DeleteTagBlock(id) as Promise<void>,
 
@@ -144,6 +147,12 @@ export const api = {
     fields?: Record<string, unknown>,
   ) =>
     bridge().LogFrontend(level, message, fields ?? {}) as Promise<void>,
+
+  // Help / user docs ----------------------------------------------------
+  listUserDocs: () =>
+    bridge().ListUserDocs() as Promise<Array<{ slug: string; title: string }>>,
+  getUserDoc: (slug: string) =>
+    bridge().GetUserDoc(slug) as Promise<string>,
 
   // Wails event subscription -------------------------------------------
   // Returns an unsubscribe function. The handler receives nothing useful

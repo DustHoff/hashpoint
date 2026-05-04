@@ -62,6 +62,71 @@ func TestRecentlyUsedTagIDs(t *testing.T) {
 	}
 }
 
+func TestTagBlockResize(t *testing.T) {
+	ctx := context.Background()
+	db, err := OpenInMemory(ctx)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	tagsRepo := NewTagRepo(db)
+	tag := &Tag{Name: "#x", SyncToPersonio: true}
+	if err := tagsRepo.Create(ctx, tag); err != nil {
+		t.Fatalf("create tag: %v", err)
+	}
+	repo := NewTagBlockRepo(db)
+
+	day := time.Date(2026, 5, 4, 0, 0, 0, 0, time.UTC)
+	mk := func(start, end time.Time, manual bool) *TagBlock {
+		b := &TagBlock{TagID: tag.ID, StartTime: start, EndTime: &end, IsManual: manual}
+		if err := repo.Open(ctx, b); err != nil {
+			t.Fatalf("open block: %v", err)
+		}
+		return b
+	}
+
+	// Layout: [09:00-10:00 auto] [11:00-12:00 manual]
+	auto := mk(day.Add(9*time.Hour), day.Add(10*time.Hour), false)
+	mk(day.Add(11*time.Hour), day.Add(12*time.Hour), true)
+
+	// 1) Extend the auto block to the right into free space; should also
+	//    flip is_manual=true because promoteToManual=true.
+	newStart := day.Add(9 * time.Hour)
+	newEnd := day.Add(10*time.Hour + 30*time.Minute)
+	if err := repo.Resize(ctx, auto.ID, newStart, newEnd, true); err != nil {
+		t.Fatalf("resize free: %v", err)
+	}
+	got, err := repo.Get(ctx, auto.ID)
+	if err != nil || got == nil {
+		t.Fatalf("get: %v %v", got, err)
+	}
+	if !got.StartTime.Equal(newStart) || got.EndTime == nil || !got.EndTime.Equal(newEnd) {
+		t.Fatalf("range not applied: %v..%v", got.StartTime, got.EndTime)
+	}
+	if got.DurationSec != int64(90*60) {
+		t.Fatalf("duration: want 5400 got %d", got.DurationSec)
+	}
+	if !got.IsManual {
+		t.Fatal("expected promotion to manual")
+	}
+
+	// 2) Resize that would collide with the second block (10:30→11:30
+	//    overlaps the [11:00,12:00) neighbor) must fail.
+	collide := day.Add(11*time.Hour + 30*time.Minute)
+	if err := repo.Resize(ctx, auto.ID, newStart, collide, false); err == nil {
+		t.Fatal("expected overlap error")
+	}
+
+	// 3) Resize an open block must be rejected.
+	openBlk := &TagBlock{TagID: tag.ID, StartTime: day.Add(14 * time.Hour), IsManual: true}
+	if err := repo.Open(ctx, openBlk); err != nil {
+		t.Fatalf("open openBlk: %v", err)
+	}
+	if err := repo.Resize(ctx, openBlk.ID, day.Add(14*time.Hour), day.Add(15*time.Hour), false); err == nil {
+		t.Fatal("expected error on resizing an open block")
+	}
+}
+
 func TestProcessTrackLastEnd(t *testing.T) {
 	ctx := context.Background()
 	db, err := OpenInMemory(ctx)

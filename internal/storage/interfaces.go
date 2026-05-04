@@ -47,6 +47,12 @@ type TagBlockRepository interface {
 	SetEnd(ctx context.Context, id int64, end time.Time) error
 	// SetStart shrinks a tag block by moving its start_time forward.
 	SetStart(ctx context.Context, id int64, start time.Time) error
+	// Resize updates both start_time and end_time of a closed tag block in
+	// one transaction. Refuses if the block is open or if the new range
+	// would overlap any other tag block. When promoteToManual is true and
+	// the block is currently auto, the row is also flipped to is_manual=1
+	// (the user's resize is a manual intervention).
+	Resize(ctx context.Context, id int64, start, end time.Time, promoteToManual bool) error
 	// SetTag re-points a tag block to a different tag (used during
 	// re-tagging a manual range).
 	SetTag(ctx context.Context, id, tagID int64) error

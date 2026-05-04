@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Hashpoint TimeTracker MSI source.
+
+  Per-machine install (`InstallScope=perMachine`, requires admin/UAC) into
+  `%ProgramFiles%\Hashpoint`. Installs:
+    1. `hashpoint.exe` — the Wails-bundled binary (single-file).
+    2. Start-menu shortcut "Hashpoint TimeTracker".
+    3. HKCU\...\Run autostart entry for the user running the installer.
+
+  Silent IT roll-out:  msiexec /i hashpoint-<version>.msi /quiet
+
+  Stable identifiers (do NOT regenerate — MajorUpgrade depends on the
+  UpgradeCode being constant across releases; Component GUIDs must be
+  stable so upgrades replace files in place rather than orphaning them):
+    UpgradeCode         8B0A3C7E-7D1F-4B23-9A2C-1F8E5D9C0B42
+    MainExecutable      4D2E9F71-2C3B-4A5E-91F2-7E4D8B1C3A60
+    StartMenuShortcut   6F5C4E81-3B7A-4D9C-B0E2-8A5F2D7C9E31
+    AutostartHKCU       9A1B2C3D-4E5F-46A7-B8C9-D0E1F2A3B4C5
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="Hashpoint TimeTracker"
+           Language="1031"
+           Version="$(var.ProductVersion)"
+           Manufacturer="onesi GmbH"
+           UpgradeCode="8B0A3C7E-7D1F-4B23-9A2C-1F8E5D9C0B42">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Manufacturer="onesi GmbH"
+             Description="Hashpoint TimeTracker $(var.ProductVersion)"
+             Comments="Windows-Zeiterfassung mit Personio-Sync" />
+
+    <MajorUpgrade DowngradeErrorMessage="Eine neuere Version von Hashpoint TimeTracker ist bereits installiert." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="HashpointIcon.ico" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="HashpointIcon.ico" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/onesi/hashpoint" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/onesi/hashpoint" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLDIR" Name="Hashpoint" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder" />
+    </Directory>
+
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="MainExecutable"
+                 Guid="4D2E9F71-2C3B-4A5E-91F2-7E4D8B1C3A60"
+                 Win64="yes">
+        <File Id="HashpointExe"
+              Name="hashpoint.exe"
+              Source="$(var.ExeFile)"
+              KeyPath="yes"
+              Checksum="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut"
+                 Guid="6F5C4E81-3B7A-4D9C-B0E2-8A5F2D7C9E31">
+        <Shortcut Id="HashpointStartMenuShortcut"
+                  Name="Hashpoint TimeTracker"
+                  Description="Windows-Zeiterfassung mit Personio-Sync"
+                  Target="[#HashpointExe]"
+                  WorkingDirectory="INSTALLDIR"
+                  Icon="HashpointIcon.ico" />
+        <RemoveFolder Id="RemoveProgramMenuFolder"
+                      Directory="ProgramMenuFolder"
+                      On="uninstall" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\onesi\Hashpoint"
+                       Name="installed"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+
+      <!--
+        Autostart (HKCU\...\Run). Per-machine MSI writes this for the user
+        running the installer. Other users on the same machine can opt in
+        via the in-app Tray-"Autostart"-Toggle, which manipulates the same
+        HKCU key for their own profile.
+      -->
+      <Component Id="AutostartHKCU"
+                 Guid="9A1B2C3D-4E5F-46A7-B8C9-D0E1F2A3B4C5">
+        <RegistryValue Root="HKCU"
+                       Key="Software\Microsoft\Windows\CurrentVersion\Run"
+                       Name="HashpointTimeTracker"
+                       Type="string"
+                       Value="&quot;[#HashpointExe]&quot;"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="ProductFeature"
+             Title="Hashpoint TimeTracker"
+             Level="1"
+             AllowAdvertise="no"
+             Absent="disallow">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="AutostartHKCU" />
+    </Feature>
+  </Product>
+</Wix>

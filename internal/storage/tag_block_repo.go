@@ -39,6 +39,10 @@ const (
 		SET start_time = ?, duration_sec = ?
 		WHERE id = ?`
 
+	resizeTagBlock = `UPDATE tag_blocks
+		SET start_time = ?, end_time = ?, duration_sec = ?, is_manual = ?
+		WHERE id = ?`
+
 	updateTagBlockTag = `UPDATE tag_blocks SET tag_id = ? WHERE id = ?`
 
 	updateTagBlockDescription = `UPDATE tag_blocks SET description = ? WHERE id = ?`
@@ -203,6 +207,50 @@ func (r *TagBlockRepo) SetStart(ctx context.Context, id int64, start time.Time) 
 	}
 	if _, err := tx.ExecContext(ctx, setTagBlockStart, start, dur, id); err != nil {
 		return fmt.Errorf("set tag start: %w", err)
+	}
+	return tx.Commit()
+}
+
+// Resize updates both start_time and end_time on a closed tag block. The
+// new range is rejected if it would overlap any other tag block; the
+// closed-block precondition keeps us off the still-open auto/manual blocks
+// the orchestrator owns.
+func (r *TagBlockRepo) Resize(ctx context.Context, id int64, start, end time.Time, promoteToManual bool) error {
+	start = start.UTC()
+	end = end.UTC()
+	if !end.After(start) {
+		return fmt.Errorf("end must be after start")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	row := tx.QueryRowContext(ctx, selectTagBlockByID, id)
+	b, err := scanTagBlockRow(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if b == nil {
+		return ErrNotFound
+	}
+	if b.EndTime == nil {
+		return fmt.Errorf("cannot resize an open tag block (id=%d)", id)
+	}
+	if err := assertNoTagOverlapTx(ctx, tx, id, start, &end); err != nil {
+		return err
+	}
+	isManual := b.IsManual || promoteToManual
+	dur := int64(end.Sub(start).Round(time.Second).Seconds())
+	if dur < 0 {
+		dur = 0
+	}
+	if _, err := tx.ExecContext(ctx, resizeTagBlock, start, end, dur, boolToInt(isManual), id); err != nil {
+		return fmt.Errorf("resize tag block: %w", err)
 	}
 	return tx.Commit()
 }

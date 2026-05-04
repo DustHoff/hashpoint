@@ -380,3 +380,64 @@ func TestStartupClosesDanglingManual(t *testing.T) {
 		t.Errorf("end: want %v got %v", want, bs[0].EndTime)
 	}
 }
+
+// TestResizeBlockSnapsAndPromotesAuto: an auto-tag block resized through
+// the orchestrator snaps both edges to granularity, persists the new
+// range, and is flipped to is_manual=true. A second resize that would
+// overlap an existing neighbor is rejected and leaves the block intact.
+func TestResizeBlockSnapsAndPromotesAuto(t *testing.T) {
+	e := newOrchEnv(t, 15*time.Minute)
+
+	// Seed: auto block 10:00-10:15 (driven by browser focus), then a
+	// manual block 11:00-12:00 to act as the right-hand neighbor.
+	e.orch.OnFocusChanged(e.ctx, "browser.exe", "Wiki", e.now)
+	e.orch.OnFocusChanged(e.ctx, "notepad.exe", "x", e.advance(15*time.Minute))
+
+	manualStart := time.Date(2026, 4, 29, 11, 0, 0, 0, time.UTC)
+	manualEnd := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	if err := e.orch.CreateManualRange(e.ctx, e.tagCode, "", manualStart, manualEnd); err != nil {
+		t.Fatalf("seed manual: %v", err)
+	}
+
+	bs := e.listTagBlocks()
+	if len(bs) != 2 {
+		t.Fatalf("expected 2 seed blocks, got %d", len(bs))
+	}
+	autoID := bs[0].ID
+	if bs[0].IsManual {
+		t.Fatal("expected first block to be auto")
+	}
+
+	// Resize the auto block out to 10:42 (should snap end up to 10:45)
+	// and back the start to 09:55 (should snap floor to 09:45).
+	newStart := time.Date(2026, 4, 29, 9, 55, 0, 0, time.UTC)
+	newEnd := time.Date(2026, 4, 29, 10, 42, 0, 0, time.UTC)
+	if err := e.orch.ResizeBlock(e.ctx, autoID, newStart, newEnd); err != nil {
+		t.Fatalf("resize: %v", err)
+	}
+	got, err := e.blocks.Get(e.ctx, autoID)
+	if err != nil || got == nil {
+		t.Fatalf("get: %v %v", got, err)
+	}
+	wantStart := time.Date(2026, 4, 29, 9, 45, 0, 0, time.UTC)
+	wantEnd := time.Date(2026, 4, 29, 10, 45, 0, 0, time.UTC)
+	if !got.StartTime.Equal(wantStart) {
+		t.Errorf("start: want %v got %v", wantStart, got.StartTime)
+	}
+	if got.EndTime == nil || !got.EndTime.Equal(wantEnd) {
+		t.Errorf("end: want %v got %v", wantEnd, got.EndTime)
+	}
+	if !got.IsManual {
+		t.Error("auto block should be promoted to manual after resize")
+	}
+
+	// Resize that would step into the 11:00-12:00 neighbor must fail.
+	collide := time.Date(2026, 4, 29, 11, 30, 0, 0, time.UTC)
+	if err := e.orch.ResizeBlock(e.ctx, autoID, wantStart, collide); err == nil {
+		t.Error("expected overlap rejection")
+	}
+	got2, _ := e.blocks.Get(e.ctx, autoID)
+	if got2 == nil || got2.EndTime == nil || !got2.EndTime.Equal(wantEnd) {
+		t.Errorf("block changed after rejected resize: %+v", got2)
+	}
+}

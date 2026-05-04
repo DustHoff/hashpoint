@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	hashpoint "github.com/onesi/hashpoint"
 	"github.com/onesi/hashpoint/internal/config"
 	"github.com/onesi/hashpoint/internal/personio"
 	"github.com/onesi/hashpoint/internal/storage"
@@ -31,7 +32,31 @@ const (
 	quickTagSlotCount     = 10
 	quickTagOpenEvent  = "quick-tag-picker:open"
 	quickTagCloseEvent = "quick-tag-picker:close"
+	helpOpenEvent      = "help:open"
 )
+
+// helpPageOrder controls the order of pages in the Help-tab sidebar. Slugs
+// match file names in docs/user/ minus the .md extension. The list is the
+// source of truth — any docs/user/*.md file not listed here is invisible
+// to the in-app help (so adding a new page is a deliberate two-step:
+// drop the file, append the slug here).
+var helpPageOrder = []string{
+	"README",
+	"installation",
+	"einstellungen",
+	"zeiterfassung",
+	"tags",
+	"auto-tagging",
+	"personio",
+	"tray",
+	"quick-tag",
+}
+
+// UserDocPage is the metadata payload used by the Help-tab sidebar.
+type UserDocPage struct {
+	Slug  string `json:"slug"`
+	Title string `json:"title"`
+}
 
 // VersionInfo describes the running build.
 type VersionInfo struct {
@@ -143,6 +168,74 @@ func (a *App) ShowWindow() {
 	}
 	wailsruntime.WindowShow(ctx)
 	wailsruntime.WindowUnminimise(ctx)
+}
+
+// OpenHelpTab brings the main window forward and tells the frontend to
+// switch to the Hilfe tab. Wired into the tray "Hilfe" item.
+func (a *App) OpenHelpTab() {
+	a.ShowWindow()
+	a.mu.Lock()
+	ctx, ready := a.ctx, a.started
+	a.mu.Unlock()
+	if !ready || ctx == nil {
+		a.logger.Warn("OpenHelpTab: window not ready — event dropped")
+		return
+	}
+	wailsruntime.EventsEmit(ctx, helpOpenEvent)
+}
+
+// ListUserDocs returns the embedded user-manual pages in sidebar order.
+// Each entry's title is the first H1 in the markdown (so renaming a page
+// is a one-line change inside the .md file, not a backend update).
+func (a *App) ListUserDocs() ([]UserDocPage, error) {
+	out := make([]UserDocPage, 0, len(helpPageOrder))
+	for _, slug := range helpPageOrder {
+		b, err := hashpoint.UserDocs.ReadFile("docs/user/" + slug + ".md")
+		if err != nil {
+			a.logger.Warn("help: missing doc page", "slug", slug, "err", err)
+			continue
+		}
+		out = append(out, UserDocPage{Slug: slug, Title: extractDocTitle(string(b), slug)})
+	}
+	return out, nil
+}
+
+// GetUserDoc returns the raw markdown for a single page. Slugs are
+// validated against helpPageOrder so this method cannot be coaxed into
+// reading arbitrary files from the embed FS.
+func (a *App) GetUserDoc(slug string) (string, error) {
+	if !isAllowedDocSlug(slug) {
+		return "", fmt.Errorf("unknown doc slug: %s", slug)
+	}
+	b, err := hashpoint.UserDocs.ReadFile("docs/user/" + slug + ".md")
+	if err != nil {
+		return "", fmt.Errorf("read user doc %s: %w", slug, err)
+	}
+	return string(b), nil
+}
+
+func isAllowedDocSlug(slug string) bool {
+	for _, s := range helpPageOrder {
+		if s == slug {
+			return true
+		}
+	}
+	return false
+}
+
+// extractDocTitle returns the first markdown H1 ("# ...") in the page,
+// trimmed. Falls back to the slug when no heading is found.
+func extractDocTitle(md, fallback string) string {
+	for _, line := range strings.Split(md, "\n") {
+		s := strings.TrimSpace(line)
+		if strings.HasPrefix(s, "# ") {
+			return strings.TrimSpace(strings.TrimPrefix(s, "#"))
+		}
+		if s != "" {
+			break
+		}
+	}
+	return fallback
 }
 
 // OnWindowBeforeClose is wired into Wails' OnBeforeClose hook. With
@@ -265,6 +358,25 @@ func (a *App) CreateManualTagRange(startRFC3339, endRFC3339 string, tagID int64,
 		return errors.New("orchestrator not configured")
 	}
 	return a.deps.Orchestrator.CreateManualRange(a.ctx, tagID, description, start.UTC(), end.UTC())
+}
+
+// ResizeTagBlock changes the start and end of a closed tag block. The new
+// range snaps to granularity and is rejected if it would overlap another
+// tag block. Auto-tag blocks are promoted to manual on resize.
+func (a *App) ResizeTagBlock(id int64, startRFC3339, endRFC3339 string) error {
+	a.logger.Info("app: ResizeTagBlock", "id", id, "start", startRFC3339, "end", endRFC3339)
+	start, err := time.Parse(time.RFC3339, startRFC3339)
+	if err != nil {
+		return fmt.Errorf("parse start: %w", err)
+	}
+	end, err := time.Parse(time.RFC3339, endRFC3339)
+	if err != nil {
+		return fmt.Errorf("parse end: %w", err)
+	}
+	if a.deps.Orchestrator == nil {
+		return errors.New("orchestrator not configured")
+	}
+	return a.deps.Orchestrator.ResizeBlock(a.ctx, id, start.UTC(), end.UTC())
 }
 
 // SetTagBlockDescription updates the description on a tag block.

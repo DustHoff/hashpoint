@@ -205,6 +205,7 @@ func run() error {
 		Height:           800,
 		MinWidth:         800,
 		MinHeight:        600,
+		WindowStartState: options.Maximised,
 		AssetServer:      &assetserver.Options{Assets: hashpoint.Frontend},
 		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
 		OnStartup:        a.Startup,

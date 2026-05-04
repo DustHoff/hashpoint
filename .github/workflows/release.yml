@@ -116,12 +116,75 @@ jobs:
             -ldflags "-s -w -buildid= -H windowsgui -X main.version=${{ needs.bump-tag.outputs.new_tag }} -X main.commit=${{ github.sha }} -X main.buildDate=${{ steps.builddate.outputs.iso }}" \
             -o build/bin/hashpoint.exe ./cmd/timetracker
 
+      - name: Install WiX Toolset 3.14
+        # WiX 3.14 candle/light. The Chocolatey package is the simplest path
+        # — `wix` is no longer pre-installed on `windows-2022`. Pinned to
+        # avoid silent toolchain bumps.
+        shell: pwsh
+        run: |
+          choco install -y wixtoolset --version=3.14.1 --no-progress
+          $wixBin = "C:\Program Files (x86)\WiX Toolset v3.14\bin"
+          if (-not (Test-Path "$wixBin\candle.exe")) {
+            Write-Error "WiX install path not found at $wixBin"
+            exit 1
+          }
+          # Surface candle/light to subsequent steps.
+          "$wixBin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Resolve MSI ProductVersion
+        # WiX requires a numeric major.minor.build (1-3 numeric parts);
+        # github-tag-action produces tags like "v0.4.2" — strip the "v"
+        # and reject any pre-release suffix that WiX cannot parse.
+        id: msiversion
+        shell: bash
+        run: |
+          v="${{ needs.bump-tag.outputs.new_tag }}"
+          v="${v#v}"
+          if [[ ! "$v" =~ ^[0-9]+(\.[0-9]+){0,3}$ ]]; then
+            echo "::error::Tag '$v' is not WiX-compatible (need N[.N[.N[.N]]])"
+            exit 1
+          fi
+          echo "version=${v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build MSI installer
+        # candle compiles the .wxs to .wixobj; light links it into the .msi.
+        # File source paths are passed via -d so the .wxs stays repo-relative.
+        shell: pwsh
+        run: |
+          $version = "${{ steps.msiversion.outputs.version }}"
+          $msiPath = "build/bin/hashpoint-$version.msi"
+          candle.exe -nologo `
+            -arch x64 `
+            -dProductVersion="$version" `
+            -dExeFile="build/bin/hashpoint.exe" `
+            -dIconFile="build/windows/icon.ico" `
+            -out "build/bin/hashpoint.wixobj" `
+            "build/wix/hashpoint.wxs"
+          # ICE57 warns about HKCU registry inside a per-machine install
+          # (the autostart component); we accept that trade-off for
+          # convenience of "autostart pre-set for the installing user".
+          light.exe -nologo `
+            -spdb `
+            -sice:ICE57 `
+            -out $msiPath `
+            "build/bin/hashpoint.wixobj"
+          if (-not (Test-Path $msiPath)) {
+            Write-Error "MSI build failed: $msiPath not produced"
+            exit 1
+          }
+          Remove-Item "build/bin/hashpoint.wixobj"
+          "MSI_PATH=$msiPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "MSI_NAME=hashpoint-$version.msi" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Compute SHA-256 checksums
         shell: pwsh
         run: |
-          Get-FileHash -Algorithm SHA256 build\bin\hashpoint.exe | ForEach-Object {
-            "$($_.Hash.ToLower())  hashpoint.exe"
-          } | Set-Content build\bin\checksums.txt
+          $files = @("hashpoint.exe", "$env:MSI_NAME")
+          $lines = foreach ($f in $files) {
+            $hash = (Get-FileHash -Algorithm SHA256 "build/bin/$f").Hash.ToLower()
+            "$hash  $f"
+          }
+          $lines | Set-Content build/bin/checksums.txt
 
       - name: Upload build
         uses: actions/upload-artifact@v4
@@ -129,6 +192,7 @@ jobs:
           name: release-build
           path: |
             build/bin/hashpoint.exe
+            build/bin/hashpoint-*.msi
             build/bin/checksums.txt
           retention-days: 14
 
@@ -149,4 +213,5 @@ jobs:
           generate_release_notes: true
           files: |
             dist/hashpoint.exe
+            dist/hashpoint-*.msi
             dist/checksums.txt

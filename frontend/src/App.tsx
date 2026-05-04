@@ -5,16 +5,18 @@ import TagManager from "./components/TagManager";
 import RuleManager from "./components/RuleManager";
 import Settings from "./components/Settings";
 import About from "./components/About";
+import Help from "./components/Help";
 import PersonioBadge from "./components/PersonioBadge";
 import QuickTagPicker from "./components/QuickTagPicker";
 
-type Tab = "timeline" | "tags" | "rules" | "settings" | "about";
+type Tab = "timeline" | "tags" | "rules" | "settings" | "help" | "about";
 
 const tabs: { id: Tab; label: string }[] = [
   { id: "timeline", label: "Zeitachse" },
   { id: "tags", label: "Tags" },
   { id: "rules", label: "Auto-Tagging" },
   { id: "settings", label: "Einstellungen" },
+  { id: "help", label: "Hilfe" },
   { id: "about", label: "Über" },
 ];
 
@@ -29,9 +31,11 @@ export default function App() {
     const offClose = api.onEvent("quick-tag-picker:close", () =>
       setQuickTagOpen(false),
     );
+    const offHelp = api.onEvent("help:open", () => setTab("help"));
     return () => {
       offOpen();
       offClose();
+      offHelp();
     };
   }, []);
 
@@ -61,6 +65,7 @@ export default function App() {
         {tab === "tags" && <TagManager />}
         {tab === "rules" && <RuleManager />}
         {tab === "settings" && <Settings />}
+        {tab === "help" && <Help />}
         {tab === "about" && <About />}
       </main>
       {quickTagOpen && (

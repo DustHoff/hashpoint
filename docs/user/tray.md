@@ -29,6 +29,7 @@ Per **Rechtsklick** auf das Tray-Icon öffnet sich das Menü:
 | **Manueller Tag** *(Submenü)* | Startet oder beendet eine offene manuelle Tag-Sitzung. Siehe Abschnitt **Manuelles Tagging**. |
 | **Autostart** *(Checkbox)* | Aktiviert/deaktiviert den automatischen Start beim Windows-Login. Schreibt/entfernt den entsprechenden Registry-Eintrag. |
 | **Über (Hashpoint <version>)** | Loggt Versionsinformationen. (Kein Dialog – Details siehe Tab **Über** im Hauptfenster.) |
+| **Hilfe** | Öffnet das Hauptfenster und wechselt direkt in den Tab **Hilfe** mit dem eingebetteten Benutzerhandbuch (siehe Abschnitt **Hilfe-Tab**). |
 | **Beenden** | Schließt das Programm vollständig. Offene Process-Tracks und Tag-Blöcke werden vorher sauber beendet, und die Tag-Blöcke des heutigen Tages werden automatisch ein letztes Mal an Personio synchronisiert (siehe Abschnitt **Sync beim Beenden**). |
 
 ## Manuelles Tagging
@@ -76,6 +77,18 @@ Falls beim Beenden des Programms eine offene manuelle Sitzung nicht gestoppt wur
 | Tracking aktiv + manuell offen | Manueller Block deckt die Zeit ab; Auto-Tags unterbrechen ihn temporär (siehe oben). |
 | Tracking pausiert + manuell offen | Manueller Block läuft weiter, aber Auto-Tags greifen nicht (es werden keine Process-Tracks erfasst). Der manuelle Block deckt die ganze Pause-Zeit ab. |
 | Tracking aktiv + kein manuell offen | Nur Auto-Tags greifen. |
+
+## Hilfe-Tab
+
+Der Tray-Eintrag **Hilfe** ist die schnellste Abkürzung in das eingebettete Benutzerhandbuch:
+
+- Hauptfenster wird in den Vordergrund geholt (auch wenn es minimiert oder versteckt war).
+- Der Tab **Hilfe** wird automatisch ausgewählt.
+- Links eine Sidebar mit allen Kapiteln (gleiche Reihenfolge wie in der [Übersicht](README.md)), rechts der Inhalt der gewählten Seite.
+- Interne Links zwischen Doku-Seiten (`tags.md`, `personio.md`, …) funktionieren ohne Browser — Klick wechselt einfach das Sidebar-Item.
+- Die Inhalte sind **in den Binary eingebettet** (`go:embed docs/user/*.md`); die Hilfe funktioniert offline und passt 1:1 zur installierten Version.
+
+Sie können die Hilfe jederzeit auch ohne Tray-Klick erreichen, indem Sie im Hauptfenster den Tab **Hilfe** aufrufen.
 
 ## Pause vs. Beenden
 

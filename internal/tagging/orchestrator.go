@@ -389,6 +389,30 @@ func (o *Orchestrator) CreateManualRange(ctx context.Context, tagID int64, descr
 	return nil
 }
 
+// ResizeBlock changes the start/end of a closed tag block. The new range
+// snaps to granularity (start floor, end ceil) and is rejected if it would
+// overlap another tag block. Auto-tag blocks are promoted to manual on
+// resize — the user's edit is, by definition, a manual intervention.
+func (o *Orchestrator) ResizeBlock(ctx context.Context, id int64, from, to time.Time) error {
+	if id <= 0 {
+		return fmt.Errorf("invalid tag block id: %d", id)
+	}
+	if !to.After(from) {
+		return errors.New("from must be before to")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	from = o.snapFloor(from)
+	to = o.snapCeil(to)
+	if !to.After(from) {
+		return errors.New("snapped range is empty")
+	}
+	if err := o.blocks.Resize(ctx, id, from, to, true); err != nil {
+		return fmt.Errorf("resize tag block %d: %w", id, err)
+	}
+	return nil
+}
+
 // carveAuto trims an auto-tag block to make room for a manual range that
 // overlaps it. Cases:
 //  1. b ⊆ [from, to)        → delete b

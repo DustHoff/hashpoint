@@ -69,6 +69,7 @@ func onTrayReady(ctx context.Context, a *app.App, version string) {
 	systray.AddSeparator()
 	mAutostart := systray.AddMenuItemCheckbox("Autostart", "Mit Windows starten", false)
 	mAbout := systray.AddMenuItem(fmt.Sprintf("Über (%s)", version), "Versionsinfo")
+	mHelp := systray.AddMenuItem("Hilfe", "Benutzerhandbuch öffnen")
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Beenden", "App beenden")
 
@@ -114,6 +115,8 @@ func onTrayReady(ctx context.Context, a *app.App, version string) {
 			}
 		case <-mAbout.ClickedCh:
 			slog.Info("about clicked", "version", version)
+		case <-mHelp.ClickedCh:
+			a.OpenHelpTab()
 		case <-mQuit.ClickedCh:
 			// Route through Wails OnShutdown so today's tag blocks get
 			// flushed and synced to Personio before the process exits.

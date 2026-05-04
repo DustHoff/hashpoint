@@ -126,6 +126,24 @@ export default function Timeline() {
   const [cursorPctX, setCursorPctX] = useState<number | null>(null);
   const resizeEdgeRef = useRef<"start" | "end" | null>(null);
 
+  // Live resize of an existing closed tag-block. blockResizeCtxRef holds
+  // the immutable context (id, dragged edge, neighbor fences); blockResize
+  // mirrors the live, snapped range so the strip can re-render the block
+  // at its new position during drag.
+  const blockResizeCtxRef = useRef<{
+    id: number;
+    edge: "start" | "end";
+    leftFenceMs: number;
+    rightFenceMs: number;
+    originalStart: number;
+    originalEnd: number;
+  } | null>(null);
+  const [blockResize, setBlockResize] = useState<{
+    id: number;
+    start: number;
+    end: number;
+  } | null>(null);
+
   const tagsByID = useMemo(() => {
     const m: Record<number, Tag> = {};
     tags.forEach((t) => (m[t.id] = t));
@@ -288,6 +306,25 @@ export default function Timeline() {
       setError(String(e));
     }
   }
+
+  // Delete-key shortcut mirrors the Löschen button — same confirm dialog,
+  // same scope (only committed blocks; ignores an in-progress drag range).
+  // Skipped while focus sits in an input/textarea so editing the
+  // description doesn't accidentally wipe blocks.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Delete") return;
+      if (selectedBlockIDs.size === 0) return;
+      const t = e.target as HTMLElement | null;
+      const tag = t?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || t?.isContentEditable) return;
+      e.preventDefault();
+      deleteSelectedBlocks();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBlockIDs]);
 
   async function deleteSelectedBlocks() {
     const ids = [...selectedBlockIDs];
@@ -547,6 +584,111 @@ export default function Timeline() {
     e.preventDefault();
     resizeEdgeRef.current = edge;
   }
+
+  // -- Existing-block resize ------------------------------------------------
+
+  // Single closed selection — only then resize handles appear. The selected
+  // block must be closed (end_time set); we never resize the open one.
+  const soloSelectedBlock = useMemo<TagBlock | null>(() => {
+    if (selectedRange) return null;
+    if (selectedBlockIDs.size !== 1) return null;
+    const id = [...selectedBlockIDs][0];
+    const b = tagBlocks.find((x) => x.id === id);
+    if (!b || !b.end_time) return null;
+    return b;
+  }, [selectedBlockIDs, selectedRange, tagBlocks]);
+
+  // Compute neighbor fences relative to the original block, then minimum
+  // gap to the opposite edge (one granularity step or 1s as a floor).
+  function computeBlockFences(b: TagBlock): {
+    leftFenceMs: number;
+    rightFenceMs: number;
+    originalStart: number;
+    originalEnd: number;
+  } {
+    const { start, end } = tagBlockBounds(b);
+    let leftFence = dayFromMs;
+    let rightFence = dayToMs;
+    for (const o of tagBlocks) {
+      if (o.id === b.id) continue;
+      const ob = tagBlockBounds(o);
+      if (ob.end <= start && ob.end > leftFence) leftFence = ob.end;
+      if (ob.start >= end && ob.start < rightFence) rightFence = ob.start;
+    }
+    return { leftFenceMs: leftFence, rightFenceMs: rightFence, originalStart: start, originalEnd: end };
+  }
+
+  function onBlockResizeHandleDown(
+    e: React.MouseEvent,
+    block: TagBlock,
+    edge: "start" | "end",
+  ) {
+    e.stopPropagation();
+    e.preventDefault();
+    const fences = computeBlockFences(block);
+    blockResizeCtxRef.current = { id: block.id, edge, ...fences };
+    setBlockResize({ id: block.id, start: fences.originalStart, end: fences.originalEnd });
+  }
+
+  useEffect(() => {
+    function clampMs(ms: number): number {
+      const ctx = blockResizeCtxRef.current;
+      if (!ctx) return ms;
+      const minGap = Math.max(granularityMs, 1000);
+      if (ctx.edge === "start") {
+        const upperBound = ctx.originalEnd - minGap;
+        return Math.max(ctx.leftFenceMs, Math.min(ms, upperBound));
+      }
+      const lowerBound = ctx.originalStart + minGap;
+      return Math.max(lowerBound, Math.min(ms, ctx.rightFenceMs));
+    }
+    function onMove(e: MouseEvent) {
+      const ctx = blockResizeCtxRef.current;
+      if (!ctx) return;
+      const pct = pctFromEvent(e, tagStripRef);
+      const rawMs = viewStart + pct * (viewEnd - viewStart);
+      const clamped = clampMs(rawMs);
+      const snapped =
+        ctx.edge === "start"
+          ? snapMsToGrid(clamped, "floor")
+          : snapMsToGrid(clamped, "ceil");
+      const finalMs = clampMs(snapped);
+      if (ctx.edge === "start") {
+        setBlockResize({ id: ctx.id, start: finalMs, end: ctx.originalEnd });
+      } else {
+        setBlockResize({ id: ctx.id, start: ctx.originalStart, end: finalMs });
+      }
+    }
+    async function onUp() {
+      const ctx = blockResizeCtxRef.current;
+      if (!ctx) return;
+      blockResizeCtxRef.current = null;
+      const live = blockResize;
+      setBlockResize(null);
+      if (!live) return;
+      const changed =
+        Math.abs(live.start - ctx.originalStart) > 500 ||
+        Math.abs(live.end - ctx.originalEnd) > 500;
+      if (!changed) return;
+      try {
+        await api.resizeTagBlock(
+          ctx.id,
+          new Date(live.start).toISOString(),
+          new Date(live.end).toISOString(),
+        );
+        await refresh();
+      } catch (err) {
+        setError(String(err));
+      }
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewStart, viewEnd, granularityMs, blockResize]);
 
   // -- Track strip mouse handlers (read-only hover only) -------------------
 
@@ -825,18 +967,27 @@ export default function Timeline() {
           ))}
 
           {tagBlocks.map((b) => {
-            const { start, end } = tagBlockBounds(b);
+            const native = tagBlockBounds(b);
+            const live =
+              blockResize && blockResize.id === b.id
+                ? { start: blockResize.start, end: blockResize.end }
+                : native;
+            const { start, end } = live;
             if (end <= viewStart || start >= viewEnd) return null;
             const left = pctOfMs(start) * 100;
             const width = (pctOfMs(end) - pctOfMs(start)) * 100;
             const tag = tagsByID[b.tag_id];
             const bg = tag?.color ?? UNTAGGED_COLOR;
             const isSelected = selectedBlockIDs.has(b.id);
+            const isResizing = blockResize?.id === b.id;
+            const showHandles =
+              soloSelectedBlock?.id === b.id && !dragRange && !selectedRange;
             return (
               <div
                 key={`tb-${b.id}`}
                 onClick={(e) => {
                   e.stopPropagation();
+                  if (isResizing) return;
                   toggleBlock(b.id, e.shiftKey);
                 }}
                 onMouseEnter={() => setHoverRange({ start, end })}
@@ -856,7 +1007,22 @@ export default function Timeline() {
                   `${tag ? tag.name : "?"} · ${b.is_manual ? "manuell" : "auto"}` +
                   (b.description ? `\n${b.description}` : "")
                 }
-              />
+              >
+                {showHandles && (
+                  <>
+                    <div
+                      onMouseDown={(e) => onBlockResizeHandleDown(e, b, "start")}
+                      className="absolute inset-y-0 left-0 z-20 w-1.5 -translate-x-1/2 cursor-ew-resize rounded-l bg-white/90 hover:bg-white"
+                      title="Block-Anfang ziehen — bis zum Nachbarn"
+                    />
+                    <div
+                      onMouseDown={(e) => onBlockResizeHandleDown(e, b, "end")}
+                      className="absolute inset-y-0 right-0 z-20 w-1.5 translate-x-1/2 cursor-ew-resize rounded-r bg-white/90 hover:bg-white"
+                      title="Block-Ende ziehen — bis zum Nachbarn"
+                    />
+                  </>
+                )}
+              </div>
             );
           })}
 
@@ -956,12 +1122,13 @@ export default function Timeline() {
         </div>
       </div>
 
-      {/* --- Tag-block table -------------------------------------------- */}
-      <div>
+      {/* --- Tag-block table (left) + Process-track table (right) ------- */}
+      <div className="flex gap-4">
+      <div className="w-2/5 min-w-0">
         <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">
           Tag-Blöcke
         </div>
-        <ul className="divide-y divide-slate-700 rounded bg-surface">
+        <ul className="max-h-[65vh] divide-y divide-slate-700 overflow-y-auto rounded bg-surface">
           {tagBlocks.length === 0 && (
             <li className="px-3 py-6 text-center text-sm text-slate-400">
               Keine Tag-Blöcke an diesem Tag.
@@ -1021,12 +1188,12 @@ export default function Timeline() {
         </ul>
       </div>
 
-      {/* --- Process-track table ---------------------------------------- */}
-      <div>
+      {/* --- Process-track table (right column) ------------------------- */}
+      <div className="w-3/5 min-w-0">
         <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">
           Prozesse {hoverRange && "(im markierten Zeitraum)"}
         </div>
-        <ul className="divide-y divide-slate-700 rounded bg-surface">
+        <ul className="max-h-[65vh] divide-y divide-slate-700 overflow-y-auto rounded bg-surface">
           {visibleTrackGroups.length === 0 && (
             <li className="px-3 py-6 text-center text-sm text-slate-400">
               {hoverRange ? "Keine Prozesse im markierten Zeitraum." : "Keine Prozessdaten."}
@@ -1095,6 +1262,7 @@ export default function Timeline() {
             );
           })}
         </ul>
+      </div>
       </div>
     </div>
   );
