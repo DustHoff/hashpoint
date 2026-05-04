@@ -725,8 +725,12 @@ Tag-Bump und damit den Build.
 ### 5.2 MSI-Installer (WiX 3.14)
 
 - Quelle: `build/wix/hashpoint.wxs`. Sprache: `1031` (de-DE).
-- Build-Toolchain: WiX Toolset 3.14.1, im Workflow installiert via
-  `choco install wixtoolset --version=3.14.1`. `candle` kompiliert
+- Build-Toolchain: WiX Toolset 3.14.x. Auf den `windows-2022`-Runnern
+  ist eine aktuelle 3.14.x bereits installiert; der Workflow erkennt
+  sie über die `WIX`-Env-Var bzw. das `Program Files (x86)\WiX Toolset
+  v3*\bin`-Verzeichnis und fällt nur dann auf `choco install
+  wixtoolset` zurück, wenn die Toolchain in einem zukünftigen
+  Image-Wechsel verschwindet. `candle` kompiliert
   `.wxs` → `.wixobj`, `light` linkt das `.wixobj` → `.msi`. Quellpfade
   (`hashpoint.exe`, Icon, Version) werden via `-d`-Preprocessor
   übergeben, damit die `.wxs` repo-relativ bleibt.

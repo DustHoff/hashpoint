@@ -116,19 +116,37 @@ jobs:
             -ldflags "-s -w -buildid= -H windowsgui -X main.version=${{ needs.bump-tag.outputs.new_tag }} -X main.commit=${{ github.sha }} -X main.buildDate=${{ steps.builddate.outputs.iso }}" \
             -o build/bin/hashpoint.exe ./cmd/timetracker
 
-      - name: Install WiX Toolset 3.14
-        # WiX 3.14 candle/light. The Chocolatey package is the simplest path
-        # — `wix` is no longer pre-installed on `windows-2022`. Pinned to
-        # avoid silent toolchain bumps.
+      - name: Locate WiX Toolset 3
+        # The `windows-2022` runner image ships a recent WiX 3.14.x. Use it
+        # if present (pinning a specific patch via Chocolatey would be a
+        # downgrade and fail). Fall back to a Chocolatey install on images
+        # that drop WiX in the future. The script is idempotent so the
+        # workflow keeps working across image rotations.
         shell: pwsh
         run: |
-          choco install -y wixtoolset --version=3.14.1 --no-progress
-          $wixBin = "C:\Program Files (x86)\WiX Toolset v3.14\bin"
-          if (-not (Test-Path "$wixBin\candle.exe")) {
-            Write-Error "WiX install path not found at $wixBin"
+          function Find-WixBin {
+            if ($env:WIX) {
+              $p = Join-Path $env:WIX "bin"
+              if (Test-Path (Join-Path $p "candle.exe")) { return $p }
+            }
+            $candidates = Get-ChildItem -Directory "C:\Program Files (x86)" `
+              -Filter "WiX Toolset v3*" -ErrorAction SilentlyContinue
+            foreach ($c in $candidates) {
+              $p = Join-Path $c.FullName "bin"
+              if (Test-Path (Join-Path $p "candle.exe")) { return $p }
+            }
+            return $null
+          }
+          $wixBin = Find-WixBin
+          if (-not $wixBin) {
+            choco install -y wixtoolset --no-progress
+            $wixBin = Find-WixBin
+          }
+          if (-not $wixBin) {
+            Write-Error "WiX 3 candle.exe not found after install attempt."
             exit 1
           }
-          # Surface candle/light to subsequent steps.
+          Write-Host "Using WiX bin at $wixBin"
           "$wixBin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
       - name: Resolve MSI ProductVersion
