@@ -84,9 +84,10 @@
 
       <!--
         Autostart (HKCU\...\Run). Per-machine MSI writes this for the user
-        running the installer. Other users on the same machine can opt in
-        via the in-app Tray-"Autostart"-Toggle, which manipulates the same
-        HKCU key for their own profile.
+        running the installer. The application no longer exposes an in-app
+        toggle — additional users on the same machine who want autostart
+        must add the equivalent HKCU\...\Run entry to their own profile
+        manually.
       -->
       <Component Id="AutostartHKCU"
                  Guid="9A1B2C3D-4E5F-46A7-B8C9-D0E1F2A3B4C5">

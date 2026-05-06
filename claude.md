@@ -183,3 +183,4 @@ Dieses Dokument legt verbindliche Konventionen für die Entwicklung des TimeTrac
 4. Migration vorhanden falls DB-relevant.
 5. Manueller Smoke-Test unter Windows durchgeführt und im PR notiert.
 6. Spec-Abschnitt und/oder CLAUDE.md aktualisiert wenn sich Verhalten/Konventionen geändert haben.
+7. User-Dokumentation aktualisiert.

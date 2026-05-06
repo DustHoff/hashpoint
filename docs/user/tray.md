@@ -27,7 +27,6 @@ Per **Rechtsklick** auf das Tray-Icon öffnet sich das Menü:
 | **Pause Tracking** *(Checkbox)* | Hält das automatische Fokus-Tracking an oder setzt es fort. Häkchen = pausiert. Beim Pausieren wird der laufende Process-Track sofort sauber abgeschlossen. Manuelles Tagging (siehe unten) bleibt unabhängig davon möglich. |
 | **Sync zu Personio (heute)** | Synchronisiert die Tag-Blöcke des heutigen Tages direkt an Personio, ohne das Hauptfenster zu öffnen. |
 | **Manueller Tag** *(Submenü)* | Startet oder beendet eine offene manuelle Tag-Sitzung. Siehe Abschnitt **Manuelles Tagging**. |
-| **Autostart** *(Checkbox)* | Aktiviert/deaktiviert den automatischen Start beim Windows-Login. Schreibt/entfernt den entsprechenden Registry-Eintrag. |
 | **Über (Hashpoint <version>)** | Loggt Versionsinformationen. (Kein Dialog – Details siehe Tab **Über** im Hauptfenster.) |
 | **Hilfe** | Öffnet das Hauptfenster und wechselt direkt in den Tab **Hilfe** mit dem eingebetteten Benutzerhandbuch (siehe Abschnitt **Hilfe-Tab**). |
 | **Beenden** | Schließt das Programm vollständig. Offene Process-Tracks und Tag-Blöcke werden vorher sauber beendet, und die Tag-Blöcke des heutigen Tages werden automatisch ein letztes Mal an Personio synchronisiert (siehe Abschnitt **Sync beim Beenden**). |

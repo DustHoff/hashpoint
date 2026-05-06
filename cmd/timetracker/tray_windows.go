@@ -14,7 +14,6 @@ import (
 	"github.com/onesi/hashpoint/internal/app"
 	"github.com/onesi/hashpoint/internal/personio"
 	"github.com/onesi/hashpoint/internal/storage"
-	"github.com/onesi/hashpoint/internal/winapi"
 )
 
 // manualTagSlotCount caps how many tags we can show in the manual-tag
@@ -67,16 +66,10 @@ func onTrayReady(ctx context.Context, a *app.App, version string) {
 	go slots.runRefreshLoop(ctx)
 
 	systray.AddSeparator()
-	mAutostart := systray.AddMenuItemCheckbox("Autostart", "Mit Windows starten", false)
 	mAbout := systray.AddMenuItem(fmt.Sprintf("Über (%s)", version), "Versionsinfo")
 	mHelp := systray.AddMenuItem("Hilfe", "Benutzerhandbuch öffnen")
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Beenden", "App beenden")
-
-	autostart := winapi.NewAutostart("HashpointTimeTracker")
-	if enabled, err := autostart.Enabled(); err == nil && enabled {
-		mAutostart.Check()
-	}
 
 	for {
 		select {
@@ -99,19 +92,6 @@ func onTrayReady(ctx context.Context, a *app.App, version string) {
 			today := time.Now().UTC().Format(time.RFC3339)
 			if _, err := a.SyncDay(today); err != nil {
 				slog.Warn("tray: sync failed", "err", err)
-			}
-		case <-mAutostart.ClickedCh:
-			if mAutostart.Checked() {
-				if err := autostart.Disable(); err == nil {
-					mAutostart.Uncheck()
-				}
-			} else {
-				exe, err := os.Executable()
-				if err == nil {
-					if err := autostart.Enable(exe); err == nil {
-						mAutostart.Check()
-					}
-				}
 			}
 		case <-mAbout.ClickedCh:
 			slog.Info("about clicked", "version", version)

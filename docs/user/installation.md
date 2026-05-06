@@ -19,7 +19,7 @@ Jedes GitHub-Release liefert zwei Artefakte aus, dazu eine `checksums.txt` mit S
 | Datei | Empfohlen für | Anmerkung |
 | --- | --- | --- |
 | `hashpoint-<version>.msi` | Standard-Installation auf einem Arbeitsplatz und für unbeaufsichtigte IT-Roll-Outs | WiX-MSI, **per-machine** (UAC-Prompt). Legt Startmenü-Eintrag und Autostart an. |
-| `hashpoint.exe` | Portable Nutzung, Tests, manuelle Updates | Single-File-Build ohne Installation. Kein Startmenü-Eintrag, Autostart muss im Tray manuell aktiviert werden. |
+| `hashpoint.exe` | Portable Nutzung, Tests, manuelle Updates | Single-File-Build ohne Installation. Kein Startmenü-Eintrag und kein Autostart — wer Autostart wünscht, legt den Run-Eintrag manuell an (siehe Abschnitt **Autostart**). |
 
 ### MSI-Installer (empfohlen)
 
@@ -41,7 +41,7 @@ Optional mit Logging:
 msiexec /i hashpoint-<version>.msi /quiet /log %TEMP%\hashpoint-install.log
 ```
 
-> **Hinweis zum Autostart bei MSI-Installation:** Der Installer setzt den Autostart-Registry-Eintrag (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\HashpointTimeTracker`) für den Account, der den Installer ausführt. Andere Benutzer desselben Geräts müssen den Autostart bei Bedarf über das **Tray-Menü → Autostart** selbst aktivieren — bei einem System-/SCCM-Roll-Out (Installer läuft als `SYSTEM`) ist das immer der Fall.
+> **Hinweis zum Autostart bei MSI-Installation:** Der Installer setzt den Autostart-Registry-Eintrag (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\HashpointTimeTracker`) für den Account, der den Installer ausführt. Andere Benutzer desselben Geräts (oder ein System-/SCCM-Roll-Out, bei dem der Installer als `SYSTEM` läuft) erhalten den Autostart **nicht** automatisch — der Run-Eintrag muss bei Bedarf manuell für das jeweilige Profil angelegt werden (siehe Abschnitt **Autostart**).
 
 **Update:** Eine neuere MSI einfach drüber installieren — der Installer erkennt die alte Version und ersetzt sie sauber (`MajorUpgrade`). Eine Downgrade-Installation wird abgelehnt.
 
@@ -51,7 +51,7 @@ msiexec /i hashpoint-<version>.msi /quiet /log %TEMP%\hashpoint-install.log
 
 1. `hashpoint.exe` an einen beliebigen Ort kopieren (z. B. `%USERPROFILE%\Tools\Hashpoint\`).
 2. Doppelklick startet die Anwendung.
-3. Autostart bei Bedarf im Tray-Menü aktivieren.
+3. Autostart bei Bedarf manuell einrichten (siehe Abschnitt **Autostart**).
 
 ### Erster Start
 
@@ -77,13 +77,23 @@ Sobald die Anwendung läuft, erfasst sie automatisch jede Sekunde, welches Fenst
 
 ## Autostart
 
-Damit der TimeTracker beim Anmelden automatisch startet, gibt es drei Wege:
+Den Autostart richtet ausschließlich der **MSI-Installer** ein — er legt für den installierenden Account den Registry-Eintrag
 
-1. **MSI-Installer:** Der Installer aktiviert den Autostart automatisch für den installierenden User (siehe Abschnitt **MSI-Installer**).
-2. **Tray-Menü:** Rechtsklick auf das Tray-Icon → Eintrag **Autostart** anhaken.
-3. **Konfigurationsdatei:** In `config.toml` im Abschnitt `[ui]` den Wert `autostart = true` setzen.
+```
+HKCU\Software\Microsoft\Windows\CurrentVersion\Run\HashpointTimeTracker = "<install-pfad>\hashpoint.exe"
+```
 
-Alle drei Wege schreiben denselben Eintrag (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\HashpointTimeTracker`). Wird Autostart über Tray oder Config deaktiviert, wird der Registry-Eintrag wieder entfernt — auch wenn er ursprünglich vom MSI-Installer angelegt wurde.
+an. Die Anwendung selbst bietet keinen Autostart-Toggle mehr (weder im Tray-Menü noch in den Einstellungen).
+
+**Autostart nachträglich aktivieren** (z. B. nach Portable-EXE-Nutzung, bei zusätzlichen Profilen am gleichen Gerät oder nach einem System-Roll-Out als `SYSTEM`): den oben genannten Run-Eintrag manuell für das eigene Benutzerprofil anlegen, etwa per PowerShell:
+
+```powershell
+$exe = "C:\Program Files\Hashpoint\hashpoint.exe"   # bzw. eigener Portable-Pfad
+New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" `
+                 -Name "HashpointTimeTracker" -Value "`"$exe`"" -PropertyType String -Force | Out-Null
+```
+
+**Autostart deaktivieren:** den Run-Eintrag wieder entfernen — z. B. über *Task-Manager → Autostart* (Eintrag „HashpointTimeTracker" → *Deaktivieren*) oder per `Remove-ItemProperty` auf demselben Registry-Pfad. Das Deinstallieren der MSI entfernt den Eintrag ebenfalls.
 
 ## Beenden
 
