@@ -29,7 +29,7 @@ Per **Rechtsklick** auf das Tray-Icon öffnet sich das Menü:
 | **Manueller Tag** *(Submenü)* | Startet oder beendet eine offene manuelle Tag-Sitzung. Siehe Abschnitt **Manuelles Tagging**. |
 | **Über (Hashpoint <version>)** | Loggt Versionsinformationen. (Kein Dialog – Details siehe Tab **Über** im Hauptfenster.) |
 | **Hilfe** | Öffnet das Hauptfenster und wechselt direkt in den Tab **Hilfe** mit dem eingebetteten Benutzerhandbuch (siehe Abschnitt **Hilfe-Tab**). |
-| **Beenden** | Schließt das Programm vollständig. Offene Process-Tracks und Tag-Blöcke werden vorher sauber beendet, und die Tag-Blöcke des heutigen Tages werden automatisch ein letztes Mal an Personio synchronisiert (siehe Abschnitt **Sync beim Beenden**). |
+| **Beenden** | Schließt das Programm vollständig. Offene Process-Tracks und Tag-Blöcke werden vorher sauber beendet. Es findet **kein** Sync mehr beim Beenden statt — die Synchronisation läuft beim nächsten Start der Anwendung, siehe Abschnitt **Sync beim Starten**. |
 
 ## Manuelles Tagging
 
@@ -95,30 +95,38 @@ Sie können die Hilfe jederzeit auch ohne Tray-Klick erreichen, indem Sie im Hau
 | --- | --- | --- |
 | Hauptfenster schließen (X) | Läuft weiter | Bleibt im Tray |
 | **Pause Tracking** | Pausiert Process-Tracking + Auto-Tags | Bleibt im Tray |
-| **Beenden** | Offene Tracks + Tag-Blöcke werden geschlossen, heutiger Tag wird ein letztes Mal an Personio synchronisiert | Anwendung wird vollständig beendet |
+| **Beenden** | Offene Tracks + Tag-Blöcke werden geschlossen, **kein** Sync | Anwendung wird vollständig beendet |
 
-## Sync beim Beenden
+## Sync beim Starten
 
-Klicken Sie im Tray-Menü auf **Beenden**, läuft kurz vor dem Schließen
-automatisch ein Sync des **heutigen Tages** an Personio:
+Beim **Starten** der Anwendung sucht Hashpoint automatisch den letzten
+Kalendertag vor heute, der noch unsynchronisierte Tag-Blöcke enthält, und
+überträgt ihn an Personio. So wird die Erfassung des vorherigen
+Arbeitstages garantiert in Personio gebucht — auch wenn das System am
+Vorabend hart heruntergefahren wurde.
 
-1. Der laufende Process-Track wird beendet, und alle noch offenen
-   Auto-/Manuell-Tag-Blöcke werden auf das Granularitätsraster
-   geschlossen — exakt so, als hätten Sie zuvor *Pause Tracking* gewählt.
-2. Anschließend werden die heute getaggten Blöcke übertragen, genau wie
-   beim manuellen *Sync zu Personio*. Die Übertragung ist auf 15 s gedeckelt;
-   gibt es Netz- oder Personio-Probleme, wird der Sync abgebrochen und
-   die App fährt trotzdem herunter.
-3. Ist (noch) keine Personio-Sitzung hinterlegt, wird der Sync
-   **stillschweigend übersprungen**. Beenden klappt also auch ohne
-   eingerichtetes Personio.
+1. Hashpoint öffnet das Hauptfenster sofort. Der Sync läuft im Hintergrund.
+2. Es wird der jüngste Tag mit `synced_at IS NULL` gesucht (also: alle
+   Blöcke des Tages sind noch nicht in Personio). Wochenenden und Urlaub
+   werden automatisch übersprungen — gefunden wird der letzte echte
+   Arbeitstag.
+3. Sind alle vorherigen Tage bereits gesynct, läuft kein Sync und es
+   erscheint kein Banner.
+4. Ergebnis (Erfolg, Teilfehler, Hard-Fail) erscheint als dismissbarer
+   Banner oben im Hauptfenster. Erfolg = grün, Fehler = rot.
+5. Die Übertragung ist auf 30 s gedeckelt; bei Netz- oder Personio-Problemen
+   wird der Sync abgebrochen und der Banner zeigt den Fehler.
+6. Ist (noch) keine Personio-Sitzung hinterlegt, läuft kein Sync und es
+   erscheint kein Banner — die Anwendung startet ganz normal.
 
-> Der Sync greift nur beim regulären **Beenden** (Tray-Menü, Strg+C in
-> der Konsole, geordnetes Service-Stop). Wird der Prozess hart beendet
-> (Task-Manager *„Task beenden"*, Stromausfall, Blue-Screen), kann kein
-> Code mehr laufen — beim nächsten Start schließt der TimeTracker die
-> dangling Blöcke automatisch, der Sync muss dann aber manuell
-> ausgelöst werden.
+> **Was, wenn die App dauernd läuft?** Der Sync prüft beim Start, was es
+> zu tun gibt — solange Sie die Anwendung nicht neu starten, passiert
+> nichts. Den **heutigen** Tag synchronisieren Sie wie gewohnt manuell
+> über *Sync zu Personio* in der Zeitachse oder im Tray.
+
+> **Hard-Kill (Task-Manager, Stromausfall):** Beim nächsten Start schließt
+> Hashpoint automatisch noch offene Blöcke (`Recover`) und der Startup-Sync
+> übernimmt sie dann.
 
 ## Wenn das Tray-Icon fehlt
 

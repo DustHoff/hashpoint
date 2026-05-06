@@ -89,6 +89,12 @@ type TagBlockRepository interface {
 	// recent block start time, restricted to blocks started at or after
 	// `since`. Used by the quick-tag-picker.
 	RecentlyUsedTagIDs(ctx context.Context, since time.Time, limit int) ([]int64, error)
+	// LatestUnsyncedDayBefore returns the local-day midnight (in loc) of the
+	// most recent calendar day before `cutoff` that contains at least one
+	// closed tag block with synced_at IS NULL. Returns ok=false when no such
+	// day exists. Used by the startup-sync to pick the day to push to
+	// Personio without re-syncing days that are already complete.
+	LatestUnsyncedDayBefore(ctx context.Context, cutoff time.Time, loc *time.Location) (time.Time, bool, error)
 }
 
 // TagRepository persists tag hierarchies.

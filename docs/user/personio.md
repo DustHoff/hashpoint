@@ -82,10 +82,12 @@ Es gibt drei Wege, einen Sync auszulösen:
   `Periode(n): X, Blöcke verarbeitet: Y, Blöcke übersprungen: Z`.
 - **Aus dem Tray-Menü:** **Sync zu Personio (heute)** synchronisiert den
   heutigen Tag, ohne dass das Hauptfenster offen sein muss.
-- **Automatisch beim Beenden:** Wenn Sie die Anwendung über das Tray-Menü
-  **Beenden** schließen (oder Windows die App geordnet beendet), wird der
-  heutige Tag noch einmal automatisch synchronisiert. Details und
-  Einschränkungen siehe [Systemtray → Sync beim Beenden](tray.md#sync-beim-beenden).
+- **Automatisch beim Starten:** Beim Start der Anwendung wird der letzte
+  Tag vor heute, der noch unsynchronisierte Tag-Blöcke enthält, automatisch
+  an Personio übertragen. Wochenenden und Urlaub werden dabei übersprungen,
+  damit der letzte echte Arbeitstag synchronisiert wird. Das Ergebnis
+  erscheint als Banner oben im Hauptfenster. Details und Einschränkungen
+  siehe [Systemtray → Sync beim Starten](tray.md#sync-beim-starten).
 
 In allen drei Fällen läuft technisch derselbe Ablauf: der TimeTracker holt
 zunächst das **Timesheet** für den/die gewählten Tag(e)

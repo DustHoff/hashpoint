@@ -86,6 +86,15 @@ const (
 		GROUP BY tag_id
 		ORDER BY MAX(start_time) DESC
 		LIMIT ?`
+
+	// ORDER BY + LIMIT 1 (rather than MAX(start_time)) so the SQLite
+	// driver preserves the column's DATETIME affinity — aggregate functions
+	// strip type info and return a raw string here.
+	selectMaxUnsyncedStartBefore = `SELECT start_time FROM tag_blocks
+		WHERE start_time < ?
+		  AND end_time IS NOT NULL
+		  AND synced_at IS NULL
+		ORDER BY start_time DESC LIMIT 1`
 )
 
 // Open inserts a new tag block.
@@ -365,6 +374,29 @@ func (r *TagBlockRepo) RecentlyUsedTagIDs(ctx context.Context, since time.Time, 
 		out = append(out, id)
 	}
 	return out, rows.Err()
+}
+
+// LatestUnsyncedDayBefore returns the local-day midnight (in loc) of the most
+// recent calendar day before `cutoff` that contains at least one closed tag
+// block with synced_at IS NULL. Returns ok=false when no such day exists.
+//
+// Day membership is computed from each block's start_time interpreted in
+// `loc`, matching the Personio aggregation that groups by local date.
+func (r *TagBlockRepo) LatestUnsyncedDayBefore(ctx context.Context, cutoff time.Time, loc *time.Location) (time.Time, bool, error) {
+	if loc == nil {
+		loc = time.Local
+	}
+	row := r.db.QueryRowContext(ctx, selectMaxUnsyncedStartBefore, cutoff.UTC())
+	var maxStart time.Time
+	if err := row.Scan(&maxStart); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return time.Time{}, false, nil
+		}
+		return time.Time{}, false, fmt.Errorf("scan max unsynced start: %w", err)
+	}
+	local := maxStart.In(loc)
+	day := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
+	return day, true, nil
 }
 
 func scanTagBlockRow(row *sql.Row) (*TagBlock, error) {

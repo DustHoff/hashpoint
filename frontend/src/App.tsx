@@ -20,9 +20,59 @@ const tabs: { id: Tab; label: string }[] = [
   { id: "about", label: "Über" },
 ];
 
+interface StartupSyncEvent {
+  status: "ok" | "partial" | "failed";
+  day?: string;
+  periods?: number;
+  blocks_processed?: number;
+  blocks_skipped?: number;
+  errors?: string[];
+  error_message?: string;
+}
+
+interface StartupSyncBanner {
+  level: "success" | "info" | "error";
+  text: string;
+}
+
+function describeStartupSync(ev: StartupSyncEvent): StartupSyncBanner {
+  const day = ev.day ?? "";
+  switch (ev.status) {
+    case "ok": {
+      const periods = ev.periods ?? 0;
+      const blocks = ev.blocks_processed ?? 0;
+      const skipped = ev.blocks_skipped ?? 0;
+      return {
+        level: "success",
+        text: `Auto-Sync für ${day}: ${periods} Periode(n), ${blocks} Block/Blöcke gebucht${
+          skipped > 0 ? ` (${skipped} übersprungen)` : ""
+        }.`,
+      };
+    }
+    case "partial": {
+      const errors = ev.errors ?? [];
+      return {
+        level: "error",
+        text: `Auto-Sync für ${day} mit Fehlern: ${errors.join("; ")}`,
+      };
+    }
+    case "failed":
+    default:
+      return {
+        level: "error",
+        text: day
+          ? `Auto-Sync für ${day} fehlgeschlagen: ${ev.error_message ?? "unbekannter Fehler"}`
+          : `Auto-Sync fehlgeschlagen: ${ev.error_message ?? "unbekannter Fehler"}`,
+      };
+  }
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>("timeline");
   const [quickTagOpen, setQuickTagOpen] = useState(false);
+  const [startupSync, setStartupSync] = useState<StartupSyncBanner | null>(
+    null,
+  );
 
   useEffect(() => {
     const offOpen = api.onEvent("quick-tag-picker:open", () =>
@@ -32,10 +82,15 @@ export default function App() {
       setQuickTagOpen(false),
     );
     const offHelp = api.onEvent("help:open", () => setTab("help"));
+    const offSync = api.onEventPayload<StartupSyncEvent>(
+      "startup-sync:result",
+      (ev) => setStartupSync(describeStartupSync(ev)),
+    );
     return () => {
       offOpen();
       offClose();
       offHelp();
+      offSync();
     };
   }, []);
 
@@ -60,6 +115,26 @@ export default function App() {
         </nav>
         <PersonioBadge />
       </header>
+      {startupSync && (
+        <div
+          className={`flex items-start justify-between gap-3 px-4 py-2 text-sm ${
+            startupSync.level === "success"
+              ? "bg-emerald-900/40 text-emerald-200"
+              : startupSync.level === "error"
+                ? "bg-red-900/40 text-red-200"
+                : "bg-amber-900/30 text-amber-200"
+          }`}
+        >
+          <span>{startupSync.text}</span>
+          <button
+            onClick={() => setStartupSync(null)}
+            className="text-xs opacity-70 hover:opacity-100"
+            aria-label="Meldung schließen"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <main className="flex-1 overflow-auto p-4">
         {tab === "timeline" && <Timeline />}
         {tab === "tags" && <TagManager />}

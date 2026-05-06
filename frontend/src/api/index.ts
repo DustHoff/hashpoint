@@ -165,4 +165,19 @@ export const api = {
     }
     return rt.EventsOn(name, () => handler());
   },
+
+  // Like onEvent but forwards the first payload argument. Used for events
+  // that carry data (e.g. startup-sync result).
+  onEventPayload: <T = unknown>(
+    name: string,
+    handler: (payload: T) => void,
+  ): (() => void) => {
+    const rt = window.runtime;
+    if (!rt) {
+      return () => {};
+    }
+    return rt.EventsOn(name, (...args: unknown[]) => {
+      handler(args[0] as T);
+    });
+  },
 };

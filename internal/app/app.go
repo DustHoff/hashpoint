@@ -25,15 +25,44 @@ import (
 // Quick-tag-picker geometry (physical pixels). Intentionally compact —
 // the popup is keyboard-driven and lists at most 10 entries.
 const (
-	quickTagPickerWidth   = 340
-	quickTagPickerHeight  = 420
-	quickTagPickerMargin  = 12
-	quickTagRecentDays    = 30
-	quickTagSlotCount     = 10
-	quickTagOpenEvent  = "quick-tag-picker:open"
-	quickTagCloseEvent = "quick-tag-picker:close"
-	helpOpenEvent      = "help:open"
+	quickTagPickerWidth  = 340
+	quickTagPickerHeight = 420
+	quickTagPickerMargin = 12
+	quickTagRecentDays   = 30
+	quickTagSlotCount    = 10
+	quickTagOpenEvent    = "quick-tag-picker:open"
+	quickTagCloseEvent   = "quick-tag-picker:close"
+	helpOpenEvent        = "help:open"
+	startupSyncEvent     = "startup-sync:result"
+
+	// startupSyncTimeout caps the entire previous-day-sync run on startup.
+	// Long enough for a slow Personio response, short enough that a stuck
+	// goroutine cannot keep running for the rest of the session.
+	startupSyncTimeout = 30 * time.Second
 )
+
+// StartupSyncStatus discriminates the payload variants emitted on the
+// startupSyncEvent channel.
+type StartupSyncStatus string
+
+const (
+	StartupSyncSkipped StartupSyncStatus = "skipped" // nothing to sync (no unsynced day)
+	StartupSyncOK      StartupSyncStatus = "ok"      // sync ran, no day-level errors
+	StartupSyncPartial StartupSyncStatus = "partial" // sync ran, some days failed
+	StartupSyncFailed  StartupSyncStatus = "failed"  // hard failure (session expired, network, …)
+)
+
+// StartupSyncEvent is the JSON payload of startupSyncEvent. The frontend
+// renders an info/success/error banner from this.
+type StartupSyncEvent struct {
+	Status          StartupSyncStatus `json:"status"`
+	Day             string            `json:"day,omitempty"` // YYYY-MM-DD (local), empty for skipped
+	Periods         int               `json:"periods,omitempty"`
+	BlocksProcessed int               `json:"blocks_processed,omitempty"`
+	BlocksSkipped   int               `json:"blocks_skipped,omitempty"`
+	Errors          []string          `json:"errors,omitempty"`        // per-day messages from Result.Errors
+	ErrorMessage    string            `json:"error_message,omitempty"` // hard error
+}
 
 // helpPageOrder controls the order of pages in the Help-tab sidebar. Slugs
 // match file names in docs/user/ minus the .md extension. The list is the
@@ -105,12 +134,12 @@ type App struct {
 // quick-tag-picker took over. Restored on dismiss so the user's normal
 // layout returns intact.
 type quickTagWindowState struct {
-	saved        bool
-	wasVisible   bool
-	width        int
-	height       int
-	x            int
-	y            int
+	saved      bool
+	wasVisible bool
+	width      int
+	height     int
+	x          int
+	y          int
 }
 
 // New constructs the app from its dependencies.
@@ -130,7 +159,8 @@ func New(deps Deps) *App {
 // Startup is invoked by Wails once the runtime is ready. We piggy-back on
 // it to close any dangling open-ended manual tag block left over from a
 // previous run — the orchestrator computes the correct close time using
-// the last process-track end (or `now` when tracking is disabled).
+// the last process-track end (or `now` when tracking is disabled) — and to
+// kick off the previous-day Personio sync.
 func (a *App) Startup(ctx context.Context) {
 	a.mu.Lock()
 	a.ctx = ctx
@@ -149,7 +179,107 @@ func (a *App) Startup(ctx context.Context) {
 			a.logger.Warn("startup: orchestrator recover failed", "err", err)
 		}
 	}
+
+	// Background goroutine: previous-day Personio sync. Runs detached so
+	// the main window appears without waiting on the network. Result is
+	// reported to the frontend via startupSyncEvent (banner).
+	go a.runStartupSync(ctx)
+
 	_ = cfg
+}
+
+// runStartupSync looks for the most recent local day before today that
+// still has unsynced tag blocks and pushes it to Personio. The result
+// (ok / partial / failed / skipped) is emitted on startupSyncEvent so the
+// frontend can render a banner. Skips silently — no banner — when no
+// Personio session is configured.
+func (a *App) runStartupSync(parent context.Context) {
+	if a.deps.TagBlocks == nil || a.deps.Sessions == nil || a.deps.SyncerFor == nil {
+		return
+	}
+	sess, err := a.deps.Sessions.Get()
+	if err != nil || sess == nil {
+		a.logger.Info("startup sync: no Personio session — skipping silently")
+		return
+	}
+	syncer := a.deps.SyncerFor(sess)
+	if syncer == nil {
+		a.logger.Info("startup sync: syncer unavailable — skipping silently")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(parent, startupSyncTimeout)
+	defer cancel()
+
+	loc := time.Local
+	now := time.Now().In(loc)
+	cutoff := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+
+	day, ok, err := a.deps.TagBlocks.LatestUnsyncedDayBefore(ctx, cutoff, loc)
+	if err != nil {
+		a.logger.Warn("startup sync: lookup failed", "err", err)
+		a.emitStartupSync(StartupSyncEvent{
+			Status:       StartupSyncFailed,
+			ErrorMessage: err.Error(),
+		})
+		return
+	}
+	if !ok {
+		a.logger.Info("startup sync: nothing to do — all prior days fully synced")
+		return
+	}
+
+	dayStr := day.Format("2006-01-02")
+	a.logger.Info("startup sync: running", "day", dayStr)
+
+	res, err := syncer.SyncRange(ctx, day, day.Add(24*time.Hour))
+	if err != nil {
+		a.logger.Warn("startup sync: failed", "day", dayStr, "err", err)
+		a.emitStartupSync(StartupSyncEvent{
+			Status:       StartupSyncFailed,
+			Day:          dayStr,
+			ErrorMessage: err.Error(),
+		})
+		return
+	}
+
+	ev := StartupSyncEvent{
+		Day:             dayStr,
+		Periods:         res.Periods,
+		BlocksProcessed: res.BlocksProcessed,
+		BlocksSkipped:   res.BlocksSkipped,
+		Errors:          res.Errors,
+	}
+	switch {
+	case len(res.Errors) > 0:
+		ev.Status = StartupSyncPartial
+	case res.Periods == 0 && res.BlocksProcessed == 0:
+		// Day had unsynced rows but they were all "should-skip" (deleted tag,
+		// sync_to_personio=off, …). Don't pester the user with a banner.
+		a.logger.Info("startup sync: nothing pushed — all blocks skipped",
+			"day", dayStr, "skipped", res.BlocksSkipped)
+		return
+	default:
+		ev.Status = StartupSyncOK
+	}
+	a.logger.Info("startup sync: done",
+		"day", dayStr,
+		"status", ev.Status,
+		"periods", ev.Periods,
+		"blocks", ev.BlocksProcessed,
+		"skipped", ev.BlocksSkipped,
+		"errors", len(ev.Errors))
+	a.emitStartupSync(ev)
+}
+
+func (a *App) emitStartupSync(ev StartupSyncEvent) {
+	a.mu.Lock()
+	ctx, ready := a.ctx, a.started
+	a.mu.Unlock()
+	if !ready || ctx == nil {
+		return
+	}
+	wailsruntime.EventsEmit(ctx, startupSyncEvent, ev)
 }
 
 // Shutdown is invoked by Wails on window close. Tracker shutdown is handled
@@ -253,9 +383,8 @@ func (a *App) OnWindowBeforeClose(_ context.Context) bool {
 }
 
 // Quit triggers a graceful Wails shutdown so OnShutdown runs (closing open
-// blocks and flushing today's sync to Personio). Returns false when Wails
-// has not finished Startup yet — in that case the caller must fall back to
-// cancelling the root context directly.
+// blocks). Returns false when Wails has not finished Startup yet — in that
+// case the caller must fall back to cancelling the root context directly.
 func (a *App) Quit() bool {
 	a.mu.Lock()
 	ctx, ready := a.ctx, a.started

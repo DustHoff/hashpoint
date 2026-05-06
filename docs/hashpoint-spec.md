@@ -73,7 +73,9 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
     *Hilfe* (siehe §2.3a). Backend-Methode `App.OpenHelpTab` ruft
     `ShowWindow` und feuert das Wails-Event `help:open` an das
     Frontend.
-  - Beenden (echter Exit; löst zuvor einen Sync-beim-Beenden aus, siehe §2.5.6)
+  - Beenden (echter Exit; offene Process-Tracks und Tag-Blöcke werden vorher
+    geschlossen, ein Sync findet **nicht** statt — der Auto-Sync läuft beim
+    nächsten Start, siehe §2.5.6)
 - **Autostart** wird ausschließlich vom MSI-Installer gesetzt
   (`HKCU\...\Run`-Eintrag, siehe §5.2). Die Anwendung selbst bietet
   keinen Toggle mehr; Anwender, die den Autostart unterdrücken wollen,
@@ -469,61 +471,65 @@ Pro Request:
 #### 2.5.5 Sync-Modi & Idempotenz
 - Einzelner Tag (Timeline-Button + Tray-„Sync zu Personio (heute)").
 - Zeitraum (`SyncRange`) — aktuell intern, im UI nicht exponiert.
-- Automatisch beim Beenden der Anwendung (siehe §2.5.6).
+- Automatisch beim Starten der Anwendung für den letzten unsynchronisierten
+  Werktag vor heute (siehe §2.5.6).
 - Personio's `PUT day` ist idempotent (ersetzt den Tag). Bereits
   synchronisierte Tag-Blöcke werden lokal mit `synced_at` und der `day_id`
   als `personio_id` markiert (`tag_blocks` trägt diese Felder). Erneuter
   Sync überschreibt den Personio-Tag mit dem aktuellen Stand; manuelle
   Änderungen in Personio gehen dabei verloren.
 
-#### 2.5.6 Sync beim Beenden („Shutdown-Sync")
-Beim regulären Beenden der Anwendung werden alle Tag-Blöcke des **aktuellen
-lokalen Tages** automatisch noch einmal an Personio übertragen, bevor der
-Prozess endet. Das stellt sicher, dass auch noch nicht manuell angestoßene
-Synchronisationen am Ende des Arbeitstages in Personio landen.
+#### 2.5.6 Sync beim Starten („Startup-Sync")
+Beim Start der Anwendung wird der **letzte Tag vor heute mit noch
+unsynchronisierten Tag-Blöcken** automatisch an Personio übertragen. Das
+ersetzt den früheren Shutdown-Sync, der bei System-Shutdowns regelmäßig
+fehlschlug, weil Windows das Netzwerk vor dem laufenden Sync-Request
+abreißt.
 
-**Auslöser** (alle drei laufen über denselben Wails-`OnShutdown`-Pfad):
-- Tray-Menüpunkt **Beenden**.
-- `SIGINT` / `SIGTERM` (z. B. Konsolen-Interrupt, geordnetes Service-Stop).
-- Wails-OnShutdown selbst (z. B. wenn die Plattform die App schließt).
+**Auslöser:** Wails-`OnStartup` ruft `App.runStartupSync(ctx)` als
+Goroutine auf, sobald das Frontend bereit ist. Der eigentliche Sync läuft
+**asynchron** im Hintergrund — das Hauptfenster erscheint sofort.
 
-**Nicht abgedeckt:** `SIGKILL` / Task-Manager *„Task beenden"* / Stromausfall —
-in diesen Fällen kann kein User-Code mehr laufen. Beim nächsten Start
-schließt der Orchestrator dangling Tag-Blöcke per `Recover()`; ein Sync
-muss dann manuell nachgezogen werden.
+**Tagesauswahl:**
+1. Cutoff = heute, lokal, 00:00 (in `time.Local`).
+2. `TagBlockRepo.LatestUnsyncedDayBefore(cutoff, loc)` liefert den
+   neuesten Kalendertag mit mindestens einem geschlossenen Tag-Block,
+   dessen `synced_at IS NULL` ist und dessen `start_time < cutoff`.
+3. Liefert die Query keinen Tag (alles vor heute ist gesynct, oder es
+   gibt keine Tag-Blöcke), läuft kein Sync — auch kein Banner.
+4. Der gewählte Tag deckt damit auch Wochenenden/Urlaub ab: nach drei
+   Tagen Abwesenheit wird der letzte Arbeitstag gesynct, nicht das
+   leere „gestern".
 
 **Ablauf:**
-1. Tray-„Beenden" und Signal-Handler rufen `wailsruntime.Quit(ctx)` auf
-   statt `os.Exit`. Dadurch ruft Wails sein konfiguriertes
-   `OnShutdown` auf.
-2. `OnShutdown` führt `flushAndSyncOnShutdown` aus, mit einem **harten
-   Timeout von 15 s** für den gesamten Vorgang:
-   1. `tracker.Pause(ctx)` — schließt den offenen Process-Track. Der
-      Tracker meldet `OnFocusCleared`, woraufhin der Orchestrator alle
-      offenen Auto- und Manuell-Tag-Blöcke auf eine snapped-Endzeit
-      schließt (Standard-Lifecycle, siehe §2.4.1 / §2.4.2).
-   2. Persistierte Personio-Session laden. Fehlt sie (kein Login),
-      wird der Sync **stillschweigend übersprungen** (nur Info-Log,
-      kein Fehler — Beenden darf nie blockieren).
-   3. `Syncer.SyncRange(ctx, lokal-00:00, lokal-24:00)` für den heutigen
-      lokalen Tag aufrufen. `SyncDay` wird hier bewusst **nicht** verwendet,
-      da es UTC-Tagesgrenzen erzeugen würde.
-   4. Ergebnis (`Periods`, `BlocksProcessed`, `BlocksSkipped`,
-      `len(Errors)`) auf Info-Level loggen. Fehler werden geloggt, aber
-      verhindern den Exit nicht.
-3. Anschließend wird der Root-Context gecancelt; Tracker-Goroutine,
-   Tray-Loop und übrige Resourcen laufen aus.
+1. Personio-Session laden. Fehlt sie, läuft der Sync nicht und es wird
+   **stillschweigend** kein Banner gezeigt (Info-Log).
+2. `Syncer.SyncRange(ctx, day, day+24h)` mit hartem Timeout von **30 s**.
+3. Ergebnis als Wails-Event `startup-sync:result` mit Payload
+   (`status`, `day`, `periods`, `blocks_processed`, `blocks_skipped`,
+   `errors`, `error_message`) ans Frontend feuern. Mögliche `status`-Werte:
+   - `ok` — Sync erfolgreich, mindestens eine Periode geschrieben.
+   - `partial` — Sync lief, einzelne Tage haben `Result.Errors`.
+   - `failed` — harter Fehler (Session abgelaufen, Netz, Timeout).
+   - `skipped` (intern; aktuell nicht emittiert) — alle unsynchronisierten
+     Blöcke des Tages waren `should-skip` (gelöschtes Tag,
+     `sync_to_personio = 0`); kein Banner.
 
-**Race-/Reentrancy-Verhalten:** Falls der Signal-Handler feuert, bevor
-Wails `OnStartup` ausgeführt hat (`a.Quit()` liefert `false`), fällt der
-Code auf direktes `cancel()` des Root-Contexts zurück — in diesem
-Stadium gibt es noch keine Tag-Blöcke des aktuellen Tages und kein
-Sync-Bedarf.
+**Frontend-Banner:** `App.tsx` lauscht auf `startup-sync:result` und zeigt
+einen dismissbaren Banner über dem Hauptbereich (grün/rot/amber je nach
+Status). Der Banner ist tab-übergreifend sichtbar.
 
-**Idempotenz:** Da `Syncer` pro Block beim Erfolg `synced_at` und `day_id`
-schreibt, ist ein erneutes Triggern (z. B. manueller Sync vor dem Beenden
-+ automatischer Sync beim Beenden) ungefährlich — Personio's `PUT day`
-überschreibt mit demselben Inhalt.
+**Nicht abgedeckt:** Hat die Anwendung beim Beenden einen Block ohne
+`end_time` hinterlassen (z. B. Stromausfall), schließt der Orchestrator
+beim Start dangling Blöcke per `Recover()` und
+`CloseDanglingManualAtStartup` — der nachfolgende Startup-Sync
+übernimmt die nun geschlossenen Blöcke automatisch.
+
+**Idempotenz:** Personio's `PUT day` überschreibt den Tag. Ein zweiter
+manueller Sync für denselben Tag ist gefahrlos. Da der Startup-Sync nur
+Tage anfasst, die mindestens einen Block ohne `synced_at` haben,
+verursacht ein erneuter Anwendungsstart am selben Tag keinen redundanten
+Sync.
 
 ---
 

@@ -127,6 +127,86 @@ func TestTagBlockResize(t *testing.T) {
 	}
 }
 
+func TestLatestUnsyncedDayBefore(t *testing.T) {
+	ctx := context.Background()
+	db, err := OpenInMemory(ctx)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	tagsRepo := NewTagRepo(db)
+	tag := &Tag{Name: "#x", SyncToPersonio: true}
+	if err := tagsRepo.Create(ctx, tag); err != nil {
+		t.Fatalf("create tag: %v", err)
+	}
+	repo := NewTagBlockRepo(db)
+
+	loc, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Fatalf("load location: %v", err)
+	}
+
+	mk := func(start time.Time, syncedAt *time.Time, close bool) {
+		b := &TagBlock{TagID: tag.ID, StartTime: start, IsManual: true}
+		if close {
+			end := start.Add(15 * time.Minute)
+			b.EndTime = &end
+		}
+		if err := repo.Open(ctx, b); err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		if syncedAt != nil {
+			if err := repo.MarkSynced(ctx, b.ID, "p1", *syncedAt); err != nil {
+				t.Fatalf("mark synced: %v", err)
+			}
+		}
+	}
+
+	// Empty table → no day.
+	cutoff := time.Date(2026, 5, 6, 0, 0, 0, 0, loc)
+	if _, ok, err := repo.LatestUnsyncedDayBefore(ctx, cutoff, loc); err != nil || ok {
+		t.Fatalf("empty: err=%v ok=%v", err, ok)
+	}
+
+	syncedAt := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	mk(time.Date(2026, 5, 3, 9, 0, 0, 0, loc), nil, true)       // Sunday, unsynced
+	mk(time.Date(2026, 5, 4, 9, 0, 0, 0, loc), &syncedAt, true) // Monday, synced
+	mk(time.Date(2026, 5, 5, 23, 30, 0, 0, loc), nil, true)     // Tuesday late, unsynced
+	mk(time.Date(2026, 5, 6, 8, 0, 0, 0, loc), nil, true)       // Wednesday (today), unsynced — must be excluded
+	mk(time.Date(2026, 5, 7, 22, 0, 0, 0, loc), nil, false)     // open block in the future — must be excluded
+
+	got, ok, err := repo.LatestUnsyncedDayBefore(ctx, cutoff, loc)
+	if err != nil {
+		t.Fatalf("latest: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected a day")
+	}
+	want := time.Date(2026, 5, 5, 0, 0, 0, 0, loc) // Tuesday 00:00 Berlin
+	if !got.Equal(want) {
+		t.Fatalf("want %v, got %v", want, got)
+	}
+
+	// Walk the cutoff back: now Tuesday and Wednesday are excluded, Monday
+	// is synced — only Sunday remains.
+	cutoff2 := time.Date(2026, 5, 5, 0, 0, 0, 0, loc)
+	got, ok, err = repo.LatestUnsyncedDayBefore(ctx, cutoff2, loc)
+	if err != nil || !ok {
+		t.Fatalf("cutoff2: err=%v ok=%v", err, ok)
+	}
+	want2 := time.Date(2026, 5, 3, 0, 0, 0, 0, loc)
+	if !got.Equal(want2) {
+		t.Fatalf("cutoff2: want %v, got %v", want2, got)
+	}
+
+	// Walk further back to before Sunday → no day.
+	cutoff3 := time.Date(2026, 5, 3, 0, 0, 0, 0, loc)
+	if _, ok, err := repo.LatestUnsyncedDayBefore(ctx, cutoff3, loc); err != nil || ok {
+		t.Fatalf("cutoff3: err=%v ok=%v", err, ok)
+	}
+}
+
 func TestProcessTrackLastEnd(t *testing.T) {
 	ctx := context.Background()
 	db, err := OpenInMemory(ctx)
