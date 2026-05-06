@@ -20,12 +20,12 @@ func NewProcessTrackRepo(db *sql.DB) *ProcessTrackRepo {
 
 const (
 	processColumns = `id, process_name, process_path, window_title, start_time, end_time,
-		duration_sec, is_idle`
+		duration_sec, is_idle, is_communication`
 
 	insertProcess = `INSERT INTO process_tracks (
 		process_name, process_path, window_title, start_time, end_time,
-		duration_sec, is_idle
-	) VALUES (?, ?, ?, ?, ?, ?, ?)`
+		duration_sec, is_idle, is_communication
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 
 	closeProcess = `UPDATE process_tracks
 		SET end_time = ?, duration_sec = ?
@@ -35,12 +35,19 @@ const (
 		SET end_time = ?, duration_sec = ?, is_idle = 1
 		WHERE id = ? AND end_time IS NULL`
 
+	// Last-open / all-open queries restrict to focused (is_communication = 0)
+	// tracks because the tracker keeps focused-track state via these calls and
+	// must not see comm tracks (they are reconciled separately by HWND).
 	selectProcessLastOpen = `SELECT ` + processColumns + ` FROM process_tracks
-		WHERE end_time IS NULL
+		WHERE end_time IS NULL AND is_communication = 0
 		ORDER BY start_time DESC LIMIT 1`
 
 	selectProcessAllOpen = `SELECT ` + processColumns + ` FROM process_tracks
-		WHERE end_time IS NULL
+		WHERE end_time IS NULL AND is_communication = 0
+		ORDER BY start_time ASC`
+
+	selectCommAllOpen = `SELECT ` + processColumns + ` FROM process_tracks
+		WHERE end_time IS NULL AND is_communication = 1
 		ORDER BY start_time ASC`
 
 	selectProcessByID = `SELECT ` + processColumns + ` FROM process_tracks WHERE id = ?`
@@ -51,7 +58,9 @@ const (
 
 	// Selecting the column directly (rather than MAX) lets the SQLite driver
 	// apply its DATETIME → time.Time conversion; aggregate results otherwise
-	// come back as raw strings and fail the Scan.
+	// come back as raw strings and fail the Scan. LastEnd is consumed by
+	// startup-cleanup paths that look for the freshest "last activity"
+	// timestamp; both flavours of track count.
 	selectProcessLastEnd = `SELECT end_time FROM process_tracks
 		WHERE end_time IS NOT NULL
 		ORDER BY end_time DESC LIMIT 1`
@@ -67,6 +76,7 @@ func (r *ProcessTrackRepo) Open(ctx context.Context, p *ProcessTrack) error {
 		nullableTime(p.EndTime),
 		p.DurationSec,
 		boolToInt(p.IsIdle),
+		boolToInt(p.IsCommunication),
 	)
 	if err != nil {
 		return fmt.Errorf("insert process track: %w", err)
@@ -125,9 +135,30 @@ func (r *ProcessTrackRepo) LastOpen(ctx context.Context) (*ProcessTrack, error) 
 	return p, err
 }
 
-// ListOpen returns every track that is still open, ordered by start_time.
+// ListOpen returns every focused track that is still open, ordered by
+// start_time. Communication tracks are excluded — use ListOpenCommunication.
 func (r *ProcessTrackRepo) ListOpen(ctx context.Context) ([]ProcessTrack, error) {
 	rows, err := r.db.QueryContext(ctx, selectProcessAllOpen)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ProcessTrack
+	for rows.Next() {
+		p, err := scanProcessRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *p)
+	}
+	return out, rows.Err()
+}
+
+// ListOpenCommunication returns every communication track that is still open,
+// ordered by start_time. Used by tracker recovery on startup to close any
+// dangling comm tracks left over from a previous run.
+func (r *ProcessTrackRepo) ListOpenCommunication(ctx context.Context) ([]ProcessTrack, error) {
+	rows, err := r.db.QueryContext(ctx, selectCommAllOpen)
 	if err != nil {
 		return nil, err
 	}
@@ -193,34 +224,36 @@ func (r *ProcessTrackRepo) Get(ctx context.Context, id int64) (*ProcessTrack, er
 func scanProcessRow(row *sql.Row) (*ProcessTrack, error) {
 	var p ProcessTrack
 	var (
-		processPath sql.NullString
-		end         sql.NullTime
-		isIdle      int64
+		processPath     sql.NullString
+		end             sql.NullTime
+		isIdle          int64
+		isCommunication int64
 	)
 	if err := row.Scan(&p.ID, &p.ProcessName, &processPath, &p.WindowTitle, &p.StartTime, &end,
-		&p.DurationSec, &isIdle); err != nil {
+		&p.DurationSec, &isIdle, &isCommunication); err != nil {
 		return nil, err
 	}
-	hydrateProcess(&p, processPath, end, isIdle)
+	hydrateProcess(&p, processPath, end, isIdle, isCommunication)
 	return &p, nil
 }
 
 func scanProcessRows(rows *sql.Rows) (*ProcessTrack, error) {
 	var p ProcessTrack
 	var (
-		processPath sql.NullString
-		end         sql.NullTime
-		isIdle      int64
+		processPath     sql.NullString
+		end             sql.NullTime
+		isIdle          int64
+		isCommunication int64
 	)
 	if err := rows.Scan(&p.ID, &p.ProcessName, &processPath, &p.WindowTitle, &p.StartTime, &end,
-		&p.DurationSec, &isIdle); err != nil {
+		&p.DurationSec, &isIdle, &isCommunication); err != nil {
 		return nil, err
 	}
-	hydrateProcess(&p, processPath, end, isIdle)
+	hydrateProcess(&p, processPath, end, isIdle, isCommunication)
 	return &p, nil
 }
 
-func hydrateProcess(p *ProcessTrack, processPath sql.NullString, end sql.NullTime, isIdle int64) {
+func hydrateProcess(p *ProcessTrack, processPath sql.NullString, end sql.NullTime, isIdle, isCommunication int64) {
 	if processPath.Valid {
 		p.ProcessPath = processPath.String
 	}
@@ -229,5 +262,6 @@ func hydrateProcess(p *ProcessTrack, processPath sql.NullString, end sql.NullTim
 		p.EndTime = &t
 	}
 	p.IsIdle = isIdle != 0
+	p.IsCommunication = isCommunication != 0
 	p.StartTime = p.StartTime.UTC()
 }

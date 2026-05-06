@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/onesi/hashpoint/internal/storage"
+	"github.com/onesi/hashpoint/internal/tracker"
 )
 
 // Orchestrator owns the tag_blocks table. It listens to focus-change events
@@ -51,6 +52,14 @@ type Orchestrator struct {
 	openAuto     *autoState
 	openManual   *manualState
 	pausedManual *pausedManualState
+
+	// openCommAuto is the auto-tag block driven by a communication-process
+	// session (Teams, Zoom, …). While non-nil it overrides focus-driven
+	// auto-tags: focus changes update focusedProcess but do NOT touch
+	// openAuto. When openCommAuto closes, the orchestrator re-evaluates
+	// the focused process to potentially open a regular openAuto or
+	// resume a paused manual.
+	openCommAuto *autoState
 }
 
 type focusInfo struct{ name, title string }
@@ -63,14 +72,22 @@ const (
 	reasonAutoFocusLostZero         = "auto_focus_lost_zero_length"
 	reasonAutoRuleSwitched          = "auto_rule_switched"
 	reasonAutoRuleSwitchedZero      = "auto_rule_switched_zero_length"
+	reasonAutoOverriddenByComm      = "auto_overridden_by_comm"
+	reasonAutoOverriddenByCommZero  = "auto_overridden_by_comm_zero_length"
 	reasonManualPausedForAuto       = "manual_paused_for_auto"
 	reasonManualPausedForAutoZero   = "manual_paused_for_auto_zero_length"
+	reasonManualPausedForComm       = "manual_paused_for_comm"
+	reasonManualPausedForCommZero   = "manual_paused_for_comm_zero_length"
 	reasonManualPausedForIdle       = "manual_paused_for_idle"
 	reasonManualPausedForIdleZero   = "manual_paused_for_idle_zero_length"
 	reasonManualReplaced            = "manual_replaced"
 	reasonManualReplacedZero        = "manual_replaced_zero_length"
 	reasonManualStoppedByUser       = "manual_stopped_by_user"
 	reasonManualStoppedByUserZero   = "manual_stopped_by_user_zero_length"
+	reasonCommWindowGone            = "comm_window_gone"
+	reasonCommWindowGoneZero        = "comm_window_gone_zero_length"
+	reasonCommRuleSwitched          = "comm_rule_switched"
+	reasonCommRuleSwitchedZero      = "comm_rule_switched_zero_length"
 	reasonRangeCarveDelete          = "range_carve_delete"
 	reasonRangeCarveLeft            = "range_carve_left"
 	reasonRangeCarveRight           = "range_carve_right"
@@ -203,6 +220,12 @@ func (o *Orchestrator) OnFocusChanged(ctx context.Context, name, title string, a
 	defer o.mu.Unlock()
 	o.focusActive = true
 	o.focusedProcess = focusInfo{name: name, title: title}
+	if o.openCommAuto != nil {
+		// Communication-driven auto-tag is in force; record focus state so
+		// we can re-evaluate when the comm-auto closes, but do not touch
+		// the auto-tag-block lifecycle.
+		return
+	}
 	o.advance(ctx, at, o.matchRule(ctx, name, title))
 }
 
@@ -212,7 +235,65 @@ func (o *Orchestrator) OnFocusCleared(ctx context.Context, at time.Time) {
 	defer o.mu.Unlock()
 	o.focusActive = false
 	o.focusedProcess = focusInfo{}
+	if o.openCommAuto != nil {
+		// Comm-auto suppresses focus-driven auto changes; do nothing.
+		return
+	}
 	o.advance(ctx, at, nil)
+}
+
+// OnCommunicationChanged is called by the tracker whenever the set of active
+// communication-process windows changes (open/close/title-change). The
+// orchestrator picks the highest-priority rule that matches any session and:
+//   - opens a comm-driven auto-tag block (overriding any focus-driven auto;
+//     pausing any open manual), or
+//   - closes a previously-open comm-auto when no rule matches anymore and
+//     re-evaluates focus to resume regular auto-/manual-tag flow.
+//
+// The same rule still matching means no-op; matching switched rule means
+// close-then-open. The tracker passes the full active session list — the
+// orchestrator does not maintain its own session set.
+func (o *Orchestrator) OnCommunicationChanged(ctx context.Context, sessions []tracker.CommSession, at time.Time) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	snap := o.snapFloor(at)
+	bestRule := o.matchBestCommRule(ctx, sessions)
+
+	// Same rule still active → no transition.
+	if o.openCommAuto != nil && bestRule != nil && bestRule.ID == o.openCommAuto.ruleID {
+		return
+	}
+
+	// Close any current comm-auto before opening a new one or returning to
+	// the focus-driven flow.
+	if o.openCommAuto != nil {
+		reason := reasonCommWindowGone
+		if bestRule != nil {
+			reason = reasonCommRuleSwitched
+		}
+		o.closeCommAuto(ctx, snap, reason)
+	}
+
+	if bestRule != nil {
+		// Override: close any focus-driven auto, pause any open manual,
+		// then open the comm-auto block.
+		if o.openAuto != nil {
+			o.closeAuto(ctx, snap, reasonAutoOverriddenByComm)
+		}
+		if o.openManual != nil {
+			o.pauseManual(ctx, snap, reasonManualPausedForComm)
+		}
+		o.startCommAuto(ctx, *bestRule, snap)
+		return
+	}
+
+	// No comm rule active anymore: re-run the focus-driven flow with
+	// whatever the tracker last reported.
+	var rule *storage.Rule
+	if o.focusActive {
+		rule = o.matchRule(ctx, o.focusedProcess.name, o.focusedProcess.title)
+	}
+	o.advance(ctx, at, rule)
 }
 
 // advance is the core state-machine step. `rule` is the rule that should
@@ -559,6 +640,99 @@ func (o *Orchestrator) startAuto(ctx context.Context, rule storage.Rule, snapped
 	o.openAuto = &autoState{blockID: block.ID, ruleID: rule.ID, tagID: rule.TagID}
 }
 
+// startCommAuto opens a communication-driven auto-tag block. Mirrors
+// startAuto but writes to openCommAuto so the override state machine can
+// distinguish the two.
+func (o *Orchestrator) startCommAuto(ctx context.Context, rule storage.Rule, snappedStart time.Time) {
+	var dptr *string
+	if rule.Description != nil {
+		if d := strings.TrimSpace(*rule.Description); d != "" {
+			dptr = &d
+		}
+	}
+	block := &storage.TagBlock{
+		TagID:       rule.TagID,
+		Description: dptr,
+		StartTime:   snappedStart,
+		IsManual:    false,
+	}
+	if err := o.blocks.Open(ctx, block); err != nil {
+		o.logger.Warn("open comm auto failed", "rule_id", rule.ID, "err", err)
+		return
+	}
+	o.openCommAuto = &autoState{blockID: block.ID, ruleID: rule.ID, tagID: rule.TagID}
+}
+
+// closeCommAuto finalizes the open communication-driven auto-tag block.
+// Unlike closeAuto it does not attempt to resume a paused manual — the
+// caller (OnCommunicationChanged) re-runs the focus flow afterwards, which
+// handles manual-resume via the standard advance() path.
+func (o *Orchestrator) closeCommAuto(ctx context.Context, snappedEnd time.Time, reason string) {
+	if o.openCommAuto == nil {
+		return
+	}
+	state := o.openCommAuto
+	b, err := o.blocks.Get(ctx, state.blockID)
+	if err != nil || b == nil {
+		o.logger.Warn("close comm auto: block missing", "id", state.blockID, "err", err)
+		o.openCommAuto = nil
+		return
+	}
+	if !snappedEnd.After(b.StartTime) {
+		if err := o.blocks.Delete(ctx, state.blockID); err != nil {
+			o.logger.Warn("close comm auto: delete zero-length failed", "id", state.blockID, "err", err)
+			o.openCommAuto = nil
+			return
+		}
+		zeroReason := reasonCommWindowGoneZero
+		if reason == reasonCommRuleSwitched {
+			zeroReason = reasonCommRuleSwitchedZero
+		}
+		o.logBlockClosed(*b, snappedEnd, zeroReason, "rule_id", state.ruleID)
+		o.openCommAuto = nil
+		return
+	}
+	if err := o.blocks.Close(ctx, state.blockID, snappedEnd); err != nil {
+		o.logger.Warn("close comm auto failed", "id", state.blockID, "err", err)
+		o.openCommAuto = nil
+		return
+	}
+	o.logBlockClosed(*b, snappedEnd, reason, "rule_id", state.ruleID)
+	o.openCommAuto = nil
+}
+
+// matchBestCommRule returns the highest-priority enabled rule that matches
+// any of the supplied comm sessions, or nil if none match. Rules are
+// pre-sorted priority DESC, id ASC by ListEnabled, so the first compiled
+// rule that matches any session is the winner.
+func (o *Orchestrator) matchBestCommRule(ctx context.Context, sessions []tracker.CommSession) *storage.Rule {
+	if len(sessions) == 0 {
+		return nil
+	}
+	rules, err := o.rules.ListEnabled(ctx)
+	if err != nil {
+		o.logger.Debug("orchestrator: list rules for comm match failed", "err", err)
+		return nil
+	}
+	if len(rules) == 0 {
+		return nil
+	}
+	compiled, err := Compile(rules)
+	if err != nil {
+		o.logger.Warn("orchestrator: compile rules for comm match failed", "err", err)
+		return nil
+	}
+	for i := range compiled {
+		for _, s := range sessions {
+			if compiled[i].Match(s.ProcessName, s.WindowTitle) {
+				r := compiled[i].Rule
+				return &r
+			}
+		}
+	}
+	return nil
+}
+
 func (o *Orchestrator) startManual(ctx context.Context, tagID int64, description string, snappedStart time.Time) error {
 	desc := strings.TrimSpace(description)
 	var dptr *string
@@ -612,6 +786,8 @@ func manualZeroReason(reason string) string {
 	switch reason {
 	case reasonManualPausedForAuto:
 		return reasonManualPausedForAutoZero
+	case reasonManualPausedForComm:
+		return reasonManualPausedForCommZero
 	case reasonManualPausedForIdle:
 		return reasonManualPausedForIdleZero
 	case reasonManualReplaced:

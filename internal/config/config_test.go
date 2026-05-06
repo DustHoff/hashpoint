@@ -90,6 +90,33 @@ func TestLoad_SeedsDefaultsWhenMissing(t *testing.T) {
 	}
 }
 
+func TestNormalizeProcessNames(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   []string
+		want []string
+	}{
+		{nil, nil},
+		{[]string{}, nil},
+		{[]string{"  Teams.exe  "}, []string{"teams.exe"}},
+		{[]string{"Teams.exe", "teams.exe"}, []string{"teams.exe"}},
+		{[]string{"", "  "}, nil},
+		{[]string{"Teams.exe", "Zoom.exe", "slack.exe"}, []string{"teams.exe", "zoom.exe", "slack.exe"}},
+	}
+	for _, tc := range cases {
+		got := NormalizeProcessNames(tc.in)
+		if len(got) != len(tc.want) {
+			t.Errorf("NormalizeProcessNames(%v) length=%d, want %d (%v)", tc.in, len(got), len(tc.want), got)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("NormalizeProcessNames(%v)[%d] = %q, want %q", tc.in, i, got[i], tc.want[i])
+			}
+		}
+	}
+}
+
 func TestSaveLoadRoundTrip(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

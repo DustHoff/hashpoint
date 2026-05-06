@@ -7,7 +7,8 @@ Willkommen im Benutzerhandbuch des Hashpoint TimeTrackers. Diese Dokumentation r
 Der TimeTracker ist eine Windows-Desktop-Anwendung, die im Hintergrund automatisch erfasst, in welchen Anwendungen und Fenstern Sie arbeiten. Die App pflegt zwei Schichten:
 
 - **Process-Tracks** — die rohe Fokus-Aktivität (was Sie tatsächlich auf dem Bildschirm hatten, sekundengenau).
-- **Tag-Blöcke** — Tagging-Spannen, die diese Aktivität in Kategorien einsortieren. Sie entstehen automatisch durch Auto-Tagging-Regeln oder manuell (per Drag auf der Zeitachse oder über das Tray-Submenü) und sind die Quelle für die Personio-Synchronisation.
+- **Kommunikations-Tracks** — parallel zur Fokus-Erfassung laufende Tracks für Programme wie Teams, Zoom oder Slack, sobald diese ein sichtbares Fenster anzeigen. So fallen Meetings und Bildschirmfreigaben auch dann nicht unter den Tisch, wenn Sie nebenbei in einem anderen Fenster arbeiten.
+- **Tag-Blöcke** — Tagging-Spannen, die diese Aktivität in Kategorien einsortieren. Sie entstehen automatisch durch Auto-Tagging-Regeln oder manuell (per Drag auf der Zeitachse oder über das Tray-Submenü) und sind die Quelle für die Personio-Synchronisation. Auto-Tag-Regeln, die auf einen Kommunikations-Prozess matchen, übersteuern konkurrierende Auto-Tags aus dem Vordergrund-Prozess.
 
 ## Inhalt
 
@@ -19,7 +20,7 @@ Der TimeTracker ist eine Windows-Desktop-Anwendung, die im Hintergrund automatis
 | [Tags verwalten](tags.md) | Tag-Hierarchie, Farben, Personio-Mappings |
 | [Auto-Tagging-Regeln](auto-tagging.md) | Regeln definieren, testen und auf Historie anwenden |
 | [Personio-Synchronisation](personio.md) | Voraussetzungen, Sync-Logik, Fehlerbehandlung |
-| [Systemtray](tray.md) | Tray-Menü, Pause, manuelles Tagging, Autostart, Beenden |
+| [Systemtray](tray.md) | Tray-Menü, Pause, manuelles Tagging, Beenden |
 | [Quick-Tag-Picker](quick-tag.md) | Globaler Hotkey für blitzschnelles manuelles Taggen |
 
 ## Schnellstart in fünf Schritten
@@ -33,7 +34,7 @@ Der TimeTracker ist eine Windows-Desktop-Anwendung, die im Hintergrund automatis
 ## Wo finde ich was?
 
 - **Tray-Icon (rechts unten):** Pause umschalten, manuelles Tagging,
-  Sync zu Personio, Autostart, Beenden
+  Sync zu Personio, Beenden
 - **Hauptfenster:** Sechs Tabs – Zeitachse, Tags, Auto-Tagging,
   Einstellungen, Hilfe, Über; oben rechts der Personio-Status-Badge.
   Der Tab **Hilfe** zeigt das eingebettete Benutzerhandbuch (auch

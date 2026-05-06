@@ -10,6 +10,7 @@ export interface ProcessTrack {
   end_time?: string;
   duration_sec: number;
   is_idle: boolean;
+  is_communication: boolean;
 }
 
 export interface TagBlock {
@@ -75,20 +76,20 @@ export interface PersonioConfig {
   tenant: string;
 }
 
-export interface UIConfig {
-  autostart: boolean;
-}
-
 export interface QuickTagConfig {
   enabled: boolean;
   hotkey: string;
 }
 
+export interface CommunicationConfig {
+  process_names: string[];
+}
+
 export interface AppConfig {
   tracking: TrackingConfig;
   personio: PersonioConfig;
-  ui: UIConfig;
   quick_tag: QuickTagConfig;
+  communication: CommunicationConfig;
 }
 
 export interface QuickTagSlot {

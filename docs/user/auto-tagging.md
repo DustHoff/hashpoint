@@ -71,6 +71,17 @@ Der Tab **Auto-Tagging** ist zweispaltig:
 - **Manuelles Tagging aktiv** (Tray-Submenü „Manueller Tag"): Eine offene manuelle Sitzung wird durch Auto-Tags **temporär unterbrochen** — der manuelle Block schließt am Auto-Tag-Start, der Auto-Block läuft, und sobald das Auto-Match endet, öffnet automatisch ein neuer manueller Block mit demselben Tag und derselben Beschreibung. Details siehe [Systemtray](tray.md#auto-tag-unterbrechung--automatische-fortsetzung).
 - **Manuelle Range übersteuert Auto:** Eine im Top-Strip per Drag erzeugte manuelle Range ersetzt überlappende Auto-Tag-Blöcke (sie werden getrimmt, gesplittet oder gelöscht). Auto-Tags überschreiben **nie** manuelle Tag-Blöcke.
 
+### Vorrang von Kommunikations-Prozessen
+
+Matcht eine Regel auf einen in den [Einstellungen → Kommunikations-Prozesse](einstellungen.md#kommunikations-prozesse) gelisteten Prozess (z. B. `teams.exe`), so öffnet sie ihren Tag-Block, **sobald das Programm ein sichtbares Fenster zeigt** — unabhängig vom Fokus. Dieser Block hat **absoluten Vorrang** gegenüber jedem konkurrierenden Auto-Tag aus dem fokussierten Programm:
+
+- Ist Teams in einem Meeting offen und matcht z. B. `teams.exe → #meetings`, läuft `#meetings` durch, auch wenn Sie währenddessen in den Browser wechseln (mit eigener Regel `browser → #web`).
+- Ein zuvor offener Fokus-Auto-Tag-Block wird beim Start des Kommunikations-Auto-Tags **geschlossen** (zum Granularitäts-Floor).
+- Sobald das Kommunikations-Fenster verschwindet, übernimmt wieder die normale Fokus-Logik — der gerade fokussierte Prozess bestimmt den nächsten Auto-Tag.
+- Manuelle Tag-Sitzungen werden während der Kommunikations-Phase pausiert (genau wie bei einer regulären Auto-Unterbrechung) und nehmen ihren Lauf danach wieder auf.
+
+Dieser Vorrang gilt nur, wenn die Regel tatsächlich auf das Kommunikations-Fenster matcht. Ohne passende Regel wird der Kommunikations-Track nur erfasst und auf der Zeitachse dargestellt — Sie können in dem Fall jederzeit per Drag-to-Tag manuell zuordnen.
+
 ## Live-Test (vor dem Speichern)
 
 Vor dem Speichern können Sie eine Regel gegen reale Daten testen:

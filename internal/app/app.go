@@ -594,8 +594,7 @@ func (a *App) GetConfig() *config.Config {
 	a.logger.Debug("app: GetConfig",
 		"poll_interval_sec", c.Tracking.PollIntervalSec,
 		"idle_threshold_min", c.Tracking.IdleThresholdMin,
-		"personio_tenant", c.Personio.Tenant,
-		"autostart", c.UI.Autostart)
+		"personio_tenant", c.Personio.Tenant)
 	return c
 }
 
@@ -603,12 +602,13 @@ func (a *App) GetConfig() *config.Config {
 func (a *App) SaveConfig(c config.Config) error {
 	rawTenant := c.Personio.Tenant
 	c.Personio.Tenant = config.NormalizeTenant(rawTenant)
+	c.Communication.ProcessNames = config.NormalizeProcessNames(c.Communication.ProcessNames)
 	a.logger.Debug("app: SaveConfig requested",
 		"poll_interval_sec", c.Tracking.PollIntervalSec,
 		"idle_threshold_min", c.Tracking.IdleThresholdMin,
 		"personio_tenant_raw", rawTenant,
 		"personio_tenant", c.Personio.Tenant,
-		"autostart", c.UI.Autostart)
+		"communication_processes", c.Communication.ProcessNames)
 	if err := c.Validate(); err != nil {
 		a.logger.Warn("app: SaveConfig validation failed", "err", err)
 		return err

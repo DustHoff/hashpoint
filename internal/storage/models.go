@@ -18,15 +18,26 @@ import "time"
 // ProcessTrack is a single window-focus interval recorded by the tracker.
 // Process tracks are immutable once closed and are never split or trimmed
 // by tagging operations — tag spans overlay them rather than mutating them.
+//
+// Two flavours coexist in this table:
+//   - Focused tracks (IsCommunication=false): one open at a time, disjoint
+//     by construction — the tracker closes the previous before opening the
+//     next on focus change.
+//   - Communication tracks (IsCommunication=true): opened in parallel for
+//     every visible top-level window owned by a process listed in
+//     CommunicationConfig.ProcessNames. They overlap freely with focused
+//     tracks and with each other; the timeline renders them on a separate
+//     rail.
 type ProcessTrack struct {
-	ID          int64      `json:"id"`
-	ProcessName string     `json:"process_name"`
-	ProcessPath string     `json:"process_path,omitempty"`
-	WindowTitle string     `json:"window_title"`
-	StartTime   time.Time  `json:"start_time"`
-	EndTime     *time.Time `json:"end_time,omitempty"`
-	DurationSec int64      `json:"duration_sec"`
-	IsIdle      bool       `json:"is_idle"`
+	ID              int64      `json:"id"`
+	ProcessName     string     `json:"process_name"`
+	ProcessPath     string     `json:"process_path,omitempty"`
+	WindowTitle     string     `json:"window_title"`
+	StartTime       time.Time  `json:"start_time"`
+	EndTime         *time.Time `json:"end_time,omitempty"`
+	DurationSec     int64      `json:"duration_sec"`
+	IsIdle          bool       `json:"is_idle"`
+	IsCommunication bool       `json:"is_communication"`
 }
 
 // IsOpen returns true while the track is still being recorded.

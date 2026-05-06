@@ -18,8 +18,12 @@ type ProcessTrackRepository interface {
 	MarkIdle(ctx context.Context, id int64, end time.Time) error
 	// LastOpen returns the most recently started open track, or nil.
 	LastOpen(ctx context.Context) (*ProcessTrack, error)
-	// ListOpen returns every track whose end_time is NULL, ascending.
+	// ListOpen returns every focused track whose end_time is NULL, ascending.
+	// Communication tracks are excluded; use ListOpenCommunication.
 	ListOpen(ctx context.Context) ([]ProcessTrack, error)
+	// ListOpenCommunication returns every open communication track, ascending.
+	// Used by tracker recovery to close dangling comm tracks at startup.
+	ListOpenCommunication(ctx context.Context) ([]ProcessTrack, error)
 	// ListByDay returns all tracks whose start_time falls on the given UTC day.
 	ListByDay(ctx context.Context, day time.Time) ([]ProcessTrack, error)
 	// ListBetween returns all tracks in [from, to).

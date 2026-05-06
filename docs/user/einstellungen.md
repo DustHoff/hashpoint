@@ -11,9 +11,11 @@ nötig.
 Der Tab ist in vier Abschnitte unterteilt:
 
 1. **Erfassung** — globaler Erfassungs-Schalter, Polling-Intervall, Idle-Schwelle und Tag-Block-Granularität.
-2. **Oberfläche** — Autostart-Schalter.
-3. **Quick-Tag-Picker** — globaler Hotkey für die schnelle Tag-Auswahl (siehe [Quick-Tag-Picker](quick-tag.md)).
+2. **Quick-Tag-Picker** — globaler Hotkey für die schnelle Tag-Auswahl (siehe [Quick-Tag-Picker](quick-tag.md)).
+3. **Kommunikations-Prozesse** — Liste paralleler Erfassungsprozesse (Teams, Zoom, …) für hybride Meetings.
 4. **Personio** — Tenant-Subdomain und interaktive Anmeldung.
+
+> **Autostart:** Der TimeTracker bietet hier keinen Autostart-Schalter mehr. Der MSI-Installer aktiviert den Autostart automatisch für den installierenden Account; eine manuelle Aktivierung beschreibt der Abschnitt [Autostart](installation.md#autostart) im Installationskapitel.
 
 Am unteren Rand befindet sich der Button **Einstellungen speichern**.
 Änderungen treten erst nach dem Speichern in Kraft. Erfolge und
@@ -28,12 +30,6 @@ Validierungsfehler werden oben im Tab als Banner angezeigt.
 | **Idle-Schwelle (Minuten)** | `5` | `1`–`240` | Nach wie vielen Minuten ohne Tastatur-/Maus-Eingabe der laufende Block beendet und als **Idle** markiert wird. |
 | **Tag-Block-Granularität (Minuten)** | `0` | `0`–`60` | Legt **Tag-Blöcke** (manuelle Range-Tags und Auto-Tag-Blöcke) auf ein **Slot-Raster** dieser Breite (verankert an lokaler Mitternacht, also z. B. `:00/:15/:30/:45` bei `15`). Beginn wird **abgerundet**, Ende **abgerundet**. Auto-Tag-Blöcke unterhalb der Granularität werden nicht erzeugt (Zero-Length-Suppression). **Process-Tracks** sind von dieser Einstellung **nicht** betroffen — der untere Strip zeigt immer die rohen, sekundengenauen Zeiten. Werteänderungen treten ohne Neustart in Kraft (greifen ab dem nächsten Tag-Block-Boundary). `0` deaktiviert das Raster komplett. |
 
-## Oberfläche
-
-| Feld | Default | Bedeutung |
-| --- | --- | --- |
-| **Mit Windows starten (Autostart)** | an | Trägt den TimeTracker als Autostart-Eintrag in die Windows-Registry ein bzw. entfernt ihn. Lässt sich auch über das Tray-Menü umschalten. |
-
 ## Quick-Tag-Picker
 
 | Feld | Default | Bedeutung |
@@ -42,6 +38,59 @@ Validierungsfehler werden oben im Tab als Banner angezeigt.
 | **Hotkey** | `Ctrl+Alt+T` | Tastenkombination im Format `<Mod>+<Mod>+<Taste>`. Modifier: `Ctrl`, `Alt`, `Shift`, `Win`. Tasten: `A`–`Z`, `0`–`9`, `F1`–`F24`. Mindestens ein Modifier ist Pflicht. **Hinweis:** `Win+T` ist von Windows belegt (Taskleisten-Fokus) und sollte vermieden werden. |
 
 Funktionsweise und Bedienung sind detailliert unter [Quick-Tag-Picker](quick-tag.md) beschrieben.
+
+## Kommunikations-Prozesse
+
+Hybrid-Worker, die in Microsoft Teams, Zoom o. ä. an Meetings teilnehmen oder
+ihren Bildschirm teilen, sollen diese Zeit auch dann erfasst bekommen, wenn
+sie nebenbei in einem anderen Fenster (Browser für Recherche, Editor für
+Notizen) arbeiten. Klassisches Fokus-Tracking würde dabei das Tagging des
+„falschen" Vordergrund-Programms wählen.
+
+Hashpoint erfasst deshalb **zusätzlich** zu den Fokus-Prozessen alle
+hier gelisteten Programme, sobald sie ein sichtbares Top-Level-Fenster
+zeigen — unabhängig davon, ob sie gerade im Fokus stehen. Diese parallel
+laufenden Tracks erscheinen auf einer **eigenen Zeitachsen-Schiene
+„📞 Kommunikation"** unter den regulären Prozessen und sind in der
+Prozess-Tabelle mit einem 📞-Symbol markiert.
+
+| Feld | Default | Bedeutung |
+| --- | --- | --- |
+| **Prozessliste** | `teams.exe` | Liste der Datei-Namen (ohne Pfad). Vergleich erfolgt **case-insensitive**. Beispiel-Einträge: `teams.exe`, `zoom.exe`, `slack.exe`, `webex.exe`. Leere Liste = Feature aus. |
+
+**Erkennungsregel:** Ein Prozess gilt als „aktiv", solange er **mindestens
+ein sichtbares Top-Level-Fenster** besitzt (das, was Sie in Alt-Tab sehen).
+Versteckte Hintergrund-Fenster — z. B. das Teams-Tray-Symbol ohne offenes
+Hauptfenster — lösen kein Tracking aus. Schließen, Minimieren-zur-Tray
+oder Beenden des Programms beendet den Track sofort.
+
+### Auto-Tagging mit Vorrang
+
+Trifft eine [Auto-Tagging-Regel](auto-tagging.md) auf einen
+Kommunikations-Prozess (z. B. `process_name contains teams.exe → #meetings`),
+erzeugt sie genauso einen Tag-Block wie eine Fokus-getriebene Regel — **mit
+einem Unterschied**: Solange das Kommunikations-Fenster offen ist, gewinnt
+deren Tag-Block automatisch gegen jeden konkurrierenden Auto-Tag-Block aus
+einem fokussierten Programm. Das heißt:
+
+- Ist Teams in einem Meeting offen und matcht die Regel `teams.exe → #meetings`,
+  läuft `#meetings` durch, auch wenn Sie währenddessen in den Browser
+  (mit eigener Auto-Regel `browser → #web`) wechseln.
+- Sobald das Teams-Meeting endet (Fenster geschlossen), übernimmt wieder
+  die Fokus-Logik — der gerade fokussierte Prozess bestimmt das nächste
+  Auto-Tagging.
+- Manuelle Tag-Sitzungen werden während der Kommunikations-Phase
+  pausiert (wie bei einer regulären Auto-Tag-Unterbrechung) und nehmen
+  ihren Lauf danach wieder auf.
+
+### Tipp
+
+Damit der Vorrang nützlich wird, sollten Sie eine Auto-Tag-Regel anlegen, die
+Ihre Kommunikations-Prozesse einem Tag wie `#meetings`, `#meeting` oder einem
+Sub-Tag (`#proj1 › #meeting`) zuordnet. Ohne passende Regel wird der
+Kommunikations-Track zwar erfasst und auf der Zeitachse dargestellt, aber
+**nicht** automatisch getaggt — Sie können in dem Fall jederzeit per
+Drag-to-Tag manuell zuordnen.
 
 ## Personio
 
@@ -82,12 +131,14 @@ tag_block_granularity_min  = 0      # 0 = aus; 15 = Tag-Blöcke (manuell+auto) a
 [personio]
 tenant = "onesi"
 
-[ui]
-autostart = true
-
 [quick_tag]
 enabled = true
 hotkey  = "Ctrl+Alt+T"
+
+[communication]
+process_names = ["teams.exe"]   # parallel erfasst, sobald ein sichtbares
+                                # Fenster offen ist; Auto-Tags daraus
+                                # übersteuern Fokus-Auto-Tags.
 ```
 
 Nach manuellen Änderungen ist ein **Neustart** der Anwendung erforderlich,

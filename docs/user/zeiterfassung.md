@@ -1,15 +1,16 @@
 # Zeitachse & Zeiterfassung
 
-Der Tab **Zeitachse** ist die zentrale Arbeitsfläche im Alltag. Hier sehen Sie zwei übereinander liegende Zeitstrahlen — oben die **Tag-Blöcke** (manuell und automatisch vergeben), unten die **Prozessaktivität** (was Sie tatsächlich auf dem Bildschirm hatten) — und können beides taggen, korrigieren oder an Personio übertragen.
+Der Tab **Zeitachse** ist die zentrale Arbeitsfläche im Alltag. Hier sehen Sie drei übereinander liegende Zeitstrahlen — oben die **Tag-Blöcke** (manuell und automatisch vergeben), in der Mitte die **Fokus-Prozesse** (was Sie tatsächlich auf dem Bildschirm hatten), unten die **📞 Kommunikations-Prozesse** (Teams, Zoom, … parallel zum Fokus) — und können beides taggen, korrigieren oder an Personio übertragen.
 
 ## Wie wird erfasst?
 
-Die Erfassung ist in zwei Schichten unterteilt, die unabhängig voneinander gepflegt werden:
+Die Erfassung ist in drei Schichten unterteilt, die unabhängig voneinander gepflegt werden:
 
-- **Process-Tracks** (rohe Fokus-Daten): Alle paar Sekunden (Standard: 2 s) prüft der TimeTracker, welches Fenster im Vordergrund ist. Wechselt das Fenster, wird der bisherige Track geschlossen und ein neuer geöffnet. Diese Schicht kennt **keine** Granularität — die Zeiten sind sekundengenau.
+- **Fokus-Process-Tracks** (rohe Fokus-Daten): Alle paar Sekunden (Standard: 2 s) prüft der TimeTracker, welches Fenster im Vordergrund ist. Wechselt das Fenster, wird der bisherige Track geschlossen und ein neuer geöffnet. Diese Schicht kennt **keine** Granularität — die Zeiten sind sekundengenau.
+- **Kommunikations-Process-Tracks** (parallel zum Fokus): Sobald ein in den [Einstellungen](einstellungen.md#kommunikations-prozesse) eingetragenes Kommunikationsprogramm (Default: `teams.exe`) ein **sichtbares** Fenster zeigt, wird unabhängig von der Fokus-Erfassung ein zweiter Track angelegt. Das ist genau dann erwünscht, wenn Sie z. B. in einem Teams-Meeting sind und nebenher in Browser oder Editor arbeiten — die Meeting-Zeit fällt dann nicht unter den Tisch.
 - **Tag-Blöcke** (Tagging-Spannen): Auf einer separaten Ebene werden Tag-Blöcke gepflegt, entweder automatisch durch Auto-Tagging-Regeln oder manuell. Tag-Blöcke snappen auf das eingestellte Granularitätsraster (`:00/:15/:30/:45` bei `15`). Sie sind die Quelle für den Personio-Sync.
 
-Idle-Erkennung, Bildschirmsperre und Crash-Recovery wirken auf der Process-Track-Ebene; offene manuelle Tag-Blöcke werden beim nächsten Start automatisch geschlossen.
+Idle-Erkennung, Bildschirmsperre und Crash-Recovery wirken auf der Fokus-Process-Track-Ebene; offene manuelle Tag-Blöcke werden beim nächsten Start automatisch geschlossen. Kommunikations-Tracks ignorieren Idle bewusst (man kann einem Meeting auch ohne Tastatur folgen) — sie schließen erst, wenn das zugehörige Fenster geschlossen wird.
 
 ## Aufbau des Tabs
 
@@ -18,10 +19,10 @@ Das Hashpoint-Fenster startet **maximiert**, damit beide Listen direkt nebeneina
 Der Tab besteht aus:
 
 1. **Kopfbereich** – Datum, Pause/Sync.
-2. **Zwei Zeitstrahl-Streifen** – oben die Tag-Blöcke, unten die Process-Tracks. Beide teilen sich Zoom und Scroll.
+2. **Drei Zeitstrahl-Streifen** – oben die Tag-Blöcke, in der Mitte die Fokus-Process-Tracks, unten die Kommunikations-Tracks. Alle drei teilen sich Zoom und Scroll.
 3. **Zwei nebeneinander liegende Listen** unterhalb der Streifen:
    - **Links — Tag-Block-Liste:** ein Eintrag pro Tag-Block (manuell oder auto), mit Beschreibung und Tag-Chips. Bekommt 40 % der Breite.
-   - **Rechts — Process-Track-Liste:** gruppiert die rohen Fokus-Events nach Programm. Bekommt 60 % der Breite, weil Fenstertitel länger sind als Tag-Chips.
+   - **Rechts — Process-Track-Liste:** gruppiert sowohl Fokus- als auch Kommunikations-Tracks nach Programm; Kommunikations-Zeilen sind mit einem 📞-Symbol vor dem Programmnamen markiert. Bekommt 60 % der Breite, weil Fenstertitel länger sind als Tag-Chips.
 
    Beide Listen scrollen unabhängig voneinander (jeweils max. 65 % der Bildschirmhöhe), damit ein langer Tag links nicht die Sicht auf die Prozesse rechts verschiebt.
 
@@ -49,18 +50,26 @@ Direkt unter dem Kopfbereich liegen zwei horizontale Streifen vom Tagesanfang (0
 - **Klick auf einen Tag-Block:** Selektiert den Block (Shift = additiv).
 - **Hover:** Filtert die Process-Tabelle auf den Zeitraum des Blocks.
 
-#### Bottom-Strip — Prozesse
+#### Mittel-Strip — Fokus-Prozesse
 
 - **Read-only**: zeigt die rohen Fokus-Events des Trackers.
 - **Idle-Bereiche** erscheinen blass und ausgegraut.
 - Jeder Prozessname bekommt eine deterministische Farbe, damit aufeinanderfolgende verschiedene Programme visuell trennbar sind.
 - **Hover** filtert die Process-Tabelle auf den Zeitraum des Tracks.
 
+#### Bottom-Strip — 📞 Kommunikation
+
+- Eine **eigene Schiene** für die in den [Einstellungen](einstellungen.md#kommunikations-prozesse) gelisteten Kommunikationsprogramme — Default `teams.exe`. Die Schiene teilt sich Zoom und Scrollposition mit den beiden anderen Streifen.
+- Jeder Eintrag entspricht einem **sichtbaren Top-Level-Fenster** des Programms (Meeting-Fenster, Hauptfenster, Anruf-Popup …). Ist das Programm nur im Tray, gibt es **keinen** Eintrag — Hashpoint trackt nur, was Sie tatsächlich auf dem Bildschirm haben.
+- Segmente sind mit einer dezenten grünen Umrandung und einem 📞-Glyph (bei genug Platz) versehen, damit sie auf einen Blick unterscheidbar bleiben.
+- **Hover** filtert die Process-Tabelle auf den Zeitraum des Kommunikations-Tracks.
+- An Tagen ohne Kommunikations-Aktivität zeigt die Schiene den Hinweis *„Keine Kommunikations-Aktivität an diesem Tag"*.
+
 #### Zoom & Pan
 
 | Geste | Wirkung |
 | --- | --- |
-| **Mausrad** | Zoomt cursor-anchored in beide Strips gleichzeitig. |
+| **Mausrad** | Zoomt cursor-anchored in alle drei Strips gleichzeitig. |
 | **Shift + Mausrad** | Schwenkt horizontal. |
 | **Doppelklick** | Setzt Zoom auf den ganzen Tag zurück. |
 
@@ -79,6 +88,8 @@ Klick toggelt die Selektion (Shift = additiv).
 ### Process-Track-Liste (rechte Spalte)
 
 Aufeinanderfolgende Tracks mit gleichem Programm werden zu einer Zeile zusammengefasst. Der Pfeil-Button expandiert die Gruppe und zeigt jeden ursprünglichen Fenstertitel — nützlich, um lange Browser-Sitzungen mit vielen Tabs nachzuvollziehen.
+
+**Kommunikations-Tracks** (z. B. Teams) erscheinen in derselben Liste, sind aber durch ein 📞-Symbol vor dem Programmnamen gekennzeichnet. Da sie sich zeitlich mit Fokus-Tracks überlappen können, sehen Sie für denselben Zeitraum ggf. zwei Einträge — einen für den fokussierten Vordergrund-Prozess und einen für das parallele Kommunikations-Fenster. Die getrennte Gruppierung verhindert, dass Fokus- und Kommunikations-Tracks desselben Prozessnamens zu einer Zeile vermischt werden.
 
 Diese Liste ist read-only — Process-Tracks repräsentieren die Realität und können nicht editiert werden. Korrekturen passieren auf der Tag-Block-Ebene.
 

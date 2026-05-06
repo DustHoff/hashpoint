@@ -11,12 +11,12 @@ func Default() *Config {
 		Personio: PersonioConfig{
 			Tenant: "",
 		},
-		UI: UIConfig{
-			Autostart: true,
-		},
 		QuickTag: QuickTagConfig{
 			Enabled: true,
 			Hotkey:  "Ctrl+Alt+T",
+		},
+		Communication: CommunicationConfig{
+			ProcessNames: []string{"teams.exe"},
 		},
 	}
 }

@@ -21,6 +21,17 @@ type FocusInfo struct {
 	Title       string
 }
 
+// WindowInfo describes one visible top-level window. Used by the
+// communication tracker, which polls every visible window owned by a
+// configured comm process (see EnumVisibleWindowsForProcesses).
+type WindowInfo struct {
+	HWND        uintptr
+	PID         uint32
+	ProcessName string
+	ProcessPath string
+	Title       string
+}
+
 // IsZero reports whether the FocusInfo represents an empty / unknown state
 // (for example, when no foreground window can be detected, e.g. on the lock
 // screen).
@@ -40,4 +51,12 @@ func Foreground() (FocusInfo, error) {
 // idle time.
 func IdleDuration() (time.Duration, error) {
 	return idleDurationImpl()
+}
+
+// EnumVisibleWindowsForProcesses returns one WindowInfo per visible top-level
+// window whose owning process's basename (case-insensitive) matches one of
+// the entries in names. Empty names yield nil. The comparison is performed
+// against names already lower-cased by config.NormalizeProcessNames.
+func EnumVisibleWindowsForProcesses(names []string) ([]WindowInfo, error) {
+	return enumVisibleWindowsForProcessesImpl(names)
 }

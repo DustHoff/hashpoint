@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/onesi/hashpoint/internal/storage"
+	"github.com/onesi/hashpoint/internal/tracker"
 )
 
 // orchTestEnv wires an Orchestrator on top of an in-memory SQLite DB
@@ -439,5 +440,141 @@ func TestResizeBlockSnapsAndPromotesAuto(t *testing.T) {
 	got2, _ := e.blocks.Get(e.ctx, autoID)
 	if got2 == nil || got2.EndTime == nil || !got2.EndTime.Equal(wantEnd) {
 		t.Errorf("block changed after rejected resize: %+v", got2)
+	}
+}
+
+// TestCommOverridesFocusAutoTag: while a comm session matches a rule the
+// orchestrator opens a comm-driven auto-tag block. A simultaneously-focused
+// process matching its own rule must NOT open a competing focus-driven auto.
+// When the comm session goes away, the focus-driven auto opens at that
+// instant against the still-active focus.
+func TestCommOverridesFocusAutoTag(t *testing.T) {
+	e := newOrchEnv(t, 5*time.Minute)
+
+	// Add a comm rule for teams.exe → #code (priority 50, beats #web=10).
+	commRule := storage.Rule{
+		MatchField: storage.MatchProcessName,
+		MatchType:  storage.MatchContains,
+		Pattern:    "teams.exe",
+		TagID:      e.tagCode,
+		Priority:   50,
+		Enabled:    true,
+	}
+	if err := e.rules.Create(e.ctx, &commRule); err != nil {
+		t.Fatalf("create comm rule: %v", err)
+	}
+
+	// 10:00: focus on browser.exe (would normally fire #web auto-tag).
+	e.orch.OnFocusChanged(e.ctx, "browser.exe", "wiki", e.now)
+	if bs := e.listTagBlocks(); len(bs) != 1 || bs[0].TagID != e.tagWeb {
+		t.Fatalf("expected #web auto open, got %+v", bs)
+	}
+
+	// 10:05: comm session for teams.exe starts. Should override #web → #code.
+	e.advance(5 * time.Minute) // 10:05
+	e.orch.OnCommunicationChanged(e.ctx,
+		[]tracker.CommSession{{ProcessName: "teams.exe", WindowTitle: "Meeting"}}, e.now)
+
+	bs := e.listTagBlocks()
+	// Expect: closed #web (10:00–10:05) plus open comm-driven #code starting 10:05.
+	if len(bs) != 2 {
+		t.Fatalf("expected 2 blocks (closed #web + open comm #code), got %d: %+v", len(bs), bs)
+	}
+	if bs[0].TagID != e.tagWeb || bs[0].EndTime == nil ||
+		!bs[0].EndTime.Equal(time.Date(2026, 4, 29, 10, 5, 0, 0, time.UTC)) {
+		t.Errorf("block[0]: want closed #web 10:00-10:05, got %+v", bs[0])
+	}
+	if bs[1].TagID != e.tagCode || bs[1].EndTime != nil ||
+		!bs[1].StartTime.Equal(time.Date(2026, 4, 29, 10, 5, 0, 0, time.UTC)) {
+		t.Errorf("block[1]: want open comm #code from 10:05, got %+v", bs[1])
+	}
+
+	// 10:10: focus changes to a process that would match #web's rule. While
+	// comm is active this MUST NOT open a competing #web auto.
+	e.advance(5 * time.Minute)
+	e.orch.OnFocusChanged(e.ctx, "browser.exe", "another", e.now)
+	if bs := e.listTagBlocks(); len(bs) != 2 {
+		t.Fatalf("focus during comm must not spawn block; got %d: %+v", len(bs), bs)
+	}
+
+	// 10:15: comm session ends. Browser is still focused, so #web should
+	// open at 10:15 right after #code closes.
+	e.advance(5 * time.Minute)
+	e.orch.OnCommunicationChanged(e.ctx, nil, e.now)
+
+	bs = e.listTagBlocks()
+	if len(bs) != 3 {
+		t.Fatalf("expected 3 blocks after comm ended, got %d: %+v", len(bs), bs)
+	}
+	if bs[1].TagID != e.tagCode || bs[1].EndTime == nil ||
+		!bs[1].EndTime.Equal(time.Date(2026, 4, 29, 10, 15, 0, 0, time.UTC)) {
+		t.Errorf("comm #code: want closed at 10:15, got %+v", bs[1])
+	}
+	if bs[2].TagID != e.tagWeb || bs[2].EndTime != nil ||
+		!bs[2].StartTime.Equal(time.Date(2026, 4, 29, 10, 15, 0, 0, time.UTC)) {
+		t.Errorf("post-comm #web: want open from 10:15, got %+v", bs[2])
+	}
+}
+
+// TestCommOverridePausesManualThenResumes: an active manual-open is
+// interrupted by a comm-driven auto-tag and resumes when the comm session
+// ends, matching the existing manual-vs-auto interruption semantics.
+func TestCommOverridePausesManualThenResumes(t *testing.T) {
+	e := newOrchEnv(t, 5*time.Minute)
+
+	// Comm rule for teams.exe → #web.
+	commRule := storage.Rule{
+		MatchField: storage.MatchProcessName,
+		MatchType:  storage.MatchContains,
+		Pattern:    "teams.exe",
+		TagID:      e.tagWeb,
+		Priority:   50,
+		Enabled:    true,
+	}
+	if err := e.rules.Create(e.ctx, &commRule); err != nil {
+		t.Fatalf("create comm rule: %v", err)
+	}
+
+	// 10:00: user starts manual #code via tray.
+	if err := e.orch.StartManualOpenEnded(e.ctx, e.tagCode, "ticket-99"); err != nil {
+		t.Fatalf("start manual: %v", err)
+	}
+	// Pretend a non-matching process is focused so the manual is "active".
+	e.orch.OnFocusChanged(e.ctx, "notepad.exe", "scratch", e.now)
+
+	// 10:10: comm session starts → manual paused, comm-#web opens.
+	e.advance(10 * time.Minute)
+	e.orch.OnCommunicationChanged(e.ctx,
+		[]tracker.CommSession{{ProcessName: "teams.exe", WindowTitle: "Call"}}, e.now)
+
+	// 10:25: comm session ends. Manual should resume at 10:25.
+	e.advance(15 * time.Minute)
+	e.orch.OnCommunicationChanged(e.ctx, nil, e.now)
+
+	// 10:35: user explicitly stops the manual.
+	e.advance(10 * time.Minute)
+	if err := e.orch.StopManualOpenEnded(e.ctx); err != nil {
+		t.Fatalf("stop manual: %v", err)
+	}
+
+	bs := e.listTagBlocks()
+	if len(bs) != 3 {
+		t.Fatalf("expected 3 blocks (manual, comm-auto, manual-resumed), got %d: %+v", len(bs), bs)
+	}
+	if !bs[0].IsManual || bs[0].TagID != e.tagCode ||
+		bs[0].EndTime == nil || !bs[0].EndTime.Equal(time.Date(2026, 4, 29, 10, 10, 0, 0, time.UTC)) {
+		t.Errorf("block[0]: want manual #code 10:00-10:10, got %+v", bs[0])
+	}
+	if bs[1].IsManual || bs[1].TagID != e.tagWeb ||
+		!bs[1].StartTime.Equal(time.Date(2026, 4, 29, 10, 10, 0, 0, time.UTC)) ||
+		bs[1].EndTime == nil || !bs[1].EndTime.Equal(time.Date(2026, 4, 29, 10, 25, 0, 0, time.UTC)) {
+		t.Errorf("block[1]: want comm #web 10:10-10:25, got %+v", bs[1])
+	}
+	if !bs[2].IsManual || bs[2].TagID != e.tagCode ||
+		!bs[2].StartTime.Equal(time.Date(2026, 4, 29, 10, 25, 0, 0, time.UTC)) {
+		t.Errorf("block[2]: want manual #code resumed from 10:25, got %+v", bs[2])
+	}
+	if bs[2].Description == nil || *bs[2].Description != "ticket-99" {
+		t.Errorf("resumed manual lost description: %+v", bs[2].Description)
 	}
 }

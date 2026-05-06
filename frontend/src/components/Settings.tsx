@@ -11,8 +11,8 @@ const emptyConfig: AppConfig = {
     tag_block_granularity_min: 0,
   },
   personio: { tenant: "" },
-  ui: { autostart: true },
   quick_tag: { enabled: true, hotkey: "Ctrl+Alt+T" },
+  communication: { process_names: ["teams.exe"] },
 };
 
 // normalize defends against backends that omit (or rename) sub-objects so a
@@ -30,10 +30,14 @@ function normalize(c: Partial<AppConfig> | null | undefined): AppConfig {
         emptyConfig.tracking.tag_block_granularity_min,
     },
     personio: { tenant: c?.personio?.tenant ?? "" },
-    ui: { autostart: c?.ui?.autostart ?? emptyConfig.ui.autostart },
     quick_tag: {
       enabled: c?.quick_tag?.enabled ?? emptyConfig.quick_tag.enabled,
       hotkey: c?.quick_tag?.hotkey ?? emptyConfig.quick_tag.hotkey,
+    },
+    communication: {
+      process_names:
+        c?.communication?.process_names ??
+        emptyConfig.communication.process_names,
     },
   };
 }
@@ -202,22 +206,6 @@ export default function Settings() {
         </Field>
       </section>
 
-      {/* UI section ----------------------------------------------------- */}
-      <section className="space-y-3 rounded bg-surface p-4">
-        <h3 className="text-sm font-semibold text-slate-200">Oberfläche</h3>
-        <label className="flex items-center gap-3 text-sm text-slate-300">
-          <input
-            type="checkbox"
-            checked={config.ui.autostart}
-            onChange={(e) =>
-              update("ui", { ...config.ui, autostart: e.target.checked })
-            }
-            className="h-4 w-4"
-          />
-          Mit Windows starten (Autostart)
-        </label>
-      </section>
-
       {/* Quick-Tag section ---------------------------------------------- */}
       <section className="space-y-3 rounded bg-surface p-4">
         <h3 className="text-sm font-semibold text-slate-200">Quick-Tag-Picker</h3>
@@ -264,6 +252,60 @@ export default function Settings() {
             placeholder="Ctrl+Alt+T"
           />
         </Field>
+      </section>
+
+      {/* Communication section ------------------------------------------ */}
+      <section className="space-y-3 rounded bg-surface p-4">
+        <h3 className="text-sm font-semibold text-slate-200">
+          Kommunikations-Prozesse
+        </h3>
+        <p className="text-[11px] text-slate-500">
+          Sobald eines der hier gelisteten Programme ein sichtbares Fenster
+          (Meeting, Anruf, Bildschirmfreigabe) hat, wird parallel zur normalen
+          Fokus-Erfassung ein <span className="text-slate-300">📞 Kommunikations-Track</span>
+          {" "}geführt — auch wenn das Fenster gerade nicht im Fokus ist. Trifft
+          eine Auto-Tag-Regel auf das Kommunikations-Fenster zu, übersteuert
+          deren Tag-Block jeden anderen Auto-Tag im selben Zeitraum.
+          Vergleich erfolgt case-insensitive auf den Datei-Namen ohne Pfad.
+        </p>
+        <ul className="space-y-2">
+          {config.communication.process_names.map((name, idx) => (
+            <li key={idx} className="flex items-center gap-2">
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => {
+                  const next = [...config.communication.process_names];
+                  next[idx] = e.target.value;
+                  update("communication", { process_names: next });
+                }}
+                placeholder="z. B. teams.exe"
+                className="w-64 rounded bg-slate-900/60 px-2 py-1 font-mono text-sm"
+              />
+              <button
+                onClick={() => {
+                  const next = config.communication.process_names.filter(
+                    (_, i) => i !== idx,
+                  );
+                  update("communication", { process_names: next });
+                }}
+                className="rounded bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600"
+              >
+                Entfernen
+              </button>
+            </li>
+          ))}
+        </ul>
+        <button
+          onClick={() =>
+            update("communication", {
+              process_names: [...config.communication.process_names, ""],
+            })
+          }
+          className="rounded bg-accent/80 px-3 py-1 text-xs text-white hover:bg-accent"
+        >
+          + Prozess hinzufügen
+        </button>
       </section>
 
       {/* Personio section ----------------------------------------------- */}

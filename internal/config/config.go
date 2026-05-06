@@ -31,10 +31,10 @@ func urlParse(s string) (*url.URL, error) { return url.Parse(s) }
 // PascalCase field names instead of the snake_case keys it expects, and
 // nested property access would throw at render time.
 type Config struct {
-	Tracking TrackingConfig `toml:"tracking" json:"tracking"`
-	Personio PersonioConfig `toml:"personio" json:"personio"`
-	UI       UIConfig       `toml:"ui"       json:"ui"`
-	QuickTag QuickTagConfig `toml:"quick_tag" json:"quick_tag"`
+	Tracking      TrackingConfig      `toml:"tracking"      json:"tracking"`
+	Personio      PersonioConfig      `toml:"personio"      json:"personio"`
+	QuickTag      QuickTagConfig      `toml:"quick_tag"     json:"quick_tag"`
+	Communication CommunicationConfig `toml:"communication" json:"communication"`
 }
 
 // TrackingConfig holds polling/idle parameters.
@@ -60,11 +60,6 @@ type PersonioConfig struct {
 	Tenant string `toml:"tenant" json:"tenant"`
 }
 
-// UIConfig holds UI-related preferences.
-type UIConfig struct {
-	Autostart bool `toml:"autostart" json:"autostart"`
-}
-
 // QuickTagConfig configures the global Quick-Tag-Picker hotkey. When
 // Enabled is true, hashpoint registers Hotkey as a system-wide hotkey via
 // RegisterHotKey; pressing it shows a small popup at the cursor display's
@@ -77,6 +72,41 @@ type UIConfig struct {
 type QuickTagConfig struct {
 	Enabled bool   `toml:"enabled" json:"enabled"`
 	Hotkey  string `toml:"hotkey"  json:"hotkey"`
+}
+
+// CommunicationConfig configures parallel tracking of communication processes
+// (e.g. Microsoft Teams). While a configured process owns at least one
+// visible top-level window, the tracker keeps a parallel "communication
+// track" open in addition to the regular focused-window track, and any
+// auto-tag rule matching that window opens a comm-driven tag block that
+// overrides focus-driven auto-tags for the same time range. ProcessNames are
+// compared case-insensitively against `process_name` (i.e. the basename of
+// the executable, e.g. "teams.exe").
+type CommunicationConfig struct {
+	ProcessNames []string `toml:"process_names" json:"process_names"`
+}
+
+// NormalizeProcessNames returns a sanitized copy of n: each entry is trimmed,
+// lower-cased, and empties / duplicates are removed. The slice keeps the
+// caller's order so the UI can present it stably.
+func NormalizeProcessNames(n []string) []string {
+	if len(n) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(n))
+	out := make([]string, 0, len(n))
+	for _, raw := range n {
+		s := strings.ToLower(strings.TrimSpace(raw))
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 // Paths bundles resolved on-disk locations.
@@ -182,6 +212,7 @@ func Load(path string) (*Config, error) {
 	if err := toml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	cfg.Communication.ProcessNames = NormalizeProcessNames(cfg.Communication.ProcessNames)
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}

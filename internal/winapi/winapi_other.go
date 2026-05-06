@@ -14,3 +14,7 @@ func foregroundImpl() (FocusInfo, error) {
 func idleDurationImpl() (time.Duration, error) {
 	return 0, ErrUnsupported
 }
+
+func enumVisibleWindowsForProcessesImpl(_ []string) ([]WindowInfo, error) {
+	return nil, ErrUnsupported
+}

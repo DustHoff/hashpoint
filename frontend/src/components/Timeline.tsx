@@ -48,7 +48,8 @@ interface MsRange {
 }
 
 // Group adjacent process tracks with the same process name + tag state for
-// table display.
+// table display. Communication tracks are kept distinct from focused tracks
+// so the phone-icon marker stays scoped to the rows that earned it.
 interface TrackGroup {
   trackIDs: number[];
   startMs: number;
@@ -57,6 +58,7 @@ interface TrackGroup {
   processName: string;
   windowTitle: string;
   isIdle: boolean;
+  isCommunication: boolean;
   members: ProcessTrack[];
 }
 
@@ -68,7 +70,8 @@ function groupTracksForTable(tracks: ProcessTrack[]): TrackGroup[] {
     const sameKey =
       last &&
       last.processName === t.process_name &&
-      last.isIdle === t.is_idle;
+      last.isIdle === t.is_idle &&
+      last.isCommunication === t.is_communication;
     if (last && sameKey) {
       last.trackIDs.push(t.id);
       last.endMs = Math.max(last.endMs, end);
@@ -83,6 +86,7 @@ function groupTracksForTable(tracks: ProcessTrack[]): TrackGroup[] {
         processName: t.process_name,
         windowTitle: t.window_title,
         isIdle: t.is_idle,
+        isCommunication: t.is_communication,
         members: [t],
       });
     }
@@ -118,6 +122,7 @@ export default function Timeline() {
 
   const tagStripRef = useRef<HTMLDivElement>(null);
   const trackStripRef = useRef<HTMLDivElement>(null);
+  const commStripRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const dragStartPctRef = useRef<number | null>(null);
   const [dragRange, setDragRange] = useState<{ a: number; b: number } | null>(
@@ -434,9 +439,11 @@ export default function Timeline() {
   // -- Wheel zoom + pan (active on both strips) -----------------------------
 
   useEffect(() => {
-    const els = [tagStripRef.current, trackStripRef.current].filter(
-      (e): e is HTMLDivElement => e !== null,
-    );
+    const els = [
+      tagStripRef.current,
+      trackStripRef.current,
+      commStripRef.current,
+    ].filter((e): e is HTMLDivElement => e !== null);
     if (els.length === 0) return;
     function onWheel(e: WheelEvent) {
       e.preventDefault();
@@ -701,6 +708,19 @@ export default function Timeline() {
   }
 
   // -- Table grouping & filtering ------------------------------------------
+
+  // The timeline renders focused-window tracks and communication-window
+  // tracks on separate rails (see "Prozesse" + "Kommunikation" strips). The
+  // table merges both so users see one chronological list, with comm rows
+  // visually marked by a phone icon.
+  const focusedTracks = useMemo<ProcessTrack[]>(
+    () => processTracks.filter((t) => !t.is_communication),
+    [processTracks],
+  );
+  const commTracks = useMemo<ProcessTrack[]>(
+    () => processTracks.filter((t) => t.is_communication),
+    [processTracks],
+  );
 
   const visibleTracks = useMemo<ProcessTrack[]>(() => {
     if (!hoverRange) return processTracks;
@@ -1061,7 +1081,7 @@ export default function Timeline() {
           )}
         </div>
 
-        {/* Bottom strip: Process tracks (read-only) */}
+        {/* Middle strip: focused-window process tracks (read-only) */}
         <div className="text-[10px] uppercase tracking-wide text-slate-500">Prozesse</div>
         <div
           ref={trackStripRef}
@@ -1079,7 +1099,7 @@ export default function Timeline() {
             />
           ))}
 
-          {processTracks.map((t) => {
+          {focusedTracks.map((t) => {
             const { start, end } = trackBounds(t);
             if (end <= viewStart || start >= viewEnd) return null;
             const left = pctOfMs(start) * 100;
@@ -1106,10 +1126,71 @@ export default function Timeline() {
           })}
         </div>
 
+        {/* Bottom strip: communication-window tracks (Teams etc., parallel
+            to focus). Same time axis, marked with a phone glyph in the rail
+            label and tooltip. */}
+        <div className="text-[10px] uppercase tracking-wide text-slate-500">
+          📞 Kommunikation
+        </div>
+        <div
+          ref={commStripRef}
+          onMouseMove={(e) => setCursorPctX(pctFromEvent(e, commStripRef))}
+          onMouseLeave={() => {
+            if (dragStartPctRef.current == null) setCursorPctX(null);
+          }}
+          onDoubleClick={resetZoom}
+          className="relative h-8 select-none rounded bg-slate-900/60"
+          title="Kommunikations-Prozesse (Teams, Zoom …) · Mausrad zoomt, Shift+Mausrad schwenkt"
+        >
+          {hourTicks.map((ms) => (
+            <div
+              key={`comm-tick-${ms}`}
+              className="absolute inset-y-0 w-px bg-slate-700/40"
+              style={{ left: `${pctOfMs(ms) * 100}%` }}
+            />
+          ))}
+
+          {commTracks.map((t) => {
+            const { start, end } = trackBounds(t);
+            if (end <= viewStart || start >= viewEnd) return null;
+            const left = pctOfMs(start) * 100;
+            const width = (pctOfMs(end) - pctOfMs(start)) * 100;
+            const bg = colorFromName(t.process_name || "?");
+            return (
+              <div
+                key={`comm-${t.id}`}
+                onMouseEnter={() => setHoverRange({ start, end })}
+                onMouseLeave={() => setHoverRange(null)}
+                className="absolute inset-y-1 flex items-center overflow-hidden rounded opacity-90 ring-1 ring-emerald-300/60"
+                style={{
+                  left: `${left}%`,
+                  width: `${Math.max(width, 0.2)}%`,
+                  background: bg,
+                }}
+                title={
+                  `📞 ${formatHHMM(new Date(start).toISOString())}–${formatHHMM(new Date(end).toISOString())} · ${formatDuration(t.duration_sec)}\n` +
+                  `${t.process_name}` +
+                  (t.window_title ? `\n${t.window_title}` : "")
+                }
+              >
+                {width > 1.5 && (
+                  <span className="ml-1 text-[10px] leading-none">📞</span>
+                )}
+              </div>
+            );
+          })}
+          {commTracks.length === 0 && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[10px] text-slate-600">
+              Keine Kommunikations-Aktivität an diesem Tag
+            </div>
+          )}
+        </div>
+
         <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
           <span>
-            Top: Tag-Blöcke (manuell + auto). Bottom: Prozesse (nur Anzeige).
-            Mausrad zoomt, Shift+Mausrad schwenkt, Doppelklick setzt zurück.
+            Oben: Tag-Blöcke (manuell + auto). Mitte: Fokus-Prozesse. Unten:
+            Kommunikations-Prozesse (parallel zum Fokus). Mausrad zoomt,
+            Shift+Mausrad schwenkt, Doppelklick setzt zurück.
           </span>
           {isZoomed && (
             <button
@@ -1205,9 +1286,10 @@ export default function Timeline() {
             const startISO = new Date(g.startMs).toISOString();
             const endISO = new Date(g.endMs).toISOString();
             return (
-              <Fragment key={g.trackIDs[0]}>
+              <Fragment key={`${g.isCommunication ? "c" : "p"}-${g.trackIDs[0]}`}>
                 <li
                   className={`px-3 py-2 text-sm ${g.isIdle ? "opacity-50" : ""}`}
+                  title={g.isCommunication ? "Kommunikations-Prozess (parallel zum Fokus erfasst)" : undefined}
                 >
                   <div className="flex items-center gap-3">
                     <button
@@ -1230,6 +1312,11 @@ export default function Timeline() {
                       {formatDuration(g.durationSec)}
                     </span>
                     <span className="w-40 truncate text-slate-300">
+                      {g.isCommunication && (
+                        <span className="mr-1" aria-hidden>
+                          📞
+                        </span>
+                      )}
                       {g.processName || "—"}
                     </span>
                     <span className="flex-1 truncate text-slate-400">{g.windowTitle}</span>

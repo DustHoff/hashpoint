@@ -24,9 +24,40 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
 - **Idle-Detection:** Wenn der User > 5 Min inaktiv ist (kein Input via `GetLastInputInfo`), wird der aktuelle `process_track` beendet und als „Idle" markiert.
 - **Lock/Sleep:** Beim Sperren oder Ruhezustand wird der aktuelle `process_track` sauber abgeschlossen.
 - **Roh-Erfassung (keine Granularität):** Der Tracker schreibt `process_tracks` mit den exakten Poll-Zeitstempeln in die DB. Es findet **keine** Granularitäts-Quantisierung auf dieser Ebene statt — Slot-Snapping ist Aufgabe der Tag-Block-Schicht (§2.4.3). Der Process-Track-Strip in der UI zeigt damit, was tatsächlich passiert ist, sekundengenau.
-- **Disjoint-Eigenschaft:** Process-Tracks sind per Konstruktion disjunkt (der Tracker schließt seinen vorherigen Eintrag, bevor er einen neuen öffnet). Eine Overlap-Prüfung auf Storage-Ebene ist daher nicht nötig.
-- **Crash-Recovery:** Beim Start finalisiert der Tracker **alle** Process-Tracks, die noch ohne `end_time` in der DB stehen (`ListOpen`), nicht nur den letzten. Jeder Recovery-Eintrag wird auf `min(start + idle_threshold, now, next_open.start)` geschlossen.
-- **Tagging-Entkopplung:** Der Tracker entscheidet **nichts** über Tags. Bei jedem Fokuswechsel ruft er den Tagging-Orchestrator (`OnFocusChanged`) auf; der Orchestrator pflegt die `tag_blocks` in einer separaten Tabelle (siehe §2.4.3).
+- **Disjoint-Eigenschaft:** Fokus-Process-Tracks (`is_communication = 0`) sind per Konstruktion disjunkt (der Tracker schließt seinen vorherigen Eintrag, bevor er einen neuen öffnet). Eine Overlap-Prüfung auf Storage-Ebene ist daher nicht nötig. Kommunikations-Tracks (§2.1a) überlappen sich bewusst — sowohl mit Fokus-Tracks als auch untereinander.
+- **Crash-Recovery:** Beim Start finalisiert der Tracker **alle** Process-Tracks, die noch ohne `end_time` in der DB stehen (`ListOpen` für Fokus-Tracks, `ListOpenCommunication` für Kommunikations-Tracks), nicht nur den letzten. Fokus-Recovery-Einträge werden auf `min(start + idle_threshold, now, next_open.start)` geschlossen, Kommunikations-Recovery-Einträge auf `min(start + idle_threshold, now)` (untereinander gibt es keine Reihenfolge).
+- **Tagging-Entkopplung:** Der Tracker entscheidet **nichts** über Tags. Bei jedem Fokuswechsel ruft er den Tagging-Orchestrator (`OnFocusChanged`) auf, bei jeder Änderung an der Menge aktiver Kommunikations-Fenster `OnCommunicationChanged`; der Orchestrator pflegt die `tag_blocks` in einer separaten Tabelle (siehe §2.4.3).
+
+### 2.1a Kommunikations-Tracking (parallel zum Fokus)
+- **Zweck:** Hybrid-Worker, die in Teams/Zoom/… an Meetings teilnehmen oder
+  ihren Bildschirm teilen, sollen diese Zeit auch dann zugeordnet bekommen,
+  wenn sie nebenbei in einem anderen Fenster arbeiten (Recherche im Browser,
+  Notizen im Editor). Klassisches Fokus-Tracking würde dabei die Auto-Tag-Regel
+  des Fokus-Fensters greifen lassen — fachlich falsch.
+- **Konfiguration:** `[communication] process_names = ["teams.exe"]`
+  (default). Liste case-insensitive-verglichener `process_name`-Basenamen.
+  Hot-reloadable über die Settings-UI; SaveConfig ruft
+  `tracker.SetCommunicationNames` auf.
+- **Erkennungssignal:** Sichtbares Top-Level-Fenster, das einem der
+  konfigurierten Prozesse gehört (`EnumWindows` + `IsWindowVisible` +
+  `GetWindowThreadProcessId` + Basename-Match). Versteckte Background-Fenster
+  (Teams läuft auch ohne Meeting im Tray) erzeugen **keinen** Track —
+  ausschlaggebend ist die Sichtbarkeit gegenüber dem User.
+- **Datenmodell:** Kommunikations-Tracks landen in derselben
+  `process_tracks`-Tabelle, markiert mit `is_communication = 1`. Sie
+  überlappen Fokus-Tracks und sich untereinander. Die UI rendert sie auf
+  einer dedizierten Timeline-Schiene mit Telefon-Symbol.
+- **Lifecycle:** Pro sichtbarem Fenster (PID + HWND) ein offener Track.
+  Titel-Änderung schließt den alten Track und öffnet einen neuen
+  (gleiche Semantik wie bei Fokus-Tracks). Verschwindet das Fenster (X,
+  in den Tray minimiert, Anruf beendet, Prozess gestorben), wird der
+  Track sofort geschlossen. Idle-Threshold und Lock-Screen wirken
+  **nicht** auf Kommunikations-Tracks — der User, der nur einem
+  Meeting zuhört, soll trotz fehlender Tastatureingaben weiter
+  erfasst werden.
+- **Pause-Toggle:** Der Tracker schließt mit `Pause` ebenfalls alle
+  offenen Kommunikations-Tracks; "Pause Tracking" bedeutet
+  konsequent „keine Erfassung mehr".
 
 ### 2.2 Tray-Icon
 - Tool startet minimiert in der Windows-Taskleiste (System Tray).
@@ -37,14 +68,16 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
   - Sync zu Personio (heute)
   - **Manueller Tag** (Submenü mit „Kein Tag (Stop)" + einem Eintrag pro
     konfiguriertem Tag, siehe 2.4.2)
-  - Autostart (Checkbox)
   - Über `<version>`
   - **Hilfe** — öffnet das Hauptfenster und wechselt in den Tab
     *Hilfe* (siehe §2.3a). Backend-Methode `App.OpenHelpTab` ruft
     `ShowWindow` und feuert das Wails-Event `help:open` an das
     Frontend.
   - Beenden (echter Exit; löst zuvor einen Sync-beim-Beenden aus, siehe §2.5.6)
-- **Autostart**-Option (Registry-Eintrag unter `HKCU\...\Run`).
+- **Autostart** wird ausschließlich vom MSI-Installer gesetzt
+  (`HKCU\...\Run`-Eintrag, siehe §5.2). Die Anwendung selbst bietet
+  keinen Toggle mehr; Anwender, die den Autostart unterdrücken wollen,
+  entfernen den Run-Eintrag manuell.
 - Die Tag-Liste im Submenü wird beim Tray-Start erfasst — neu angelegte
   Tags erscheinen erst nach Neustart der Anwendung.
 - **Submenü-Reihenfolge:** Tags werden **nach Eltern-Tag gruppiert**
@@ -266,6 +299,37 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
   wieder gelöscht.
 - **Vorrang manueller Range-Tags:** §2.4.3 beschreibt das Verhalten bei
   Überlappung — eine manuelle Range schneidet Auto-Blöcke aus.
+
+### 2.4.1a Auto-Tagging aus Kommunikations-Prozessen (Override)
+- Trifft eine Auto-Tag-Regel beim `OnCommunicationChanged`-Event auf eines
+  der aktiven Kommunikations-Fenster (siehe §2.1a), öffnet der Orchestrator
+  einen **Kommunikations-getriebenen Auto-Tag-Block** (`openCommAuto`).
+  Dieser hat **absoluten Vorrang** vor jedem Fokus-getriebenen Auto-Tag im
+  selben Zeitraum.
+- **Konsequenzen für die State-Machine:**
+  1. Eröffnung: vorhandener `openAuto` (Fokus) wird mit Reason
+     `auto_overridden_by_comm` geschlossen; ein offener manueller Block
+     wird mit `manual_paused_for_comm` pausiert (gleiche Semantik wie bei
+     einer regulären Auto-Unterbrechung). Anschließend `startCommAuto` mit
+     Granularitäts-Floor-Snap.
+  2. Während `openCommAuto` aktiv ist, halten `OnFocusChanged` /
+     `OnFocusCleared` lediglich `focusActive` und `focusedProcess` aktuell
+     — sie öffnen / schließen **keine** Fokus-Auto-Tag-Blöcke.
+  3. Schließung: das letzte passende Kommunikations-Fenster verschwindet
+     (Reason `comm_window_gone`) oder eine andere Comm-Regel matcht jetzt
+     (`comm_rule_switched`). Anschließend re-evaluiert der Orchestrator
+     den letzten gemeldeten Fokus → öffnet ggf. einen Fokus-Auto-Tag bzw.
+     setzt einen pausierten manuellen Block fort.
+- **Mehrere Kandidaten:** Liefert die Tracker-Enumeration mehrere aktive
+  Kommunikations-Fenster gleichzeitig (z. B. Teams + Zoom), gewinnt die
+  Regel mit der höchsten Priorität (Priority DESC, Id ASC); die übrigen
+  sind „aktiv, aber wirkungslos".
+- **Granularitäts-Snapping:** Comm-Auto-Blöcke folgen denselben Regeln wie
+  reguläre Auto-Blöcke (Floor am Start, Floor am Ende; Zero-Length-
+  Suppression). `description` aus der Regel wird übernommen.
+- **Logging-Reasons** (vgl. §5): `auto_overridden_by_comm`,
+  `manual_paused_for_comm`, `comm_window_gone`, `comm_rule_switched`
+  (jeweils mit `_zero_length`-Variante).
 
 ### 2.4.2 Manuelles Tagging (offene-Ende-Sitzung)
 - Über das Tray-Submenü „Manueller Tag" startet der User eine **offene
@@ -694,8 +758,11 @@ tag_block_granularity_min  = 0      # 0 = aus; 15 = Tag-Blöcke (manuell + auto)
 [personio]
 tenant = "onesi"            # Subdomain, der Login läuft via CDP — keine API-Tokens
 
-[ui]
-autostart = true
+[communication]
+process_names = ["teams.exe"]   # parallel zum Fokus erfasst, sobald ein
+                                # sichtbares Top-Level-Fenster eines Eintrags
+                                # läuft. Auto-Tag-Regeln, die hier matchen,
+                                # übersteuern Fokus-Auto-Tags (§2.1a, §2.4.1a).
 ```
 
 > Auth-Daten (Personio-Cookies, XSRF-Token) liegen **nicht** in `config.toml`,
@@ -754,9 +821,10 @@ Tag-Bump und damit den Build.
      damit die Komponente per-User installierbar bleibt.
   3. `AutostartHKCU` — schreibt `HKCU\Software\Microsoft\Windows\
      CurrentVersion\Run\HashpointTimeTracker = "<install-pfad>\hashpoint.exe"`
-     für den **installierenden User**. Andere User des Systems können
-     Autostart über das Tray-Menü selbst aktivieren — dieser Toggle
-     manipuliert dieselbe HKCU-Run-Position für ihr eigenes Profil.
+     für den **installierenden User**. Der Autostart wird ausschließlich
+     hier gesetzt; die Anwendung enthält keinen In-App-Toggle mehr. Andere
+     User des Systems aktivieren den Autostart bei Bedarf manuell, indem
+     sie denselben HKCU-Run-Eintrag für ihr eigenes Profil anlegen.
 - **ICE57 unterdrückt** (`light -sice:ICE57`): WiX warnt sonst, dass
   HKCU-Registry in einem per-machine-Install nicht „sauber" ist; wir
   akzeptieren den Trade-off bewusst (siehe Kommentar in
@@ -769,7 +837,7 @@ Tag-Bump und damit den Build.
 
 ## 6. Roadmap / Phasen für die Umsetzung
 1. **Phase 1 – Tracking-Core:** Windows-API-Wrapper, Tracking-Loop, SQLite-Persistenz, Logging.
-2. **Phase 2 – Tray-App:** systray-Integration, Autostart, Pause/Resume.
+2. **Phase 2 – Tray-App:** systray-Integration, Pause/Resume.
 3. **Phase 3 – UI:** Wails-Setup, Timeline-View, Tag-Verwaltung (inkl. Hashtag-Validator und Sub-Tag-Beschreibung), Block-Editing.
 4. **Phase 4 – Personio:** API-Client, OAuth, Sync-Logik, Comment-Aufbau, Idempotenz.
 5. **Phase 5 – Polish:** Idle-Detection, Crash-Recovery, Installer, Icon, Tests.

@@ -103,8 +103,9 @@ func run() error {
 	// to focus events and owns the tag-block lifecycle.
 	var trkMu sync.Mutex
 	trk := tracker.New(tracker.Config{
-		PollInterval:  cfg.Tracking.PollInterval(),
-		IdleThreshold: cfg.Tracking.IdleThreshold(),
+		PollInterval:       cfg.Tracking.PollInterval(),
+		IdleThreshold:      cfg.Tracking.IdleThreshold(),
+		CommunicationNames: cfg.Communication.ProcessNames,
 	}, tracks, slog.Default(), tracker.WithObserver(orchestrator))
 
 	sessionStore := defaultSessionStore()
@@ -149,15 +150,16 @@ func run() error {
 				"tag_block_granularity_min", c.Tracking.TagBlockGranularityMin,
 				"tracking_enabled", c.Tracking.Enabled,
 				"personio_tenant", c.Personio.Tenant,
-				"autostart", c.UI.Autostart,
 				"quick_tag_enabled", c.QuickTag.Enabled,
-				"quick_tag_hotkey", c.QuickTag.Hotkey)
+				"quick_tag_hotkey", c.QuickTag.Hotkey,
+				"communication_processes", c.Communication.ProcessNames)
 			if c.Tracking.Enabled {
 				trk.Resume()
 			} else {
 				trk.Pause(ctx)
 			}
 			orchestrator.SetGranularity(c.Tracking.TagBlockGranularity())
+			trk.SetCommunicationNames(c.Communication.ProcessNames)
 			applyHotkey(hotkeyMgr, c.QuickTag, a, slog.Default())
 			return nil
 		},
