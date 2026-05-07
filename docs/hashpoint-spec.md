@@ -34,27 +34,45 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
   wenn sie nebenbei in einem anderen Fenster arbeiten (Recherche im Browser,
   Notizen im Editor). Klassisches Fokus-Tracking würde dabei die Auto-Tag-Regel
   des Fokus-Fensters greifen lassen — fachlich falsch.
-- **Konfiguration:** `[communication] process_names = ["teams.exe"]`
-  (default). Liste case-insensitive-verglichener `process_name`-Basenamen.
-  Hot-reloadable über die Settings-UI; SaveConfig ruft
-  `tracker.SetCommunicationNames` auf.
+- **Konfiguration:**
+  - `[communication] process_names = ["teams.exe"]` (default). Liste
+    case-insensitive-verglichener `process_name`-Basenamen.
+  - `[communication] title_exclude_phrases = []` (default). Globale
+    Ausschluss-Liste: enthält der Fenstertitel eines Comm-Prozess-Fensters
+    einen dieser Strings (case-insensitive Substring-Match; leere/whitespace-
+    only-Einträge werden beim Speichern verworfen, Reihenfolge bleibt erhalten),
+    wird das Fenster **nicht** als Kommunikations-Fenster behandelt — es
+    taucht weder auf der Comm-Schiene auf, noch löst es Comm-getriebene
+    Auto-Tags (§2.4.1a) aus. Das Fenster wird wie jeder andere Prozess vom
+    Fokus-Tracker erfasst, sobald es im Fokus steht.
+  - Beide Listen sind hot-reloadable über die Settings-UI; SaveConfig ruft
+    `tracker.SetCommunicationNames` und `tracker.SetTitleExcludePhrases` auf.
 - **Erkennungssignal:** Sichtbares Top-Level-Fenster, das einem der
   konfigurierten Prozesse gehört (`EnumWindows` + `IsWindowVisible` +
-  `GetWindowThreadProcessId` + Basename-Match). Versteckte Background-Fenster
-  (Teams läuft auch ohne Meeting im Tray) erzeugen **keinen** Track —
-  ausschlaggebend ist die Sichtbarkeit gegenüber dem User.
+  `GetWindowThreadProcessId` + Basename-Match) **und dessen Fenstertitel
+  keine der in `title_exclude_phrases` konfigurierten Phrasen enthält**.
+  Versteckte Background-Fenster (Teams läuft auch ohne Meeting im Tray)
+  erzeugen **keinen** Track — ausschlaggebend ist die Sichtbarkeit gegenüber
+  dem User. Die Exclude-Prüfung wird in jedem Tick neu evaluiert: wechselt
+  der Titel zur Laufzeit auf einen ausgeschlossenen Wert, schließt der
+  Tracker den offenen Comm-Track auf `now`; wechselt er später wieder
+  zurück auf einen zulässigen Titel, öffnet ein **neuer** Comm-Track.
+  Ausgeschlossene Fenster verhalten sich exakt wie reguläre Programme —
+  Fokus-Tracking und fokus-getriebene Auto-Tag-Regeln greifen normal.
 - **Datenmodell:** Kommunikations-Tracks landen in derselben
   `process_tracks`-Tabelle, markiert mit `is_communication = 1`. Sie
   überlappen Fokus-Tracks und sich untereinander. Die UI rendert sie auf
   einer dedizierten Timeline-Schiene mit Telefon-Symbol.
-- **Lifecycle:** Pro sichtbarem Fenster (PID + HWND) ein offener Track.
-  Titel-Änderung schließt den alten Track und öffnet einen neuen
-  (gleiche Semantik wie bei Fokus-Tracks). Verschwindet das Fenster (X,
-  in den Tray minimiert, Anruf beendet, Prozess gestorben), wird der
-  Track sofort geschlossen. Idle-Threshold und Lock-Screen wirken
-  **nicht** auf Kommunikations-Tracks — der User, der nur einem
-  Meeting zuhört, soll trotz fehlender Tastatureingaben weiter
-  erfasst werden.
+- **Lifecycle:** Pro sichtbarem, nicht-ausgeschlossenem Fenster
+  (PID + HWND) ein offener Track. Titel-Änderung schließt den alten
+  Track und öffnet einen neuen (gleiche Semantik wie bei Fokus-Tracks).
+  Wechselt der neue Titel in den Exclude-Bereich, wird der Track
+  geschlossen und **kein** neuer eröffnet, bis der Titel wieder zulässig
+  ist. Verschwindet das Fenster (X, in den Tray minimiert, Anruf beendet,
+  Prozess gestorben), wird der Track sofort geschlossen. Idle-Threshold
+  und Lock-Screen wirken **nicht** auf Kommunikations-Tracks — der User,
+  der nur einem Meeting zuhört, soll trotz fehlender Tastatureingaben
+  weiter erfasst werden.
 - **Pause-Toggle:** Der Tracker schließt mit `Pause` ebenfalls alle
   offenen Kommunikations-Tracks; "Pause Tracking" bedeutet
   konsequent „keine Erfassung mehr".
@@ -765,10 +783,18 @@ tag_block_granularity_min  = 0      # 0 = aus; 15 = Tag-Blöcke (manuell + auto)
 tenant = "onesi"            # Subdomain, der Login läuft via CDP — keine API-Tokens
 
 [communication]
-process_names = ["teams.exe"]   # parallel zum Fokus erfasst, sobald ein
-                                # sichtbares Top-Level-Fenster eines Eintrags
-                                # läuft. Auto-Tag-Regeln, die hier matchen,
-                                # übersteuern Fokus-Auto-Tags (§2.1a, §2.4.1a).
+process_names         = ["teams.exe"]   # parallel zum Fokus erfasst, sobald ein
+                                        # sichtbares Top-Level-Fenster eines
+                                        # Eintrags läuft. Auto-Tag-Regeln, die
+                                        # hier matchen, übersteuern Fokus-Auto-
+                                        # Tags (§2.1a, §2.4.1a).
+title_exclude_phrases = []              # Substrings (case-insensitive). Enthält
+                                        # der Fenstertitel eines Comm-Fensters
+                                        # einen dieser Strings, wird das Fenster
+                                        # **nicht** als Comm-Fenster behandelt
+                                        # — weder Comm-Track noch Comm-Auto-
+                                        # Tag-Override. Hot-reloadable, in
+                                        # jedem Tick neu evaluiert (§2.1a).
 ```
 
 > Auth-Daten (Personio-Cookies, XSRF-Token) liegen **nicht** in `config.toml`,

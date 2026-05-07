@@ -82,6 +82,8 @@ Matcht eine Regel auf einen in den [Einstellungen → Kommunikations-Prozesse](e
 
 Dieser Vorrang gilt nur, wenn die Regel tatsächlich auf das Kommunikations-Fenster matcht. Ohne passende Regel wird der Kommunikations-Track nur erfasst und auf der Zeitachse dargestellt — Sie können in dem Fall jederzeit per Drag-to-Tag manuell zuordnen.
 
+> **Hinweis:** Fenster, deren Titel eine in [Einstellungen → Ausschluss-Phrasen](einstellungen.md#kommunikations-prozesse) gelistete Phrase enthält, gelten **nicht** als Kommunikations-Fenster — sie lösen weder einen Comm-Track noch diesen Vorrang aus, sondern werden ganz normal vom Fokus-Tracker erfasst.
+
 ## Live-Test (vor dem Speichern)
 
 Vor dem Speichern können Sie eine Regel gegen reale Daten testen:

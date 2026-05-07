@@ -16,7 +16,8 @@ func Default() *Config {
 			Hotkey:  "Ctrl+Alt+T",
 		},
 		Communication: CommunicationConfig{
-			ProcessNames: []string{"teams.exe"},
+			ProcessNames:        []string{"teams.exe"},
+			TitleExcludePhrases: nil,
 		},
 	}
 }

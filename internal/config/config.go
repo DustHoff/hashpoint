@@ -82,8 +82,16 @@ type QuickTagConfig struct {
 // overrides focus-driven auto-tags for the same time range. ProcessNames are
 // compared case-insensitively against `process_name` (i.e. the basename of
 // the executable, e.g. "teams.exe").
+//
+// TitleExcludePhrases is a global exclusion list applied to comm-process
+// window titles. If a window's title contains any of these phrases (case-
+// insensitive substring match), the window is treated as a regular process —
+// no comm-track and no comm-driven auto-tag override. Re-evaluated on every
+// poll tick so a runtime title change immediately closes/reopens the comm
+// track. See spec §2.1a.
 type CommunicationConfig struct {
-	ProcessNames []string `toml:"process_names" json:"process_names"`
+	ProcessNames        []string `toml:"process_names"         json:"process_names"`
+	TitleExcludePhrases []string `toml:"title_exclude_phrases" json:"title_exclude_phrases"`
 }
 
 // NormalizeProcessNames returns a sanitized copy of n: each entry is trimmed,
@@ -104,6 +112,31 @@ func NormalizeProcessNames(n []string) []string {
 			continue
 		}
 		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
+// NormalizeTitleExcludePhrases returns a sanitized copy of n: trimmed,
+// empties dropped, deduplicated case-insensitively. Original casing is kept
+// because the phrases are surfaced to the user verbatim in the settings UI;
+// the comparison itself is case-insensitive at match time.
+func NormalizeTitleExcludePhrases(n []string) []string {
+	if len(n) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(n))
+	out := make([]string, 0, len(n))
+	for _, raw := range n {
+		s := strings.TrimSpace(raw)
+		if s == "" {
+			continue
+		}
+		key := strings.ToLower(s)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
 		out = append(out, s)
 	}
 	return out
@@ -213,6 +246,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	cfg.Communication.ProcessNames = NormalizeProcessNames(cfg.Communication.ProcessNames)
+	cfg.Communication.TitleExcludePhrases = NormalizeTitleExcludePhrases(cfg.Communication.TitleExcludePhrases)
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}

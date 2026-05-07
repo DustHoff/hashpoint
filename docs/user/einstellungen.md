@@ -57,12 +57,30 @@ Prozess-Tabelle mit einem 📞-Symbol markiert.
 | Feld | Default | Bedeutung |
 | --- | --- | --- |
 | **Prozessliste** | `teams.exe` | Liste der Datei-Namen (ohne Pfad). Vergleich erfolgt **case-insensitive**. Beispiel-Einträge: `teams.exe`, `zoom.exe`, `slack.exe`, `webex.exe`. Leere Liste = Feature aus. |
+| **Ausschluss-Phrasen (Fenstertitel)** | *(leer)* | Liste von Text-Phrasen, die als Ausschlussfilter auf den Fenstertitel wirken. Enthält der Titel eines Kommunikations-Fensters eine dieser Phrasen (case-insensitive Substring-Vergleich), wird das Fenster **nicht** als Kommunikations-Fenster behandelt, sondern wie jeder andere Prozess. Beispiel-Einträge: `Benachrichtigung`, `Notification`, `Eingehender Anruf`, `Reminder`. Leere/whitespace-Einträge werden beim Speichern verworfen. |
 
-**Erkennungsregel:** Ein Prozess gilt als „aktiv", solange er **mindestens
-ein sichtbares Top-Level-Fenster** besitzt (das, was Sie in Alt-Tab sehen).
-Versteckte Hintergrund-Fenster — z. B. das Teams-Tray-Symbol ohne offenes
-Hauptfenster — lösen kein Tracking aus. Schließen, Minimieren-zur-Tray
-oder Beenden des Programms beendet den Track sofort.
+**Erkennungsregel:** Ein Fenster eines konfigurierten Programms gilt als
+Kommunikations-Fenster, solange es **sichtbar** ist (das, was Sie in
+Alt-Tab sehen) **und sein Titel keine der oben gelisteten Ausschluss-
+Phrasen enthält**. Versteckte Hintergrund-Fenster — z. B. das Teams-Tray-
+Symbol ohne offenes Hauptfenster — lösen kein Tracking aus. Schließen,
+Minimieren-zur-Tray oder Beenden des Programms beendet den Track sofort.
+Die Ausschluss-Prüfung läuft in **jedem** Polling-Tick: wechselt der
+Fenstertitel zur Laufzeit auf einen ausgeschlossenen Wert, schließt der
+Tracker den Kommunikations-Track sofort; ändert sich der Titel später
+wieder auf einen zulässigen Wert, beginnt automatisch ein **neuer**
+Kommunikations-Track.
+
+### Ausschluss-Phrasen — typische Anwendung
+
+Manche Comm-Programme öffnen sichtbare Fenster, die fachlich **kein**
+Meeting/Anruf darstellen — z. B. Teams-Toast-Benachrichtigungen,
+Erinnerungs-Fenster oder das Hauptfenster im Stand-by. Ohne Filter würden
+diese Fenster auf der Comm-Schiene erscheinen und ggf. eine Comm-getriebene
+Auto-Tag-Regel auslösen, obwohl Sie gar nicht in einem Meeting sind. Tragen
+Sie passende Substrings in die Ausschluss-Phrasen ein — diese Fenster
+werden dann wie ganz normale Anwendungen vom Fokus-Tracker erfasst, die
+Comm-Schiene und der Comm-Auto-Tag-Vorrang bleiben aus.
 
 ### Auto-Tagging mit Vorrang
 
@@ -136,9 +154,13 @@ enabled = true
 hotkey  = "Ctrl+Alt+T"
 
 [communication]
-process_names = ["teams.exe"]   # parallel erfasst, sobald ein sichtbares
-                                # Fenster offen ist; Auto-Tags daraus
-                                # übersteuern Fokus-Auto-Tags.
+process_names         = ["teams.exe"]   # parallel erfasst, sobald ein sichtbares
+                                        # Fenster offen ist; Auto-Tags daraus
+                                        # übersteuern Fokus-Auto-Tags.
+title_exclude_phrases = []              # Substrings (case-insensitive). Enthält
+                                        # der Fenstertitel einen davon, zählt
+                                        # das Fenster nicht als Comm-Fenster
+                                        # sondern als normaler Prozess.
 ```
 
 Nach manuellen Änderungen ist ein **Neustart** der Anwendung erforderlich,

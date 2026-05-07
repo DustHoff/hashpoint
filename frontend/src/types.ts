@@ -83,6 +83,7 @@ export interface QuickTagConfig {
 
 export interface CommunicationConfig {
   process_names: string[];
+  title_exclude_phrases: string[];
 }
 
 export interface AppConfig {

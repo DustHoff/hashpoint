@@ -123,6 +123,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	p := filepath.Join(dir, "config.toml")
 	c := Default()
 	c.Personio.Tenant = "onesi"
+	c.Communication.TitleExcludePhrases = []string{"Benachrichtigung", "Reminder"}
 	if err := Save(p, c); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -133,4 +134,51 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if c2.Personio.Tenant != "onesi" {
 		t.Errorf("round-trip lost data: %+v", c2.Personio)
 	}
+	if got, want := c2.Communication.TitleExcludePhrases, []string{"Benachrichtigung", "Reminder"}; !equalStrings(got, want) {
+		t.Errorf("title_exclude_phrases round-trip = %v, want %v", got, want)
+	}
+}
+
+func TestNormalizeTitleExcludePhrases(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"nil", nil, nil},
+		{"empty slice", []string{}, nil},
+		{"trim only", []string{"  Benachrichtigung  "}, []string{"Benachrichtigung"}},
+		{"drops empty / whitespace", []string{"", "   ", "Notification"}, []string{"Notification"}},
+		{
+			"dedup case-insensitive, keeps first casing",
+			[]string{"Notification", "notification", "NOTIFICATION"},
+			[]string{"Notification"},
+		},
+		{
+			"preserves order and original casing",
+			[]string{"Reminder", "Benachrichtigung", "Stand-by"},
+			[]string{"Reminder", "Benachrichtigung", "Stand-by"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := NormalizeTitleExcludePhrases(tc.in)
+			if !equalStrings(got, tc.want) {
+				t.Errorf("NormalizeTitleExcludePhrases(%v) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

@@ -12,7 +12,7 @@ const emptyConfig: AppConfig = {
   },
   personio: { tenant: "" },
   quick_tag: { enabled: true, hotkey: "Ctrl+Alt+T" },
-  communication: { process_names: ["teams.exe"] },
+  communication: { process_names: ["teams.exe"], title_exclude_phrases: [] },
 };
 
 // normalize defends against backends that omit (or rename) sub-objects so a
@@ -38,6 +38,9 @@ function normalize(c: Partial<AppConfig> | null | undefined): AppConfig {
       process_names:
         c?.communication?.process_names ??
         emptyConfig.communication.process_names,
+      title_exclude_phrases:
+        c?.communication?.title_exclude_phrases ??
+        emptyConfig.communication.title_exclude_phrases,
     },
   };
 }
@@ -277,7 +280,10 @@ export default function Settings() {
                 onChange={(e) => {
                   const next = [...config.communication.process_names];
                   next[idx] = e.target.value;
-                  update("communication", { process_names: next });
+                  update("communication", {
+                    ...config.communication,
+                    process_names: next,
+                  });
                 }}
                 placeholder="z. B. teams.exe"
                 className="w-64 rounded bg-slate-900/60 px-2 py-1 font-mono text-sm"
@@ -287,7 +293,10 @@ export default function Settings() {
                   const next = config.communication.process_names.filter(
                     (_, i) => i !== idx,
                   );
-                  update("communication", { process_names: next });
+                  update("communication", {
+                    ...config.communication,
+                    process_names: next,
+                  });
                 }}
                 className="rounded bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600"
               >
@@ -299,6 +308,7 @@ export default function Settings() {
         <button
           onClick={() =>
             update("communication", {
+              ...config.communication,
               process_names: [...config.communication.process_names, ""],
             })
           }
@@ -306,6 +316,71 @@ export default function Settings() {
         >
           + Prozess hinzufügen
         </button>
+
+        <div className="mt-4 border-t border-slate-700/50 pt-4">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Ausschluss-Phrasen (Fenstertitel)
+          </h4>
+          <p className="mt-1 text-[11px] text-slate-500">
+            Enthält der Fenstertitel eines oben gelisteten Programms eine
+            dieser Phrasen (case-insensitive Substring-Vergleich), wird das
+            Fenster <span className="text-slate-300">nicht</span> als
+            Kommunikations-Fenster behandelt — kein Comm-Track, kein
+            Comm-Auto-Tag-Override. Beispiel: <code className="font-mono">Benachrichtigung</code>,
+            {" "}<code className="font-mono">Reminder</code>. Leer = keine Ausschlüsse.
+          </p>
+          <ul className="mt-2 space-y-2">
+            {config.communication.title_exclude_phrases.map((phrase, idx) => (
+              <li key={idx} className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={phrase}
+                  onChange={(e) => {
+                    const next = [
+                      ...config.communication.title_exclude_phrases,
+                    ];
+                    next[idx] = e.target.value;
+                    update("communication", {
+                      ...config.communication,
+                      title_exclude_phrases: next,
+                    });
+                  }}
+                  placeholder="z. B. Benachrichtigung"
+                  className="w-64 rounded bg-slate-900/60 px-2 py-1 font-mono text-sm"
+                />
+                <button
+                  onClick={() => {
+                    const next =
+                      config.communication.title_exclude_phrases.filter(
+                        (_, i) => i !== idx,
+                      );
+                    update("communication", {
+                      ...config.communication,
+                      title_exclude_phrases: next,
+                    });
+                  }}
+                  className="rounded bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600"
+                >
+                  Entfernen
+                </button>
+              </li>
+            ))}
+          </ul>
+          <button
+            onClick={() =>
+              update("communication", {
+                ...config.communication,
+                title_exclude_phrases: [
+                  ...config.communication.title_exclude_phrases,
+                  "",
+                ],
+              })
+            }
+            className="mt-2 rounded bg-accent/80 px-3 py-1 text-xs text-white hover:bg-accent"
+          >
+            + Phrase hinzufügen
+          </button>
+        </div>
       </section>
 
       {/* Personio section ----------------------------------------------- */}

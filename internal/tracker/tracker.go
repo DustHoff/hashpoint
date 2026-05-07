@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -99,6 +100,11 @@ type Config struct {
 	PollInterval       time.Duration
 	IdleThreshold      time.Duration
 	CommunicationNames []string
+	// CommunicationTitleExcludes are substrings that, when contained
+	// (case-insensitive) in a comm-process window's title, demote the window
+	// to a regular process — no comm-track is opened and no comm-driven
+	// auto-tag override fires. See spec §2.1a.
+	CommunicationTitleExcludes []string
 }
 
 // Tracker owns the focus-tracking lifecycle.
@@ -122,6 +128,12 @@ type Tracker struct {
 	// commNames is the lower-cased list of comm process basenames; mutated
 	// by SetCommunicationNames for hot-reload from the settings UI.
 	commNames []string
+	// commTitleExcludesLower is the pre-lowercased list of substrings that
+	// disqualify a comm-process window from being treated as a comm-track.
+	// The original casing is preserved at the config layer for UI display;
+	// here we only need the comparison form. Mutated by
+	// SetCommunicationTitleExcludes for hot-reload.
+	commTitleExcludesLower []string
 	// paused is the user-facing pause state controlled by Pause/Resume.
 	// While paused, no process tracking happens (focused or comm); manual
 	// tag blocks at the App layer are unaffected.
@@ -168,14 +180,15 @@ func New(cfg Config, tracks storage.ProcessTrackRepository, logger *slog.Logger,
 		logger = slog.Default()
 	}
 	t := &Tracker{
-		cfg:         cfg,
-		source:      realFocusSource{},
-		commSource:  realCommSource{},
-		clock:       realClock{},
-		tracks:      tracks,
-		logger:      logger,
-		commCurrent: make(map[commKey]*commEntry),
-		commNames:   append([]string(nil), cfg.CommunicationNames...),
+		cfg:                    cfg,
+		source:                 realFocusSource{},
+		commSource:             realCommSource{},
+		clock:                  realClock{},
+		tracks:                 tracks,
+		logger:                 logger,
+		commCurrent:            make(map[commKey]*commEntry),
+		commNames:              append([]string(nil), cfg.CommunicationNames...),
+		commTitleExcludesLower: lowerCopy(cfg.CommunicationTitleExcludes),
 	}
 	for _, o := range opts {
 		o(t)
@@ -190,6 +203,35 @@ func (t *Tracker) SetCommunicationNames(names []string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.commNames = append([]string(nil), names...)
+}
+
+// SetCommunicationTitleExcludes hot-reloads the list of substrings that
+// disqualify a comm-process window from being treated as a comm-track. The
+// next tick honours the new set; previously open comm tracks whose title now
+// matches an exclude phrase will close on the next reconciliation because
+// they're filtered out of the live enumeration.
+func (t *Tracker) SetCommunicationTitleExcludes(phrases []string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.commTitleExcludesLower = lowerCopy(phrases)
+}
+
+// lowerCopy returns a fresh slice with each non-empty entry trimmed and
+// lower-cased. Intended for the cached match-form of comm-title-exclude
+// phrases — the original casing lives at the config layer.
+func lowerCopy(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		out = append(out, strings.ToLower(s))
+	}
+	return out
 }
 
 // Pause stops opening new tracks; the currently open focused track (if any)
@@ -361,6 +403,7 @@ func (t *Tracker) tick(ctx context.Context) {
 func (t *Tracker) tickComm(ctx context.Context) {
 	t.mu.Lock()
 	names := append([]string(nil), t.commNames...)
+	excludes := append([]string(nil), t.commTitleExcludesLower...)
 	t.mu.Unlock()
 
 	if len(names) == 0 {
@@ -375,6 +418,21 @@ func (t *Tracker) tickComm(ctx context.Context) {
 			t.logger.Debug("enum comm windows failed", "err", err)
 		}
 		return
+	}
+	if len(excludes) > 0 {
+		// Drop windows whose title contains an exclude phrase. The reconciliation
+		// loop below treats any open comm-track for such a window as "no longer
+		// alive" (because the key disappears from the seen-set) and closes it on
+		// the same tick — that's how a runtime title change demotes a comm-track
+		// to a regular focus-only window.
+		filtered := windows[:0]
+		for _, w := range windows {
+			if titleExcluded(w.Title, excludes) {
+				continue
+			}
+			filtered = append(filtered, w)
+		}
+		windows = filtered
 	}
 
 	t.mu.Lock()
@@ -447,6 +505,22 @@ func (t *Tracker) tickComm(ctx context.Context) {
 	if changed {
 		t.notifyCommChanged(ctx, t.snapshotCommSessionsLocked(), now)
 	}
+}
+
+// titleExcluded reports whether title contains any of the (already lower-cased)
+// exclude phrases as a case-insensitive substring. Empty phrases are filtered
+// out by the caller (lowerCopy / NormalizeTitleExcludePhrases).
+func titleExcluded(title string, lowerExcludes []string) bool {
+	if len(lowerExcludes) == 0 {
+		return false
+	}
+	lt := strings.ToLower(title)
+	for _, p := range lowerExcludes {
+		if strings.Contains(lt, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // closeAllCommIfAny closes every open comm track. Used when the feature is
