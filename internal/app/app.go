@@ -774,6 +774,9 @@ type PersonioSessionStatus struct {
 }
 
 // PersonioStatus returns the current login state without hitting the network.
+// Valid mirrors the local age check (Session.Expired) so the badge has a
+// meaningful fallback when the network probe is unavailable; the network
+// probe in PersonioCheck is the source of truth when it can run.
 func (a *App) PersonioStatus() PersonioSessionStatus {
 	if a.deps.Sessions == nil {
 		return PersonioSessionStatus{Reason: "kein Session-Speicher"}
@@ -782,12 +785,17 @@ func (a *App) PersonioStatus() PersonioSessionStatus {
 	if err != nil || s == nil {
 		return PersonioSessionStatus{Reason: "nicht angemeldet"}
 	}
-	return PersonioSessionStatus{
+	st := PersonioSessionStatus{
 		HasSession: true,
 		Tenant:     s.Tenant,
 		EmployeeID: s.EmployeeID,
 		CapturedAt: s.CapturedAt,
+		Valid:      !s.Expired(),
 	}
+	if !st.Valid {
+		st.Reason = "Session zu alt — bitte neu anmelden"
+	}
+	return st
 }
 
 // PersonioCheck probes the Personio app root with the stored cookies.

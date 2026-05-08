@@ -235,47 +235,69 @@ func filterPersonioCookies(in []*network.Cookie) []SessionCookie {
 	return out
 }
 
-// Validate sends a GET request to the Personio app root and returns nil if
-// the response stays inside the authenticated app (i.e. is not a redirect to
-// /login). It uses the cookies in the supplied session — so call this after
-// a Login() to confirm the captured cookies actually work.
+// Validate confirms the supplied session can still authenticate against
+// Personio's API. We probe /api/v1/navigation/context — the same endpoint
+// FetchEmployeeID uses — because the SPA shell at "/" returns 200 (or a
+// non-/login redirect) for half-valid cookies, which used to leave the
+// status badge stuck on green while real API calls were already getting
+// rejected with 401.
 func Validate(ctx context.Context, sess *Session) error {
 	if sess == nil {
 		return ErrNoSession
 	}
 	host := strings.TrimSpace(sess.AppHost)
 	if host == "" {
-		// Fall back to the marketing host while the session is being
+		// Fall back to the standard app host while the session is being
 		// freshly captured; AppHost may not be populated yet.
 		if t := strings.TrimSpace(sess.Tenant); t != "" {
-			host = t + ".personio.de"
+			host = t + ".app.personio.com"
 		} else {
 			return errors.New("personio validate: session has no host")
 		}
 	}
+	cli := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+	return validateAt(ctx, cli, "https://"+host, sess)
+}
+
+// validateAt is the HTTP body of Validate, factored out so tests can point
+// at an httptest server without going through the real personio.com host.
+// baseURL is the scheme+host (no trailing slash); cookies are seeded against
+// it as well as against the marketing/app personio domains so the standard
+// cookie jar attaches whichever scope the cookie was captured under.
+func validateAt(ctx context.Context, cli *http.Client, baseURL string, sess *Session) error {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return err
 	}
-	appURL, err := url.Parse("https://" + host + "/")
+	probeURL, err := url.Parse(baseURL + "/api/v1/navigation/context")
 	if err != nil {
 		return err
 	}
-	jar.SetCookies(appURL, sess.HTTPCookies())
+	cookies := sess.HTTPCookies()
+	for _, dom := range []string{
+		baseURL + "/",
+		"https://personio.de/",
+		"https://personio.com/",
+	} {
+		if u, err := url.Parse(dom); err == nil {
+			jar.SetCookies(u, cookies)
+		}
+	}
+	cli.Jar = jar
+	cli.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
 
-	// Disable automatic redirect following so we can inspect the first hop.
-	cli := &http.Client{
-		Jar:     jar,
-		Timeout: 10 * time.Second,
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, appURL.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL.String(), nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	req.Header.Set("Accept", "application/json")
+	if t := sess.XSRFToken(); t != "" {
+		req.Header.Set("x-athena-xsrf-token", t)
+	}
 
 	resp, err := cli.Do(req)
 	if err != nil {
@@ -287,13 +309,17 @@ func Validate(ctx context.Context, sess *Session) error {
 		loc := resp.Header.Get("Location")
 		if loc != "" {
 			lu, _ := url.Parse(loc)
-			if lu != nil && strings.HasPrefix(lu.Path, "/login") {
+			if lu != nil && (strings.HasPrefix(lu.Path, "/login") || strings.Contains(lu.Path, "/auth")) {
 				return errors.New("personio validate: redirected to /login — session expired")
 			}
 		}
+		return fmt.Errorf("personio validate: unexpected redirect (status %d, location %q)", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return fmt.Errorf("personio validate: unauthenticated (status %d)", resp.StatusCode)
+	}
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("personio validate: unexpected status %d", resp.StatusCode)
 	}
 	return nil
 }
