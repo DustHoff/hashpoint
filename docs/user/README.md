@@ -16,7 +16,7 @@ Der TimeTracker ist eine Windows-Desktop-Anwendung, die im Hintergrund automatis
 | --- | --- |
 | [Installation & Erste Schritte](installation.md) | Speicherorte, Autostart, erster Start |
 | [Einstellungen](einstellungen.md) | Konfiguration via Settings-Tab, `config.toml` und Credential Manager |
-| [Zeitachse & Zeiterfassung](zeiterfassung.md) | Tagesansicht, Blöcke bearbeiten, Pause/Fortsetzen, Bereichs-Tagging |
+| [Zeitachse & Zeiterfassung](zeiterfassung.md) | Tages- und Monatsansicht, Blöcke bearbeiten, Pause/Fortsetzen, Bereichs-Tagging |
 | [Tags verwalten](tags.md) | Tag-Hierarchie, Farben, Personio-Mappings |
 | [Auto-Tagging-Regeln](auto-tagging.md) | Regeln definieren, testen und auf Historie anwenden |
 | [Personio-Synchronisation](personio.md) | Voraussetzungen, Sync-Logik, Fehlerbehandlung |

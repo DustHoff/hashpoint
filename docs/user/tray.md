@@ -25,7 +25,7 @@ Per **Rechtsklick** auf das Tray-Icon öffnet sich das Menü:
 | --- | --- |
 | **Öffnen** | Bringt das Hauptfenster nach vorne. |
 | **Pause Tracking** *(Checkbox)* | Hält das automatische Fokus-Tracking an oder setzt es fort. Häkchen = pausiert. Beim Pausieren wird der laufende Process-Track sofort sauber abgeschlossen. Manuelles Tagging (siehe unten) bleibt unabhängig davon möglich. |
-| **Sync zu Personio (heute)** | Synchronisiert die Tag-Blöcke des heutigen Tages direkt an Personio, ohne das Hauptfenster zu öffnen. |
+| **Sync zu Personio (heute)** | Synchronisiert die Tag-Blöcke des heutigen Tages an Personio. Hat Personio für heute bereits Work-Perioden (z. B. weil schon manuell gebucht wurde), holt der TimeTracker das Hauptfenster nach vorne und zeigt den Override/Import-Dialog — siehe [Personio → Vorab-Prüfung](personio.md#vorab-prüfung-gegen-datenverlust). Andernfalls läuft der Sync still im Hintergrund. |
 | **Manueller Tag** *(Submenü)* | Startet oder beendet eine offene manuelle Tag-Sitzung. Siehe Abschnitt **Manuelles Tagging**. |
 | **Über (Hashpoint <version>)** | Loggt Versionsinformationen. (Kein Dialog – Details siehe Tab **Über** im Hauptfenster.) |
 | **Hilfe** | Öffnet das Hauptfenster und wechselt direkt in den Tab **Hilfe** mit dem eingebetteten Benutzerhandbuch (siehe Abschnitt **Hilfe-Tab**). |

@@ -948,6 +948,32 @@ func (a *App) SyncRange(fromRFC3339, toRFC3339 string) (*personio.Result, error)
 	return syncer.SyncRange(a.ctx, from.UTC(), to.UTC())
 }
 
+// RequestSyncToday is the tray-driven sync entry point for today's UTC
+// day. Mirrors the startup-sync's preflight-then-push pattern: if
+// Personio already has work-type periods, the override/import modal is
+// surfaced (and the main window brought forward so the user sees it)
+// instead of silently clobbering them. On a clean preflight, the sync
+// runs the same override path the manual button uses. Logged but
+// otherwise silent on failure — the tray gives no other UI feedback.
+func (a *App) RequestSyncToday() {
+	todayISO := time.Now().UTC().Format(time.RFC3339)
+	pre, err := a.PreflightSyncDay(todayISO)
+	if err != nil {
+		a.logger.Warn("tray sync: preflight failed", "err", err)
+		return
+	}
+	if pre.HasExistingPeriods() || !pre.Trackable {
+		a.logger.Info("tray sync: existing periods or non-trackable — surfacing modal",
+			"day", pre.Day, "existing", len(pre.ExistingPeriods), "state", pre.State)
+		a.ShowWindow()
+		a.emitStartupConflict(pre)
+		return
+	}
+	if _, err := a.SyncDay(todayISO); err != nil {
+		a.logger.Warn("tray sync: failed", "err", err)
+	}
+}
+
 // PreflightSyncDay returns what Personio currently has on the given day so
 // the frontend can warn before the override sync wipes it. Existing
 // work-type periods come back in the response; empty means "safe to push".

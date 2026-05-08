@@ -532,10 +532,12 @@ zurück nach Personio gepusht (sofern der gewählte Tag
 - Kein Match → Fallback auf den Auto-Tag `#PersonioImport`. Der wird
   beim ersten Import angelegt (Top-Level, Farbe `#94a3b8`,
   `SyncToPersonio = 0`, damit re-importierte Blöcke nicht ungewollt
-  zurück nach Personio kreiseln). Der User kann den Tag im Tag-Manager
-  umbenennen oder weitere Mappings einrichten — `ensureFallbackTag`
-  greift bei jedem Import auf den existierenden Tag, nicht auf den
-  Namen-Match zurück.
+  zurück nach Personio kreiseln). `ensureFallbackTag` sucht den Tag
+  per **Namens-Match** auf der Top-Level-Ebene — wird er gelöscht oder
+  umbenannt, legt der nächste Fallback-Bedarf einen frischen
+  `#PersonioImport` an. Eigenschaften wie Farbe oder Project-ID kann
+  der User im Tag-Manager überschreiben, ohne dass der Lookup das
+  bemerkt.
 
 **Granularität:** Der Import nutzt **die Personio-Originalzeiten ohne
 Snap auf das lokale Granularitätsraster**. Personio ist hier die Quelle

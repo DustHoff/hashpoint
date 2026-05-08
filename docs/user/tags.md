@@ -79,3 +79,14 @@ Eine bewährte Struktur:
 - Pro **Projekt** oder **Kostenstelle** einen Eltern-Tag mit Personio-Projekt-ID
 - Sub-Tags für Tätigkeitsarten (z. B. `#Coding`, `#Meeting`, `#Review`) mit einer abweichenden Personio-Aktivitäts-ID
 - Pausen/Privates: kein Tag (oder ein Eltern-Tag mit `Zu Personio synchronisieren = aus`)
+
+## Automatisch angelegte Tags
+
+Wenn Sie über den [Personio-Import](personio.md#vorab-prüfung-gegen-datenverlust) Perioden aus Personio nach Hashpoint übernehmen, kann Hashpoint einen Tag namens **`#PersonioImport`** anlegen — und zwar genau dann, wenn eine importierte Periode keine zu einer Personio-Projekt-ID passende Tag-Zuordnung findet. Der Tag dient als Auffangbecken, damit beim Import keine Zeit verlorengeht.
+
+Eigenschaften des angelegten Tags:
+
+- Top-Level (kein Eltern-Tag), neutrale Farbe.
+- **Zu Personio synchronisieren = aus** — ein erneuter Sync schickt Blöcke mit diesem Tag nicht zurück nach Personio.
+
+Sie können den Tag im Editor umfärben, mit einer Personio-Projekt-ID versehen oder löschen. **Umbenennen lohnt sich nicht** — Hashpoint sucht beim Import nach dem Namen `#PersonioImport`. Wird er nicht gefunden (gelöscht oder umbenannt), legt der nächste Import einen frischen `#PersonioImport`-Tag an. Wenn Sie also einen festen Auffang-Tag haben möchten, lassen Sie den Namen stehen.

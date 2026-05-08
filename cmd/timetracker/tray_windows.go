@@ -89,10 +89,10 @@ func onTrayReady(ctx context.Context, a *app.App, version string) {
 				mPause.Check()
 			}
 		case <-mSync.ClickedCh:
-			today := time.Now().UTC().Format(time.RFC3339)
-			if _, err := a.SyncDay(today); err != nil {
-				slog.Warn("tray: sync failed", "err", err)
-			}
+			// Preflight first — if Personio already has periods today, the
+			// modal is surfaced so the user can pick override vs import
+			// instead of silently clobbering existing entries.
+			a.RequestSyncToday()
 		case <-mAbout.ClickedCh:
 			slog.Info("about clicked", "version", version)
 		case <-mHelp.ClickedCh:

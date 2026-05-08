@@ -122,15 +122,22 @@ zurückspielen.
 
 - Personio-Projekt-ID → lokales Tag mit gleicher *Personio-Projekt-ID*.
 - Findet sich kein passendes Tag, wird beim ersten Import ein Auto-Tag
-  `#PersonioImport` angelegt (Sync-zu-Personio aus, neutrale Farbe). Der
-  Tag taucht im Tag-Manager auf und kann dort umbenannt oder neu
-  konfiguriert werden — der Import nutzt ihn weiterhin als Fallback.
+  `#PersonioImport` angelegt (Sync-zu-Personio aus, neutrale Farbe).
+  Spätere Importe ohne Match wiederverwenden denselben Tag, solange er
+  unter dem Namen `#PersonioImport` existiert. Siehe
+  [Tags → Automatisch angelegte Tags](tags.md#automatisch-angelegte-tags).
 - Der Personio-`comment` wird als Block-Beschreibung übernommen.
 
-Beim **Auto-Sync beim Starten** (siehe oben) gilt dieselbe Logik: findet
-die Vorabprüfung Work-Perioden auf dem zu synchronisierenden Tag, wird
-*nicht* automatisch geschrieben — stattdessen erscheint derselbe Dialog
-sobald das Hauptfenster bereit ist. Sie können dann in Ruhe entscheiden.
+Die Vorab-Prüfung gilt für **alle drei Sync-Auslöser**:
+
+- Der Button **Sync zu Personio** auf der Zeitachse zeigt den Dialog
+  direkt im Hauptfenster.
+- Das Tray-Menü **Sync zu Personio (heute)** holt das Hauptfenster nach
+  vorne und zeigt den Dialog dort — auch wenn das Fenster vorher nur im
+  Tray lief.
+- Der **Auto-Sync beim Starten** (siehe oben) schreibt nicht
+  automatisch, sondern wartet auf Ihre Entscheidung im Dialog, sobald
+  das Hauptfenster bereit ist.
 
 ## Was wird übertragen?
 

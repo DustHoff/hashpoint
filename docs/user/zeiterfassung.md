@@ -1,6 +1,6 @@
 # Zeitachse & Zeiterfassung
 
-Der Tab **Zeitachse** ist die zentrale Arbeitsfläche im Alltag. Hier sehen Sie drei übereinander liegende Zeitstrahlen — oben die **Tag-Blöcke** (manuell und automatisch vergeben), in der Mitte die **Fokus-Prozesse** (was Sie tatsächlich auf dem Bildschirm hatten), unten die **📞 Kommunikations-Prozesse** (Teams, Zoom, … parallel zum Fokus) — und können beides taggen, korrigieren oder an Personio übertragen.
+Der Tab **Zeitachse** ist die zentrale Arbeitsfläche im Alltag. Er kennt zwei Ansichten: die **Tagesansicht** mit drei übereinander liegenden Zeitstrahlen (oben die **Tag-Blöcke**, in der Mitte die **Fokus-Prozesse**, unten die **📞 Kommunikations-Prozesse**) und der detaillierten Block-/Prozess-Tabelle, sowie die **Monatsansicht** als Kalender-Überblick. Über den Umschalter `Tag | Monat` im Kopfbereich wechseln Sie zwischen beiden — die Tagesansicht ist der Standard.
 
 ## Wie wird erfasst?
 
@@ -18,13 +18,13 @@ Das Hashpoint-Fenster startet **maximiert**, damit beide Listen direkt nebeneina
 
 Der Tab besteht aus:
 
-1. **Kopfbereich** – Datum, Pause/Sync.
-2. **Drei Zeitstrahl-Streifen** – oben die Tag-Blöcke, in der Mitte die Fokus-Process-Tracks, unten die Kommunikations-Tracks. Alle drei teilen sich Zoom und Scroll.
-3. **Zwei nebeneinander liegende Listen** unterhalb der Streifen:
+1. **Kopfbereich** – Ansichts-Umschalter `Tag | Monat`, plus ansichts-spezifische Bedienelemente (Datum/Pause/Sync in der Tagesansicht, Monatsnavigation in der Monatsansicht).
+2. **Tagesansicht** – drei Zeitstrahl-Streifen (oben Tag-Blöcke, mitte Fokus-Process-Tracks, unten Kommunikations-Tracks; alle drei teilen sich Zoom und Scroll) plus zwei nebeneinander liegende Listen darunter:
    - **Links — Tag-Block-Liste:** ein Eintrag pro Tag-Block (manuell oder auto), mit Beschreibung und Tag-Chips. Bekommt 40 % der Breite.
    - **Rechts — Process-Track-Liste:** gruppiert sowohl Fokus- als auch Kommunikations-Tracks nach Programm; Kommunikations-Zeilen sind mit einem 📞-Symbol vor dem Programmnamen markiert. Bekommt 60 % der Breite, weil Fenstertitel länger sind als Tag-Chips.
 
    Beide Listen scrollen unabhängig voneinander (jeweils max. 65 % der Bildschirmhöhe), damit ein langer Tag links nicht die Sicht auf die Prozesse rechts verschiebt.
+3. **Monatsansicht** – Kalender-Raster (Mo–So × 6 Wochen) mit Sync-Status und getaggter Zeit pro Tag. Klick auf eine Tageskachel wechselt zurück in die Tagesansicht. Details siehe [Monatsansicht](#monatsansicht).
 
 ### Kopfbereich
 
