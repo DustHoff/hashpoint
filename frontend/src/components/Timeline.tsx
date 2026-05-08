@@ -124,7 +124,7 @@ export default function Timeline() {
   const trackStripRef = useRef<HTMLDivElement>(null);
   const commStripRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const dragStartPctRef = useRef<number | null>(null);
+  const dragStartMsRef = useRef<number | null>(null);
   const [dragRange, setDragRange] = useState<{ a: number; b: number } | null>(
     null,
   );
@@ -148,6 +148,21 @@ export default function Timeline() {
     start: number;
     end: number;
   } | null>(null);
+
+  // Auto-pan during drags. While a drag is active and the cursor sits in
+  // the edge zone of the tag strip, a RAF loop pans the view and
+  // re-evaluates the drag against the cached cursor x — so the dragged
+  // edge follows the cursor's true ms even when the mouse stops moving.
+  // The mirror refs let the loop read fresh state without re-binding.
+  const lastClientXRef = useRef<number | null>(null);
+  const autoPanRafRef = useRef<number | null>(null);
+  const autoPanLastTickRef = useRef<number>(0);
+  const viewStartRef = useRef<number>(0);
+  const viewEndRef = useRef<number>(0);
+  const granularityMsRef = useRef<number>(0);
+  const dayFromMsRef = useRef<number>(0);
+  const dayToMsRef = useRef<number>(0);
+  const selectedRangeRef = useRef<MsRange | null>(null);
 
   const tagsByID = useMemo(() => {
     const m: Record<number, Tag> = {};
@@ -411,28 +426,26 @@ export default function Timeline() {
     return clampPct((e.clientX - rect.left) / rect.width);
   }
 
-  function pctRangeToMs(a: number, b: number): MsRange {
-    const lo = Math.min(a, b);
-    const hi = Math.max(a, b);
-    return { start: viewStart + lo * viewSpan, end: viewStart + hi * viewSpan };
-  }
-
+  // Snap helpers read granularity from a ref so they stay correct even
+  // when invoked from a RAF auto-pan tick scheduled in a previous render.
   function snapMsToGrid(ms: number, mode: "floor" | "ceil"): number {
-    if (granularityMs <= 0) return ms;
+    const g = granularityMsRef.current;
+    if (g <= 0) return ms;
     const d = new Date(ms);
     const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
     const delta = ms - midnight;
-    const remainder = delta % granularityMs;
+    const remainder = delta % g;
     if (remainder === 0) return ms;
     if (mode === "floor") return midnight + (delta - remainder);
-    return midnight + (delta - remainder + granularityMs);
+    return midnight + (delta - remainder + g);
   }
 
   function snapRange(r: MsRange): MsRange {
-    if (granularityMs <= 0) return r;
+    const g = granularityMsRef.current;
+    if (g <= 0) return r;
     const start = snapMsToGrid(r.start, "floor");
     let end = snapMsToGrid(r.end, "ceil");
-    if (end <= start) end = start + granularityMs;
+    if (end <= start) end = start + g;
     return { start, end };
   }
 
@@ -492,14 +505,227 @@ export default function Timeline() {
     setViewEnd(dayToMs);
   }
 
+  // Shift the zoomed view by deltaMs, clamped to the day. Width stays constant.
+  function panBy(deltaMs: number) {
+    const span = viewEnd - viewStart;
+    let ns = viewStart + deltaMs;
+    let ne = ns + span;
+    if (ns < dayFromMs) {
+      ns = dayFromMs;
+      ne = ns + span;
+    }
+    if (ne > dayToMs) {
+      ne = dayToMs;
+      ns = ne - span;
+    }
+    setViewStart(ns);
+    setViewEnd(ne);
+  }
+
+  // Mirror state into refs so the RAF auto-pan loop can read fresh values
+  // without re-binding listeners on every render.
+  viewStartRef.current = viewStart;
+  viewEndRef.current = viewEnd;
+  granularityMsRef.current = granularityMs;
+  dayFromMsRef.current = dayFromMs;
+  dayToMsRef.current = dayToMs;
+  selectedRangeRef.current = selectedRange;
+
+  // -- Auto-pan during drag operations --------------------------------------
+  //
+  // Edge zone: 5% of the strip width. Cursor inside that zone triggers a
+  // RAF loop that pans the view (max 50% of view span per second at full
+  // intensity, scaled by cursor proximity to the boundary) and re-runs the
+  // active drag's update logic against the fresh viewStart/viewEnd.
+  const AUTO_PAN_EDGE_PCT = 0.05;
+  const AUTO_PAN_MAX_SPAN_PER_SEC = 0.5;
+
+  function getActiveDragType():
+    | "create"
+    | "rangeResize"
+    | "blockResize"
+    | null {
+    if (dragStartMsRef.current != null) return "create";
+    if (resizeEdgeRef.current != null) return "rangeResize";
+    if (blockResizeCtxRef.current != null) return "blockResize";
+    return null;
+  }
+
+  function refreshDragCreateState() {
+    const startMs = dragStartMsRef.current;
+    const x = lastClientXRef.current;
+    const stripRect = tagStripRef.current?.getBoundingClientRect();
+    if (startMs == null || x == null || !stripRect) return;
+    const pct = clampPct((x - stripRect.left) / stripRect.width);
+    const vs = viewStartRef.current;
+    const ve = viewEndRef.current;
+    const span = ve - vs;
+    if (span <= 0) return;
+    const endMs = vs + pct * span;
+    const r = snapRange({
+      start: Math.min(startMs, endMs),
+      end: Math.max(startMs, endMs),
+    });
+    setDragRange({
+      a: clampPct((r.start - vs) / span),
+      b: clampPct((r.end - vs) / span),
+    });
+    setHoverRange(r);
+    setCursorPctX(pct);
+  }
+
+  function refreshRangeResizeState() {
+    const edge = resizeEdgeRef.current;
+    const sel = selectedRangeRef.current;
+    const x = lastClientXRef.current;
+    const stripRect = tagStripRef.current?.getBoundingClientRect();
+    if (!edge || !sel || x == null || !stripRect) return;
+    const pct = clampPct((x - stripRect.left) / stripRect.width);
+    let ms =
+      viewStartRef.current + pct * (viewEndRef.current - viewStartRef.current);
+    ms = Math.max(dayFromMsRef.current, Math.min(dayToMsRef.current, ms));
+    let start = sel.start;
+    let end = sel.end;
+    if (edge === "start") start = ms;
+    else end = ms;
+    if (start > end) {
+      const t = start;
+      start = end;
+      end = t;
+      resizeEdgeRef.current = edge === "start" ? "end" : "start";
+    }
+    setSelectedRange(snapRange({ start, end }));
+  }
+
+  function refreshBlockResizeState() {
+    const ctx = blockResizeCtxRef.current;
+    const x = lastClientXRef.current;
+    const stripRect = tagStripRef.current?.getBoundingClientRect();
+    if (!ctx || x == null || !stripRect) return;
+    const pct = clampPct((x - stripRect.left) / stripRect.width);
+    const rawMs =
+      viewStartRef.current + pct * (viewEndRef.current - viewStartRef.current);
+    const minGap = Math.max(granularityMsRef.current, 1000);
+    const clampMs = (ms: number): number => {
+      if (ctx.edge === "start") {
+        const upper = ctx.originalEnd - minGap;
+        return Math.max(ctx.leftFenceMs, Math.min(ms, upper));
+      }
+      const lower = ctx.originalStart + minGap;
+      return Math.max(lower, Math.min(ms, ctx.rightFenceMs));
+    };
+    const clamped = clampMs(rawMs);
+    const snapped =
+      ctx.edge === "start"
+        ? snapMsToGrid(clamped, "floor")
+        : snapMsToGrid(clamped, "ceil");
+    const finalMs = clampMs(snapped);
+    if (ctx.edge === "start") {
+      setBlockResize({ id: ctx.id, start: finalMs, end: ctx.originalEnd });
+    } else {
+      setBlockResize({ id: ctx.id, start: ctx.originalStart, end: finalMs });
+    }
+  }
+
+  function refreshActiveDrag() {
+    const t = getActiveDragType();
+    if (t === "create") refreshDragCreateState();
+    else if (t === "rangeResize") refreshRangeResizeState();
+    else if (t === "blockResize") refreshBlockResizeState();
+  }
+
+  function tickAutoPan() {
+    autoPanRafRef.current = null;
+    if (!getActiveDragType()) {
+      autoPanLastTickRef.current = 0;
+      return;
+    }
+    const x = lastClientXRef.current;
+    const stripRect = tagStripRef.current?.getBoundingClientRect();
+    if (x == null || !stripRect) {
+      autoPanLastTickRef.current = 0;
+      return;
+    }
+
+    const now = performance.now();
+    const dtSec = autoPanLastTickRef.current
+      ? Math.min(0.05, (now - autoPanLastTickRef.current) / 1000)
+      : 0.016;
+    autoPanLastTickRef.current = now;
+
+    const edgeZone = stripRect.width * AUTO_PAN_EDGE_PCT;
+    const span = viewEndRef.current - viewStartRef.current;
+    const maxStep = AUTO_PAN_MAX_SPAN_PER_SEC * span * dtSec;
+
+    let intensity = 0;
+    let direction = 0;
+    if (x < stripRect.left + edgeZone) {
+      intensity = Math.min(1, (stripRect.left + edgeZone - x) / edgeZone);
+      direction = -1;
+    } else if (x > stripRect.right - edgeZone) {
+      intensity = Math.min(1, (x - (stripRect.right - edgeZone)) / edgeZone);
+      direction = 1;
+    }
+
+    if (intensity === 0) {
+      autoPanLastTickRef.current = 0;
+      return;
+    }
+
+    let newStart = viewStartRef.current + direction * intensity * maxStep;
+    let newEnd = newStart + span;
+    if (newStart < dayFromMsRef.current) {
+      newStart = dayFromMsRef.current;
+      newEnd = newStart + span;
+    }
+    if (newEnd > dayToMsRef.current) {
+      newEnd = dayToMsRef.current;
+      newStart = newEnd - span;
+    }
+
+    if (newStart !== viewStartRef.current) {
+      viewStartRef.current = newStart;
+      viewEndRef.current = newEnd;
+      setViewStart(newStart);
+      setViewEnd(newEnd);
+      refreshActiveDrag();
+      autoPanRafRef.current = requestAnimationFrame(tickAutoPan);
+    } else {
+      // Hit the day boundary — no more room to pan in this direction.
+      autoPanLastTickRef.current = 0;
+    }
+  }
+
+  function maybeStartAutoPan() {
+    if (autoPanRafRef.current != null) return;
+    autoPanLastTickRef.current = 0;
+    autoPanRafRef.current = requestAnimationFrame(tickAutoPan);
+  }
+
+  function stopAutoPan() {
+    if (autoPanRafRef.current != null) {
+      cancelAnimationFrame(autoPanRafRef.current);
+      autoPanRafRef.current = null;
+    }
+    autoPanLastTickRef.current = 0;
+  }
+
+  // Cancel any in-flight auto-pan RAF on unmount so we don't leak frames.
+  useEffect(() => {
+    return () => stopAutoPan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // -- Tag-strip mouse handlers (drag to create manual range) ---------------
 
   function onTagStripMouseDown(e: React.MouseEvent) {
     if (e.button !== 0) return;
     const pct = pctFromEvent(e, tagStripRef);
-    dragStartPctRef.current = pct;
+    const startMs = viewStart + pct * (viewEnd - viewStart);
+    dragStartMsRef.current = startMs;
+    lastClientXRef.current = e.clientX;
     setDragRange({ a: pct, b: pct });
-    setHoverRange(pctRangeToMs(pct, pct));
+    setHoverRange({ start: startMs, end: startMs });
     setCursorPctX(pct);
     e.preventDefault();
   }
@@ -509,36 +735,38 @@ export default function Timeline() {
   }
 
   function onTagStripMouseLeave() {
-    if (dragStartPctRef.current == null) setCursorPctX(null);
+    if (dragStartMsRef.current == null) setCursorPctX(null);
   }
 
   useEffect(() => {
-    function snappedDragPct(startPct: number, endPct: number): { a: number; b: number } {
-      if (granularityMs <= 0) return { a: startPct, b: endPct };
-      const span = viewEnd - viewStart;
-      if (span <= 0) return { a: startPct, b: endPct };
-      const r = snapRange(pctRangeToMs(startPct, endPct));
-      return {
-        a: (r.start - viewStart) / span,
-        b: (r.end - viewStart) / span,
-      };
-    }
     function onMove(e: MouseEvent) {
-      if (dragStartPctRef.current == null) return;
-      const pct = pctFromEvent(e, tagStripRef);
-      const startPct = dragStartPctRef.current;
-      setDragRange(snappedDragPct(startPct, pct));
-      setHoverRange(snapRange(pctRangeToMs(startPct, pct)));
-      setCursorPctX(pct);
+      if (dragStartMsRef.current == null) return;
+      lastClientXRef.current = e.clientX;
+      refreshDragCreateState();
+      maybeStartAutoPan();
     }
     function onUp(e: MouseEvent) {
-      if (dragStartPctRef.current == null) return;
-      const startPct = dragStartPctRef.current;
-      const endPct = pctFromEvent(e, tagStripRef);
-      dragStartPctRef.current = null;
-      const moved = Math.abs(endPct - startPct) > 0.001;
-      const r = snapRange(pctRangeToMs(startPct, endPct));
+      const startMs = dragStartMsRef.current;
+      if (startMs == null) return;
+      dragStartMsRef.current = null;
+      stopAutoPan();
+      const stripRect = tagStripRef.current?.getBoundingClientRect();
+      let endMs = startMs;
+      if (stripRect) {
+        const pct = clampPct(
+          (e.clientX - stripRect.left) / stripRect.width,
+        );
+        endMs =
+          viewStartRef.current +
+          pct * (viewEndRef.current - viewStartRef.current);
+      }
+      const span = viewEndRef.current - viewStartRef.current;
+      const moved = Math.abs(endMs - startMs) > 0.001 * span;
       if (moved) {
+        const r = snapRange({
+          start: Math.min(startMs, endMs),
+          end: Math.max(startMs, endMs),
+        });
         setSelectedBlockIDs(new Set());
         setSelectedRange(r);
       }
@@ -552,30 +780,20 @@ export default function Timeline() {
       window.removeEventListener("mouseup", onUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewStart, viewEnd, granularityMs]);
+  }, []);
 
   // Resize the still-uncommitted selectedRange via edge handles.
   useEffect(() => {
     function onMove(e: MouseEvent) {
-      const edge = resizeEdgeRef.current;
-      if (edge == null || !selectedRange) return;
-      const pct = pctFromEvent(e, tagStripRef);
-      let ms = viewStart + pct * (viewEnd - viewStart);
-      ms = Math.max(dayFromMs, Math.min(dayToMs, ms));
-      let start = selectedRange.start;
-      let end = selectedRange.end;
-      if (edge === "start") start = ms;
-      else end = ms;
-      if (start > end) {
-        const t = start;
-        start = end;
-        end = t;
-        resizeEdgeRef.current = edge === "start" ? "end" : "start";
-      }
-      setSelectedRange(snapRange({ start, end }));
+      if (resizeEdgeRef.current == null) return;
+      lastClientXRef.current = e.clientX;
+      refreshRangeResizeState();
+      maybeStartAutoPan();
     }
     function onUp() {
+      if (resizeEdgeRef.current == null) return;
       resizeEdgeRef.current = null;
+      stopAutoPan();
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -584,7 +802,7 @@ export default function Timeline() {
       window.removeEventListener("mouseup", onUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedRange, viewStart, viewEnd, dayFromMs, dayToMs, granularityMs]);
+  }, []);
 
   function onResizeHandleDown(e: React.MouseEvent, edge: "start" | "end") {
     e.stopPropagation();
@@ -638,38 +856,17 @@ export default function Timeline() {
   }
 
   useEffect(() => {
-    function clampMs(ms: number): number {
-      const ctx = blockResizeCtxRef.current;
-      if (!ctx) return ms;
-      const minGap = Math.max(granularityMs, 1000);
-      if (ctx.edge === "start") {
-        const upperBound = ctx.originalEnd - minGap;
-        return Math.max(ctx.leftFenceMs, Math.min(ms, upperBound));
-      }
-      const lowerBound = ctx.originalStart + minGap;
-      return Math.max(lowerBound, Math.min(ms, ctx.rightFenceMs));
-    }
     function onMove(e: MouseEvent) {
-      const ctx = blockResizeCtxRef.current;
-      if (!ctx) return;
-      const pct = pctFromEvent(e, tagStripRef);
-      const rawMs = viewStart + pct * (viewEnd - viewStart);
-      const clamped = clampMs(rawMs);
-      const snapped =
-        ctx.edge === "start"
-          ? snapMsToGrid(clamped, "floor")
-          : snapMsToGrid(clamped, "ceil");
-      const finalMs = clampMs(snapped);
-      if (ctx.edge === "start") {
-        setBlockResize({ id: ctx.id, start: finalMs, end: ctx.originalEnd });
-      } else {
-        setBlockResize({ id: ctx.id, start: ctx.originalStart, end: finalMs });
-      }
+      if (blockResizeCtxRef.current == null) return;
+      lastClientXRef.current = e.clientX;
+      refreshBlockResizeState();
+      maybeStartAutoPan();
     }
     async function onUp() {
       const ctx = blockResizeCtxRef.current;
       if (!ctx) return;
       blockResizeCtxRef.current = null;
+      stopAutoPan();
       const live = blockResize;
       setBlockResize(null);
       if (!live) return;
@@ -695,7 +892,7 @@ export default function Timeline() {
       window.removeEventListener("mouseup", onUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewStart, viewEnd, granularityMs, blockResize]);
+  }, [blockResize]);
 
   // -- Track strip mouse handlers (read-only hover only) -------------------
 
@@ -704,7 +901,7 @@ export default function Timeline() {
   }
 
   function onTrackStripMouseLeave() {
-    if (dragStartPctRef.current == null) setCursorPctX(null);
+    if (dragStartMsRef.current == null) setCursorPctX(null);
   }
 
   // -- Table grouping & filtering ------------------------------------------
@@ -967,6 +1164,10 @@ export default function Timeline() {
               })()}
         </div>
 
+        {/* Strips wrapper — hosts pan-arrow overlay when zoomed so the
+            user can reach time outside the current view without resorting
+            to Shift+wheel. */}
+        <div className="relative space-y-2">
         {/* Top strip: Tag blocks (drag to create manual range tag) */}
         <div className="text-[10px] uppercase tracking-wide text-slate-500">Tags</div>
         <div
@@ -1136,7 +1337,7 @@ export default function Timeline() {
           ref={commStripRef}
           onMouseMove={(e) => setCursorPctX(pctFromEvent(e, commStripRef))}
           onMouseLeave={() => {
-            if (dragStartPctRef.current == null) setCursorPctX(null);
+            if (dragStartMsRef.current == null) setCursorPctX(null);
           }}
           onDoubleClick={resetZoom}
           className="relative h-8 select-none rounded bg-slate-900/60"
@@ -1184,6 +1385,35 @@ export default function Timeline() {
               Keine Kommunikations-Aktivität an diesem Tag
             </div>
           )}
+        </div>
+
+        {/* Pan-arrow overlay — only when zoomed. Each click shifts the view
+            by half its current span so the user keeps half the previous
+            window as orientation. Disabled at the day boundaries. */}
+        {isZoomed && (
+          <>
+            <button
+              type="button"
+              onClick={() => panBy(-(viewEnd - viewStart) / 2)}
+              disabled={viewStart <= dayFromMs}
+              aria-label="Zeitfenster nach links verschieben"
+              title="Zeitfenster nach links verschieben"
+              className="absolute inset-y-0 left-0 z-30 flex w-6 items-center justify-center rounded-l bg-slate-900/85 text-slate-200 ring-1 ring-slate-700 transition-colors hover:bg-slate-700 disabled:cursor-default disabled:opacity-30 disabled:hover:bg-slate-900/85"
+            >
+              ◀
+            </button>
+            <button
+              type="button"
+              onClick={() => panBy((viewEnd - viewStart) / 2)}
+              disabled={viewEnd >= dayToMs}
+              aria-label="Zeitfenster nach rechts verschieben"
+              title="Zeitfenster nach rechts verschieben"
+              className="absolute inset-y-0 right-0 z-30 flex w-6 items-center justify-center rounded-r bg-slate-900/85 text-slate-200 ring-1 ring-slate-700 transition-colors hover:bg-slate-700 disabled:cursor-default disabled:opacity-30 disabled:hover:bg-slate-900/85"
+            >
+              ▶
+            </button>
+          </>
+        )}
         </div>
 
         <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
