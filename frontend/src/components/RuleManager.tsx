@@ -206,11 +206,14 @@ export default function RuleManager() {
             className="mt-1 w-full rounded bg-bg px-2 py-1 text-sm"
           >
             <option value="">— wählen —</option>
-            {tags.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
+            {tags.map((t) => {
+              const parent = t.parent_id ? tagsByID[t.parent_id] : undefined;
+              return (
+                <option key={t.id} value={t.id}>
+                  {parent ? `${parent.name} ${t.name}` : t.name}
+                </option>
+              );
+            })}
           </select>
         </label>
         <label className="block text-xs text-slate-400">
