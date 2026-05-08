@@ -33,6 +33,7 @@ func urlParse(s string) (*url.URL, error) { return url.Parse(s) }
 type Config struct {
 	Tracking      TrackingConfig      `toml:"tracking"      json:"tracking"`
 	Personio      PersonioConfig      `toml:"personio"      json:"personio"`
+	Entra         EntraConfig         `toml:"entra"         json:"entra"`
 	QuickTag      QuickTagConfig      `toml:"quick_tag"     json:"quick_tag"`
 	Communication CommunicationConfig `toml:"communication" json:"communication"`
 }
@@ -58,6 +59,48 @@ type PersonioConfig struct {
 	// Tenant is the Personio subdomain (e.g. "onesi" → https://onesi.personio.de).
 	// May be left empty on first start; populated via the in-app settings UI.
 	Tenant string `toml:"tenant" json:"tenant"`
+}
+
+// EntraConfig parameterises the optional Microsoft Entra ID authentication
+// feature used to obtain delegated tokens for Microsoft Graph (SharePoint,
+// calendar) and Entra-protected custom APIs. Both fields are user-supplied
+// and may be left empty: when ClientID or TenantID is missing the entire
+// feature is dormant — no MSAL client is built, no auth code runs at
+// startup, and the related UI surfaces stay disabled.
+//
+// Both values are public identifiers (Application (client) ID and Directory
+// (tenant) ID from the App Registration in the Azure portal). No client
+// secret is ever stored — the authentication uses a public-client / native
+// flow with PKCE and the system browser. The persistent token cache lives
+// next to the database under %LOCALAPPDATA%\TimeTracker\auth and is
+// DPAPI-encrypted (CurrentUser scope), so it never holds plaintext tokens.
+type EntraConfig struct {
+	// ClientID is the Application (client) ID GUID from the Entra ID
+	// App Registration ("Mobile and desktop applications" platform with
+	// Public Client Flows enabled).
+	ClientID string `toml:"client_id" json:"client_id"`
+	// TenantID is the Directory (tenant) ID GUID. We deliberately require
+	// a concrete tenant — single-tenant by design; the values "common"
+	// or "organizations" are rejected by Validate().
+	TenantID string `toml:"tenant_id" json:"tenant_id"`
+}
+
+// Configured reports whether both ClientID and TenantID are filled in.
+// Callers that gate UI entry points or skip building the MSAL client at
+// startup should consult this rather than attempting an AcquireToken call.
+func (e EntraConfig) Configured() bool {
+	return strings.TrimSpace(e.ClientID) != "" && strings.TrimSpace(e.TenantID) != ""
+}
+
+// Authority returns the OIDC authority URL used by MSAL, or the empty
+// string when no tenant is configured. Always single-tenant — the
+// public-cloud login host is hard-coded.
+func (e EntraConfig) Authority() string {
+	t := strings.TrimSpace(e.TenantID)
+	if t == "" {
+		return ""
+	}
+	return "https://login.microsoftonline.com/" + t
 }
 
 // QuickTagConfig configures the global Quick-Tag-Picker hotkey. When
@@ -148,6 +191,11 @@ type Paths struct {
 	DataDir    string // %LOCALAPPDATA%\TimeTracker
 	DBFile     string // %LOCALAPPDATA%\TimeTracker\data.db
 	LogDir     string // %LOCALAPPDATA%\TimeTracker\log
+	// AuthDir holds DPAPI-encrypted blobs for optional authentication
+	// features (currently the Entra ID MSAL token cache). User-only
+	// permissions inherited from %LOCALAPPDATA%; the file is encrypted
+	// regardless.
+	AuthDir string // %LOCALAPPDATA%\TimeTracker\auth
 }
 
 // PollInterval returns the poll interval as a duration.
@@ -222,6 +270,7 @@ func ResolvePaths() (Paths, error) {
 		DataDir:    dataDir,
 		DBFile:     filepath.Join(dataDir, "data.db"),
 		LogDir:     filepath.Join(dataDir, "log"),
+		AuthDir:    filepath.Join(dataDir, "auth"),
 	}, nil
 }
 
@@ -272,6 +321,12 @@ func Save(path string, cfg *Config) error {
 
 var tenantRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
 
+// guidRe matches the canonical 8-4-4-4-12 hex GUID form used by Entra ID for
+// both client (application) and directory (tenant) IDs. We reject the
+// well-known meta-tenants "common", "organizations" and "consumers" up the
+// stack — Validate() handles that with a clearer error message.
+var guidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
 // NormalizeTenant accepts the variety of inputs a user might paste into the
 // settings UI ("example", "example.app.personio.com", "https://example.personio.de/")
 // and returns the bare tenant slug ("example"). Returns the trimmed input
@@ -298,6 +353,25 @@ func NormalizeTenant(raw string) string {
 	return s
 }
 
+// NormalizeGUID accepts the variety of GUID encodings users paste into UI
+// inputs ("{abc...}", "ABC-...", surrounding whitespace) and returns the
+// canonical lowercased 8-4-4-4-12 form. Empty / whitespace-only input
+// returns "". Inputs that don't look like a GUID at all are returned
+// trimmed-only so the validator surfaces the problem with the original
+// shape intact.
+func NormalizeGUID(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	s = strings.TrimPrefix(s, "{")
+	s = strings.TrimSuffix(s, "}")
+	if guidRe.MatchString(s) {
+		return strings.ToLower(s)
+	}
+	return s
+}
+
 // Validate checks the config for invalid combinations and ranges. It returns a
 // composite error with all violations.
 func (c *Config) Validate() error {
@@ -315,6 +389,29 @@ func (c *Config) Validate() error {
 		if !tenantRe.MatchString(strings.ToLower(t)) {
 			errs = append(errs,
 				"personio.tenant erwartet den Subdomain-Slug (z. B. \"example\"), nicht eine vollständige URL — bekommen: "+t)
+		}
+	}
+	// Entra ID: client_id and tenant_id are either both empty (feature
+	// disabled) or both present and well-formed. We do *not* allow the
+	// meta-tenants common/organizations/consumers — single-tenant only.
+	cid := strings.TrimSpace(c.Entra.ClientID)
+	tid := strings.TrimSpace(c.Entra.TenantID)
+	switch {
+	case cid == "" && tid == "":
+		// feature disabled — nothing to validate.
+	case cid == "" || tid == "":
+		errs = append(errs, "entra.client_id und entra.tenant_id müssen entweder beide leer oder beide gesetzt sein")
+	default:
+		if !guidRe.MatchString(cid) {
+			errs = append(errs, "entra.client_id erwartet eine GUID im 8-4-4-4-12-Format — bekommen: "+cid)
+		}
+		switch strings.ToLower(tid) {
+		case "common", "organizations", "consumers":
+			errs = append(errs, "entra.tenant_id muss eine konkrete Directory-GUID sein, nicht \""+tid+"\" (Multi-Tenant ist nicht unterstützt)")
+		default:
+			if !guidRe.MatchString(tid) {
+				errs = append(errs, "entra.tenant_id erwartet eine GUID im 8-4-4-4-12-Format — bekommen: "+tid)
+			}
 		}
 	}
 	if c.QuickTag.Enabled {

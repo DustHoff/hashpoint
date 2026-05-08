@@ -106,6 +106,11 @@ export interface PersonioConfig {
   tenant: string;
 }
 
+export interface EntraConfig {
+  client_id: string;
+  tenant_id: string;
+}
+
 export interface QuickTagConfig {
   enabled: boolean;
   hotkey: string;
@@ -119,6 +124,7 @@ export interface CommunicationConfig {
 export interface AppConfig {
   tracking: TrackingConfig;
   personio: PersonioConfig;
+  entra: EntraConfig;
   quick_tag: QuickTagConfig;
   communication: CommunicationConfig;
 }
@@ -138,5 +144,15 @@ export interface PersonioStatus {
   captured_at?: string;
   valid: boolean;
   checked_at?: string;
+  reason?: string;
+}
+
+export interface EntraStatus {
+  configured: boolean;
+  has_account: boolean;
+  username?: string;
+  home_account_id?: string;
+  tenant_id?: string;
+  client_id?: string;
   reason?: string;
 }

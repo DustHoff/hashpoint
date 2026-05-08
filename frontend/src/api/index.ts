@@ -3,6 +3,7 @@
 
 import type {
   AppConfig,
+  EntraStatus,
   ImportResult,
   PersonioStatus,
   ProcessTrack,
@@ -145,6 +146,11 @@ export const api = {
   personioCheck: () => bridge().PersonioCheck() as Promise<PersonioStatus>,
   personioLogin: () => bridge().PersonioLogin() as Promise<void>,
   personioLogout: () => bridge().PersonioLogout() as Promise<void>,
+
+  // Entra ID ------------------------------------------------------------
+  entraStatus: () => bridge().EntraStatus() as Promise<EntraStatus>,
+  entraLogin: () => bridge().EntraLogin() as Promise<void>,
+  entraLogout: () => bridge().EntraLogout() as Promise<void>,
 
   // Log forwarding ------------------------------------------------------
   logFrontend: (

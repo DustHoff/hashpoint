@@ -14,6 +14,7 @@ import (
 
 	hashpoint "github.com/onesi/hashpoint"
 	"github.com/onesi/hashpoint/internal/config"
+	"github.com/onesi/hashpoint/internal/entra"
 	"github.com/onesi/hashpoint/internal/personio"
 	"github.com/onesi/hashpoint/internal/storage"
 	"github.com/onesi/hashpoint/internal/tagging"
@@ -82,6 +83,7 @@ var helpPageOrder = []string{
 	"tags",
 	"auto-tagging",
 	"personio",
+	"entra-id",
 	"tray",
 	"quick-tag",
 }
@@ -112,7 +114,13 @@ type Deps struct {
 	// SyncerFor returns a Syncer wired against the given session, or nil if
 	// the session is not usable (e.g. tenant unset). Constructed lazily so
 	// session changes from the UI take effect immediately.
-	SyncerFor   func(*personio.Session) *personio.Syncer
+	SyncerFor func(*personio.Session) *personio.Syncer
+	// EntraFor builds (or rebuilds) the Entra ID auth manager from the
+	// given config. Returns (nil, nil) when the feature is not configured
+	// — callers must treat that as "feature disabled" rather than as an
+	// error. SaveConfig invokes this on ClientID/TenantID changes so a
+	// freshly-typed pair takes effect without restart.
+	EntraFor    func(config.EntraConfig) (entra.Manager, error)
 	ConfigPath  string
 	Config      *config.Config
 	OnConfigSet func(*config.Config) error
@@ -131,6 +139,11 @@ type App struct {
 	cfg           *config.Config
 	started       bool
 	windowVisible bool
+	// entraMgr is the live Entra ID auth manager, or nil while the
+	// feature is dormant. SaveConfig swaps it under entraMu when the
+	// user updates client_id / tenant_id; readers must take the lock.
+	entraMu  sync.Mutex
+	entraMgr entra.Manager
 
 	quickTagState quickTagWindowState
 }
@@ -147,18 +160,32 @@ type quickTagWindowState struct {
 	y          int
 }
 
-// New constructs the app from its dependencies.
+// New constructs the app from its dependencies. If the bundled config
+// already has client_id/tenant_id filled in (i.e. the user configured
+// Entra ID in a previous session), the manager is built up-front so the
+// status badge has data on first render. A build failure is logged and
+// shrugged off — the rest of the app stays fully functional.
 func New(deps Deps) *App {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
-	return &App{
+	a := &App{
 		deps:          deps,
 		logger:        deps.Logger,
 		cfg:           deps.Config,
 		ctx:           context.Background(),
 		windowVisible: true,
 	}
+	if deps.EntraFor != nil && deps.Config != nil && deps.Config.Entra.Configured() {
+		mgr, err := deps.EntraFor(deps.Config.Entra)
+		if err != nil {
+			a.logger.Warn("entra: initial manager construction failed — feature dormant",
+				"err", err)
+		} else {
+			a.entraMgr = mgr
+		}
+	}
+	return a
 }
 
 // Startup is invoked by Wails once the runtime is ready. We piggy-back on
@@ -765,17 +792,26 @@ func (a *App) GetConfig() *config.Config {
 func (a *App) SaveConfig(c config.Config) error {
 	rawTenant := c.Personio.Tenant
 	c.Personio.Tenant = config.NormalizeTenant(rawTenant)
+	c.Entra.ClientID = config.NormalizeGUID(c.Entra.ClientID)
+	c.Entra.TenantID = config.NormalizeGUID(c.Entra.TenantID)
 	c.Communication.ProcessNames = config.NormalizeProcessNames(c.Communication.ProcessNames)
 	a.logger.Debug("app: SaveConfig requested",
 		"poll_interval_sec", c.Tracking.PollIntervalSec,
 		"idle_threshold_min", c.Tracking.IdleThresholdMin,
 		"personio_tenant_raw", rawTenant,
 		"personio_tenant", c.Personio.Tenant,
+		"entra_configured", c.Entra.Configured(),
 		"communication_processes", c.Communication.ProcessNames)
 	if err := c.Validate(); err != nil {
 		a.logger.Warn("app: SaveConfig validation failed", "err", err)
 		return err
 	}
+	a.mu.Lock()
+	prevEntra := config.EntraConfig{}
+	if a.cfg != nil {
+		prevEntra = a.cfg.Entra
+	}
+	a.mu.Unlock()
 	if a.deps.ConfigPath != "" {
 		if err := config.Save(a.deps.ConfigPath, &c); err != nil {
 			a.logger.Error("app: SaveConfig persist failed", "err", err, "path", a.deps.ConfigPath)
@@ -789,6 +825,9 @@ func (a *App) SaveConfig(c config.Config) error {
 		if err := a.deps.OnConfigSet(&c); err != nil {
 			a.logger.Warn("OnConfigSet returned error", "err", err)
 		}
+	}
+	if prevEntra != c.Entra {
+		a.applyEntraConfig(c.Entra)
 	}
 	a.logger.Info("app: config saved", "path", a.deps.ConfigPath)
 	return nil
@@ -907,6 +946,108 @@ func (a *App) PersonioLogout() error {
 		return nil
 	}
 	return a.deps.Sessions.Delete()
+}
+
+// ----- Entra ID -----------------------------------------------------------
+
+// EntraStatusResponse is the JSON shape the Settings tab consumes. The
+// "configured" flag drives whether the Login button is enabled at all;
+// "has_account" drives the badge between "nicht angemeldet" and the
+// signed-in info card.
+type EntraStatusResponse struct {
+	Configured    bool   `json:"configured"`
+	HasAccount    bool   `json:"has_account"`
+	Username      string `json:"username,omitempty"`
+	HomeAccountID string `json:"home_account_id,omitempty"`
+	TenantID      string `json:"tenant_id,omitempty"`
+	ClientID      string `json:"client_id,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+}
+
+// EntraStatus reports the Entra ID auth state without hitting the
+// network. Returns "feature off" with a reason string when ClientID /
+// TenantID are unset or the manager failed to construct.
+func (a *App) EntraStatus() EntraStatusResponse {
+	mgr := a.currentEntra()
+	if mgr == nil || !mgr.Configured() {
+		return EntraStatusResponse{Reason: "Entra ID nicht konfiguriert"}
+	}
+	st := mgr.Status(a.ctx)
+	return EntraStatusResponse{
+		Configured:    true,
+		HasAccount:    st.HasAccount,
+		Username:      st.Username,
+		HomeAccountID: st.HomeAccountID,
+		TenantID:      st.TenantID,
+		ClientID:      st.ClientID,
+	}
+}
+
+// EntraLogin runs an interactive browser login with the default Graph
+// scopes. On Entra-joined Windows the Edge/system-browser PRT-SSO makes
+// this promptless; otherwise the user authenticates as usual.
+func (a *App) EntraLogin() error {
+	mgr := a.currentEntra()
+	if mgr == nil || !mgr.Configured() {
+		return errors.New("Entra ID ist nicht konfiguriert — bitte Client- und Tenant-ID eintragen")
+	}
+	a.logger.Info("app: EntraLogin started")
+	if err := mgr.Login(a.ctx, nil); err != nil {
+		a.logger.Warn("app: EntraLogin failed", "err", err)
+		return fmt.Errorf("entra login: %w", err)
+	}
+	a.logger.Info("app: EntraLogin completed")
+	return nil
+}
+
+// EntraLogout removes the cached account and deletes the encrypted cache
+// blob. The Windows session is unaffected.
+func (a *App) EntraLogout() error {
+	mgr := a.currentEntra()
+	if mgr == nil {
+		return nil
+	}
+	return mgr.Logout(a.ctx)
+}
+
+// currentEntra returns the live Entra manager under entraMu so reads are
+// safe against SaveConfig swaps. Returns nil when the feature is off.
+func (a *App) currentEntra() entra.Manager {
+	a.entraMu.Lock()
+	defer a.entraMu.Unlock()
+	return a.entraMgr
+}
+
+// applyEntraConfig swaps the Entra manager when client_id / tenant_id
+// changed. Called from SaveConfig with the new (already-validated) config.
+// The previous manager (if any) is dropped — its in-memory cache is
+// abandoned, but the on-disk blob remains so the user keeps their
+// previous identity should they revert the configuration. Switching to
+// an unconfigured state nils out the manager.
+func (a *App) applyEntraConfig(cfg config.EntraConfig) {
+	a.entraMu.Lock()
+	defer a.entraMu.Unlock()
+
+	if !cfg.Configured() {
+		if a.entraMgr != nil {
+			a.logger.Info("entra: feature disabled via config — dropping live manager")
+		}
+		a.entraMgr = nil
+		return
+	}
+	if a.deps.EntraFor == nil {
+		a.logger.Warn("entra: EntraFor wiring missing — manager not rebuilt")
+		return
+	}
+	mgr, err := a.deps.EntraFor(cfg)
+	if err != nil {
+		a.logger.Warn("entra: rebuild after config change failed",
+			"err", err)
+		a.entraMgr = nil
+		return
+	}
+	a.entraMgr = mgr
+	a.logger.Info("entra: manager rebuilt from new config")
 }
 
 // SyncDay triggers a sync of the given UTC day.

@@ -65,6 +65,95 @@ func TestNormalizeTenant(t *testing.T) {
 	}
 }
 
+func TestValidate_Entra(t *testing.T) {
+	t.Parallel()
+	const goodGUID = "11111111-2222-3333-4444-555555555555"
+	const otherGUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+	cases := []struct {
+		name      string
+		client    string
+		tenant    string
+		wantValid bool
+	}{
+		{"both empty (feature off)", "", "", true},
+		{"only client_id set", goodGUID, "", false},
+		{"only tenant_id set", "", goodGUID, false},
+		{"both well-formed", goodGUID, otherGUID, true},
+		{"meta-tenant common rejected", goodGUID, "common", false},
+		{"meta-tenant organizations rejected", goodGUID, "organizations", false},
+		{"non-guid client", "not-a-guid", goodGUID, false},
+		{"non-guid tenant", goodGUID, "not-a-guid", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Default()
+			c.Entra.ClientID = tc.client
+			c.Entra.TenantID = tc.tenant
+			err := c.Validate()
+			if tc.wantValid && err != nil {
+				t.Fatalf("want valid, got %v", err)
+			}
+			if !tc.wantValid && err == nil {
+				t.Fatal("want validation error, got nil")
+			}
+		})
+	}
+}
+
+func TestEntra_Authority(t *testing.T) {
+	t.Parallel()
+	c := Default()
+	if got := c.Entra.Authority(); got != "" {
+		t.Errorf("expected empty Authority when tenant unset; got %q", got)
+	}
+	c.Entra.TenantID = "11111111-2222-3333-4444-555555555555"
+	if got, want := c.Entra.Authority(), "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555"; got != want {
+		t.Errorf("Authority=%q want %q", got, want)
+	}
+}
+
+func TestEntra_Configured(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		c    EntraConfig
+		want bool
+	}{
+		{"empty", EntraConfig{}, false},
+		{"only client", EntraConfig{ClientID: "x"}, false},
+		{"only tenant", EntraConfig{TenantID: "x"}, false},
+		{"both whitespace", EntraConfig{ClientID: "  ", TenantID: "  "}, false},
+		{"both filled", EntraConfig{ClientID: "x", TenantID: "y"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.c.Configured(); got != tc.want {
+				t.Errorf("Configured()=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeGUID(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"  ", ""},
+		{"11111111-2222-3333-4444-555555555555", "11111111-2222-3333-4444-555555555555"},
+		{"  {ABCDEF12-3456-7890-ABCD-EF1234567890}  ", "abcdef12-3456-7890-abcd-ef1234567890"},
+		{"not-a-guid", "not-a-guid"}, // pass-through so validator sees the bad input
+	}
+	for _, tc := range cases {
+		if got := NormalizeGUID(tc.in); got != tc.want {
+			t.Errorf("NormalizeGUID(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestPersonio_AppURL(t *testing.T) {
 	t.Parallel()
 	c := Default()

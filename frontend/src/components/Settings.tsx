@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { log } from "../lib/log";
-import type { AppConfig, PersonioStatus } from "../types";
+import type { AppConfig, EntraStatus, PersonioStatus } from "../types";
 
 const emptyConfig: AppConfig = {
   tracking: {
@@ -11,6 +11,7 @@ const emptyConfig: AppConfig = {
     tag_block_granularity_min: 0,
   },
   personio: { tenant: "" },
+  entra: { client_id: "", tenant_id: "" },
   quick_tag: { enabled: true, hotkey: "Ctrl+Alt+T" },
   communication: { process_names: ["teams.exe"], title_exclude_phrases: [] },
 };
@@ -30,6 +31,10 @@ function normalize(c: Partial<AppConfig> | null | undefined): AppConfig {
         emptyConfig.tracking.tag_block_granularity_min,
     },
     personio: { tenant: c?.personio?.tenant ?? "" },
+    entra: {
+      client_id: c?.entra?.client_id ?? "",
+      tenant_id: c?.entra?.tenant_id ?? "",
+    },
     quick_tag: {
       enabled: c?.quick_tag?.enabled ?? emptyConfig.quick_tag.enabled,
       hotkey: c?.quick_tag?.hotkey ?? emptyConfig.quick_tag.hotkey,
@@ -48,17 +53,24 @@ function normalize(c: Partial<AppConfig> | null | undefined): AppConfig {
 export default function Settings() {
   const [config, setConfig] = useState<AppConfig>(emptyConfig);
   const [status, setStatus] = useState<PersonioStatus | null>(null);
+  const [entraStatus, setEntraStatus] = useState<EntraStatus | null>(null);
   const [saving, setSaving] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
+  const [entraLoggingIn, setEntraLoggingIn] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function refresh() {
     try {
-      const [c, s] = await Promise.all([api.getConfig(), api.personioStatus()]);
-      log.debug("settings: loaded", { config: c, status: s });
+      const [c, s, es] = await Promise.all([
+        api.getConfig(),
+        api.personioStatus(),
+        api.entraStatus(),
+      ]);
+      log.debug("settings: loaded", { config: c, status: s, entra: es });
       setConfig(normalize(c as Partial<AppConfig>));
       setStatus(s);
+      setEntraStatus(es);
     } catch (e) {
       log.error("settings: refresh failed", { err: String(e) });
       setError(String(e));
@@ -105,6 +117,33 @@ export default function Settings() {
     try {
       await api.personioLogout();
       setMessage("Personio-Session entfernt.");
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function entraLogin() {
+    setEntraLoggingIn(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await api.entraLogin();
+      setMessage("Entra ID-Anmeldung erfolgreich.");
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setEntraLoggingIn(false);
+    }
+  }
+
+  async function entraLogout() {
+    setError(null);
+    setMessage(null);
+    try {
+      await api.entraLogout();
+      setMessage("Entra ID-Session entfernt.");
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -456,6 +495,113 @@ export default function Settings() {
           Personio-Login-Seite. Sobald die Anmeldung (inkl. ggf. 2FA)
           abgeschlossen ist, werden die Session-Cookies erfasst und das Fenster
           wieder geschlossen.
+        </p>
+      </section>
+
+      {/* Entra ID section ----------------------------------------------- */}
+      <section className="space-y-3 rounded bg-surface p-4">
+        <h3 className="text-sm font-semibold text-slate-200">
+          Microsoft Entra ID
+        </h3>
+        <p className="text-[11px] text-slate-500">
+          Optionale Anmeldung gegen einen Entra-ID-Tenant für Microsoft Graph
+          (SharePoint, Kalender) und Entra-geschützte Drittanwendungen. Die
+          App-Registrierung muss als „Mobile and desktop applications“ mit
+          Loopback-Redirect <code className="font-mono">http://localhost</code> und
+          aktivierten Public Client Flows angelegt sein.
+        </p>
+        <Field
+          label="Client ID"
+          help='Application (client) ID GUID aus der Entra-ID-App-Registrierung. Format: 8-4-4-4-12 hex, z. B. "11111111-2222-3333-4444-555555555555".'
+        >
+          <input
+            type="text"
+            value={config.entra.client_id}
+            onChange={(e) =>
+              update("entra", { ...config.entra, client_id: e.target.value })
+            }
+            placeholder="00000000-0000-0000-0000-000000000000"
+            className="w-96 rounded bg-slate-900/60 px-2 py-1 font-mono text-sm"
+          />
+        </Field>
+        <Field
+          label="Tenant ID"
+          help="Directory (tenant) ID GUID. „common“ / „organizations“ werden bewusst abgelehnt — die App ist Single-Tenant."
+        >
+          <input
+            type="text"
+            value={config.entra.tenant_id}
+            onChange={(e) =>
+              update("entra", { ...config.entra, tenant_id: e.target.value })
+            }
+            placeholder="00000000-0000-0000-0000-000000000000"
+            className="w-96 rounded bg-slate-900/60 px-2 py-1 font-mono text-sm"
+          />
+        </Field>
+
+        <div className="rounded bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
+          {!entraStatus?.configured ? (
+            <>
+              Feature inaktiv —{" "}
+              {entraStatus?.reason || "Client-ID und Tenant-ID eintragen und speichern."}
+            </>
+          ) : entraStatus.has_account ? (
+            <>
+              Eingeloggt
+              {entraStatus.username && (
+                <>
+                  {" "}als{" "}
+                  <span className="font-mono text-slate-200">
+                    {entraStatus.username}
+                  </span>
+                </>
+              )}
+              {entraStatus.tenant_id && (
+                <>
+                  {" "}im Tenant{" "}
+                  <span className="font-mono text-slate-200">
+                    {entraStatus.tenant_id}
+                  </span>
+                </>
+              )}
+              .
+            </>
+          ) : (
+            <>Konfiguration vorhanden, aber noch nicht angemeldet.</>
+          )}
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={entraLogin}
+            disabled={
+              entraLoggingIn ||
+              !entraStatus?.configured ||
+              !config.entra.client_id ||
+              !config.entra.tenant_id
+            }
+            className="rounded bg-accent px-3 py-1 text-sm text-white disabled:opacity-50"
+          >
+            {entraLoggingIn
+              ? "Browser geöffnet — bitte einloggen…"
+              : entraStatus?.has_account
+                ? "Erneut anmelden"
+                : "Bei Entra ID anmelden"}
+          </button>
+          {entraStatus?.has_account && (
+            <button
+              onClick={entraLogout}
+              className="rounded bg-slate-700 px-3 py-1 text-sm hover:bg-slate-600"
+            >
+              Abmelden
+            </button>
+          )}
+        </div>
+        <p className="text-[11px] text-slate-500">
+          Beim ersten Login öffnet sich der Standardbrowser auf der
+          Microsoft-Login-Seite. Auf Entra-ID-joined Geräten greift das
+          PRT-SSO und der Flow läuft promptlos durch. Folgestarts holen das
+          Token still aus dem DPAPI-verschlüsselten lokalen Cache.
         </p>
       </section>
 

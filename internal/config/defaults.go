@@ -11,6 +11,10 @@ func Default() *Config {
 		Personio: PersonioConfig{
 			Tenant: "",
 		},
+		Entra: EntraConfig{
+			ClientID: "",
+			TenantID: "",
+		},
 		QuickTag: QuickTagConfig{
 			Enabled: true,
 			Hotkey:  "Ctrl+Alt+T",

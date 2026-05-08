@@ -16,6 +16,7 @@ import (
 	hashpoint "github.com/onesi/hashpoint"
 	"github.com/onesi/hashpoint/internal/app"
 	"github.com/onesi/hashpoint/internal/config"
+	"github.com/onesi/hashpoint/internal/entra"
 	"github.com/onesi/hashpoint/internal/logging"
 	"github.com/onesi/hashpoint/internal/personio"
 	"github.com/onesi/hashpoint/internal/storage"
@@ -111,6 +112,22 @@ func run() error {
 
 	sessionStore := defaultSessionStore()
 
+	// Entra ID is opt-in: build the manager lazily, only when client_id
+	// and tenant_id are filled in. The closure is also wired into the
+	// app so SaveConfig can rebuild the manager on every config change
+	// without touching main.go again.
+	entraFor := func(c config.EntraConfig) (entra.Manager, error) {
+		if !c.Configured() {
+			return nil, nil
+		}
+		return entra.NewManager(entra.Options{
+			ClientID: c.ClientID,
+			TenantID: c.TenantID,
+			CacheDir: paths.AuthDir,
+			Logger:   slog.Default(),
+		})
+	}
+
 	syncerFor := func(sess *personio.Session) *personio.Syncer {
 		if sess == nil {
 			return nil
@@ -139,6 +156,7 @@ func run() error {
 		Orchestrator: orchestrator,
 		Sessions:     sessionStore,
 		SyncerFor:    syncerFor,
+		EntraFor:     entraFor,
 		ConfigPath:   paths.ConfigFile,
 		Config:       cfg,
 		OnConfigSet: func(c *config.Config) error {
