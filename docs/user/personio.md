@@ -97,6 +97,41 @@ ein `PUT /svc/attendance-api/v1/days/{day_id}?autoFix=true&usedInTimesheet=true`
 mit den Perioden. Hat ein Tag noch keinen Personio-Datensatz, generiert
 der Client eine UUID und legt den Tag damit an (Upsert).
 
+## Vorab-Prüfung gegen Datenverlust
+
+Bevor der TimeTracker einen Tag überschreibt, prüft er per Timesheet-
+Abruf, ob Personio dort bereits **Work-Perioden** hat — z. B. weil Sie
+manuell etwas eingetragen oder ein Kollege synchronisiert hat. In dem
+Fall öffnet sich automatisch ein Dialog mit drei Optionen:
+
+| Option | Wirkung |
+| --- | --- |
+| **Trotzdem überschreiben** | Wie bisher — Personio wird mit Ihrem aktuellen Hashpoint-Stand ersetzt. Die bestehenden Personio-Einträge gehen verloren. |
+| **Aus Personio importieren** | Personio bleibt unverändert. Die dort vorhandenen Perioden werden als manuelle Tag-Blöcke nach Hashpoint übernommen. Überschneidungen mit bestehenden Hashpoint-Blöcken werden zugunsten von Hashpoint zurechtgeschnitten — nichts in Hashpoint wird überschrieben. |
+| **Abbrechen** | Schließt den Dialog ohne Datenänderung. |
+
+Pause-Perioden, die Personio aus Arbeitsschutz-Gründen automatisch
+generiert, lösen den Dialog nicht aus und werden nicht importiert.
+
+Nach **Importieren** liegen die übernommenen Perioden als manuelle Tag-
+Blöcke im aktuell sichtbaren Tag. Sie können sie dort nachträglich
+korrigieren oder umtaggen und anschließend regulär per **Sync zu Personio**
+zurückspielen.
+
+**Tag-Zuordnung beim Import:**
+
+- Personio-Projekt-ID → lokales Tag mit gleicher *Personio-Projekt-ID*.
+- Findet sich kein passendes Tag, wird beim ersten Import ein Auto-Tag
+  `#PersonioImport` angelegt (Sync-zu-Personio aus, neutrale Farbe). Der
+  Tag taucht im Tag-Manager auf und kann dort umbenannt oder neu
+  konfiguriert werden — der Import nutzt ihn weiterhin als Fallback.
+- Der Personio-`comment` wird als Block-Beschreibung übernommen.
+
+Beim **Auto-Sync beim Starten** (siehe oben) gilt dieselbe Logik: findet
+die Vorabprüfung Work-Perioden auf dem zu synchronisierenden Tag, wird
+*nicht* automatisch geschrieben — stattdessen erscheint derselbe Dialog
+sobald das Hauptfenster bereit ist. Sie können dann in Ruhe entscheiden.
+
 ## Was wird übertragen?
 
 Pro Tag bündelt der TimeTracker alle nicht-idlen, getaggten Blöcke nach

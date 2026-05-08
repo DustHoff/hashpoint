@@ -59,6 +59,36 @@ export interface SyncResult {
   Errors: string[] | null;
 }
 
+// Returned by App.PreflightSyncDay. The frontend opens the override/import
+// modal whenever existing_periods is non-empty (or trackable is false).
+export interface SyncPreflight {
+  day: string; // YYYY-MM-DD (local)
+  day_id: string;
+  state: string;
+  trackable: boolean;
+  existing_periods: PreflightPeriod[];
+  local_block_count: number;
+  local_duration_sec: number;
+}
+
+export interface PreflightPeriod {
+  id: string;
+  start: string; // local-naive "YYYY-MM-DDTHH:MM:SS"
+  end: string;
+  type: string; // "work"
+  comment: string;
+  project_id?: string;
+  tag_name?: string;
+}
+
+export interface ImportResult {
+  periods_considered: number;
+  blocks_created: number;
+  periods_skipped: number;
+  fallback_tag_used: boolean;
+  errors?: string[] | null;
+}
+
 export interface VersionInfo {
   version: string;
   commit: string;

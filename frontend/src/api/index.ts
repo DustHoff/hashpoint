@@ -3,10 +3,12 @@
 
 import type {
   AppConfig,
+  ImportResult,
   PersonioStatus,
   ProcessTrack,
   QuickTagSlot,
   Rule,
+  SyncPreflight,
   SyncResult,
   Tag,
   TagBlock,
@@ -129,6 +131,10 @@ export const api = {
   syncDay: (dayISO: string) => bridge().SyncDay(dayISO) as Promise<SyncResult>,
   syncRange: (from: string, to: string) =>
     bridge().SyncRange(from, to) as Promise<SyncResult>,
+  preflightSyncDay: (dayISO: string) =>
+    bridge().PreflightSyncDay(dayISO) as Promise<SyncPreflight>,
+  importPersonioDay: (dayISO: string) =>
+    bridge().ImportPersonioDay(dayISO) as Promise<ImportResult>,
 
   // Settings ------------------------------------------------------------
   getConfig: () => bridge().GetConfig() as Promise<AppConfig>,

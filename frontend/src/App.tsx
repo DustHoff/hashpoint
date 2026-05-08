@@ -8,6 +8,8 @@ import About from "./components/About";
 import Help from "./components/Help";
 import PersonioBadge from "./components/PersonioBadge";
 import QuickTagPicker from "./components/QuickTagPicker";
+import SyncConflictModal from "./components/SyncConflictModal";
+import type { SyncPreflight } from "./types";
 
 type Tab = "timeline" | "tags" | "rules" | "settings" | "help" | "about";
 
@@ -73,6 +75,9 @@ export default function App() {
   const [startupSync, setStartupSync] = useState<StartupSyncBanner | null>(
     null,
   );
+  const [startupConflict, setStartupConflict] = useState<SyncPreflight | null>(
+    null,
+  );
 
   useEffect(() => {
     const offOpen = api.onEvent("quick-tag-picker:open", () =>
@@ -86,13 +91,25 @@ export default function App() {
       "startup-sync:result",
       (ev) => setStartupSync(describeStartupSync(ev)),
     );
+    const offConflict = api.onEventPayload<SyncPreflight>(
+      "startup-sync:conflict",
+      (ev) => setStartupConflict(ev),
+    );
     return () => {
       offOpen();
       offClose();
       offHelp();
       offSync();
+      offConflict();
     };
   }, []);
+
+  // Build a YYYY-MM-DD-keyed UTC midnight ISO string for the conflict-day
+  // so the Override / Import calls re-use the existing per-day endpoints.
+  function dayISOFromYYYYMMDD(local: string): string {
+    const [y, m, d] = local.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, d)).toISOString();
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -145,6 +162,17 @@ export default function App() {
       </main>
       {quickTagOpen && (
         <QuickTagPicker onClose={() => setQuickTagOpen(false)} />
+      )}
+      {startupConflict && (
+        <SyncConflictModal
+          preflight={startupConflict}
+          onOverride={(day) => api.syncDay(dayISOFromYYYYMMDD(day))}
+          onImport={(day) => api.importPersonioDay(dayISOFromYYYYMMDD(day))}
+          onClose={(banner) => {
+            setStartupConflict(null);
+            if (banner) setStartupSync(banner);
+          }}
+        />
       )}
     </div>
   );

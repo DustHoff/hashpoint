@@ -84,14 +84,9 @@ func (s *Syncer) SyncRange(ctx context.Context, from, to time.Time) (*Result, er
 		return res, nil
 	}
 
-	employeeID := s.client.Session.EmployeeID
-	if employeeID == 0 {
-		fetched, err := s.client.FetchEmployeeID(ctx)
-		if err != nil {
-			return res, fmt.Errorf("fetch employee id: %w", err)
-		}
-		s.client.Session.EmployeeID = fetched
-		employeeID = fetched
+	employeeID, err := s.ensureEmployeeID(ctx)
+	if err != nil {
+		return res, err
 	}
 
 	// Sorted day list so calendar lookups are deterministic.

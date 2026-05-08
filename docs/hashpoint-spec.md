@@ -495,7 +495,61 @@ Pro Request:
   synchronisierte Tag-Blöcke werden lokal mit `synced_at` und der `day_id`
   als `personio_id` markiert (`tag_blocks` trägt diese Felder). Erneuter
   Sync überschreibt den Personio-Tag mit dem aktuellen Stand; manuelle
-  Änderungen in Personio gehen dabei verloren.
+  Änderungen in Personio gehen dabei verloren — solange der Anwender nicht
+  vorher auf „Importieren" wählt (siehe §2.5.7).
+
+#### 2.5.7 Pre-Sync-Check & Personio-Import
+
+Bevor der eigentliche `PUT day` ausgeführt wird, ruft der Syncer
+`Syncer.Preflight(ctx, day)` auf — eine reine Lese-Operation, die das
+Timesheet abruft und die bestehenden **Work-Type-Perioden** des Tages
+zurückgibt. Break-Perioden lösen den Check nicht aus, weil Personio sie
+unabhängig von User-Eingaben nach Arbeitsrecht generiert.
+
+**Wenn `Preflight` Work-Perioden meldet**, wird statt des direkten Pushs
+ein Modal-Dialog angezeigt, der dem User drei Optionen gibt:
+
+| Option | Wirkung |
+| --- | --- |
+| **Trotzdem überschreiben** | Klassisches `PUT day` — Personio-Stand wird durch den lokalen Hashpoint-Stand ersetzt. Manuelle Personio-Eingaben gehen verloren. |
+| **Aus Personio importieren** | `Syncer.ImportDay(ctx, day)`: zieht die Personio-Perioden in die `tag_blocks`-Tabelle. Lokale Tag-Blöcke gewinnen — überlappende Importe werden zurechtgeschnitten (siehe unten). Anschließend wird **kein** PUT ausgeführt; der User kann reviewen und erneut auf Sync klicken. |
+| **Abbrechen** | Schließt das Modal ohne Datenänderung. |
+
+**Trim-Logik im Import:** Für jede Personio-Periode wird der Bereich
+`[start, end)` mit den `[start_time, end_time)`-Intervallen aller bereits
+geschlossenen lokalen Tag-Blöcke des Tages verschnitten (`subtractRanges`).
+Übrig bleiben null bis mehrere disjunkte Sub-Bereiche, die als neue
+manuelle Tag-Blöcke (`is_manual = 1`) eingefügt werden — frisch
+importierte Blöcke werden nicht von der Auto-Tagging-Engine eingesammelt.
+Sie tragen **kein** `synced_at` und werden bei einem späteren Sync ggf.
+zurück nach Personio gepusht (sofern der gewählte Tag
+`SyncToPersonio = 1` hat).
+
+**Tag-Auflösung beim Import:**
+- `personio_project_id` der Period → lokales Tag mit gleichem
+  `personio_project_id`. Match-Vergleich nutzt String-Form
+  (`strconv.FormatInt`).
+- Kein Match → Fallback auf den Auto-Tag `#PersonioImport`. Der wird
+  beim ersten Import angelegt (Top-Level, Farbe `#94a3b8`,
+  `SyncToPersonio = 0`, damit re-importierte Blöcke nicht ungewollt
+  zurück nach Personio kreiseln). Der User kann den Tag im Tag-Manager
+  umbenennen oder weitere Mappings einrichten — `ensureFallbackTag`
+  greift bei jedem Import auf den existierenden Tag, nicht auf den
+  Namen-Match zurück.
+
+**Granularität:** Der Import nutzt **die Personio-Originalzeiten ohne
+Snap auf das lokale Granularitätsraster**. Personio ist hier die Quelle
+der Wahrheit; ein nachträgliches Snapping würde die Importe je nach
+Nachbarschaft erneut beschneiden.
+
+**Period-Typ:** Nur `type = "work"` wird importiert. `break` und andere
+Typen werden gezählt (`PeriodsSkipped++`) aber nicht eingefügt.
+
+**ImportResult-Felder:** `PeriodsConsidered` (alle non-trivialen Personio-
+Perioden), `BlocksCreated` (effektiv eingefügte Tag-Blöcke), `PeriodsSkipped`
+(durch Trim, Type oder Parse-Fehler übersprungen), `FallbackTagUsed` (true
+sobald mindestens eine Period den `#PersonioImport`-Tag bekommen hat),
+`Errors` (per-period Fehler beim Insert oder Parsen).
 
 #### 2.5.6 Sync beim Starten („Startup-Sync")
 Beim Start der Anwendung wird der **letzte Tag vor heute mit noch
@@ -522,8 +576,15 @@ Goroutine auf, sobald das Frontend bereit ist. Der eigentliche Sync läuft
 **Ablauf:**
 1. Personio-Session laden. Fehlt sie, läuft der Sync nicht und es wird
    **stillschweigend** kein Banner gezeigt (Info-Log).
-2. `Syncer.SyncRange(ctx, day, day+24h)` mit hartem Timeout von **30 s**.
-3. Ergebnis als Wails-Event `startup-sync:result` mit Payload
+2. `Syncer.Preflight(ctx, day)` als reine Lese-Operation. Findet die
+   Vorabprüfung Work-Perioden auf dem Tag (siehe §2.5.7), wird statt des
+   PUT das Wails-Event `startup-sync:conflict` mit der `SyncPreflight`-
+   Payload gefeuert — das Frontend zeigt dasselbe Override/Import-Modal
+   wie beim manuellen Sync. Der eigentliche Push wird in dem Fall vom
+   User getriggert (oder vom „Abbrechen"-Knopf abgelehnt).
+3. Sind keine Work-Perioden vorhanden, läuft `Syncer.SyncRange(ctx, day,
+   day+24h)` mit hartem Timeout von **30 s** durch.
+4. Ergebnis als Wails-Event `startup-sync:result` mit Payload
    (`status`, `day`, `periods`, `blocks_processed`, `blocks_skipped`,
    `errors`, `error_message`) ans Frontend feuern. Mögliche `status`-Werte:
    - `ok` — Sync erfolgreich, mindestens eine Periode geschrieben.

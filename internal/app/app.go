@@ -34,6 +34,11 @@ const (
 	quickTagCloseEvent   = "quick-tag-picker:close"
 	helpOpenEvent        = "help:open"
 	startupSyncEvent     = "startup-sync:result"
+	// startupSyncConflictEvent fires when the startup-sync's preflight finds
+	// existing periods on the day it was about to push. The frontend
+	// listens and surfaces the same Override/Import modal as the manual
+	// sync button.
+	startupSyncConflictEvent = "startup-sync:conflict"
 
 	// startupSyncTimeout caps the entire previous-day-sync run on startup.
 	// Long enough for a slow Personio response, short enough that a stuck
@@ -232,6 +237,25 @@ func (a *App) runStartupSync(parent context.Context) {
 	dayStr := day.Format("2006-01-02")
 	a.logger.Info("startup sync: running", "day", dayStr)
 
+	// Preflight first: if Personio already has work-type periods on the
+	// day, surface the Override/Import modal instead of clobbering them.
+	pre, err := syncer.Preflight(ctx, day)
+	if err != nil {
+		a.logger.Warn("startup sync: preflight failed", "day", dayStr, "err", err)
+		a.emitStartupSync(StartupSyncEvent{
+			Status:       StartupSyncFailed,
+			Day:          dayStr,
+			ErrorMessage: err.Error(),
+		})
+		return
+	}
+	if pre.HasExistingPeriods() {
+		a.logger.Info("startup sync: existing periods detected — handing off to user",
+			"day", dayStr, "existing", len(pre.ExistingPeriods))
+		a.emitStartupConflict(pre)
+		return
+	}
+
 	res, err := syncer.SyncRange(ctx, day, day.Add(24*time.Hour))
 	if err != nil {
 		a.logger.Warn("startup sync: failed", "day", dayStr, "err", err)
@@ -280,6 +304,16 @@ func (a *App) emitStartupSync(ev StartupSyncEvent) {
 		return
 	}
 	wailsruntime.EventsEmit(ctx, startupSyncEvent, ev)
+}
+
+func (a *App) emitStartupConflict(pre *personio.SyncPreflight) {
+	a.mu.Lock()
+	ctx, ready := a.ctx, a.started
+	a.mu.Unlock()
+	if !ready || ctx == nil {
+		return
+	}
+	wailsruntime.EventsEmit(ctx, startupSyncConflictEvent, pre)
 }
 
 // Shutdown is invoked by Wails on window close. Tracker shutdown is handled
@@ -912,6 +946,49 @@ func (a *App) SyncRange(fromRFC3339, toRFC3339 string) (*personio.Result, error)
 		return nil, err
 	}
 	return syncer.SyncRange(a.ctx, from.UTC(), to.UTC())
+}
+
+// PreflightSyncDay returns what Personio currently has on the given day so
+// the frontend can warn before the override sync wipes it. Existing
+// work-type periods come back in the response; empty means "safe to push".
+func (a *App) PreflightSyncDay(dayRFC3339 string) (*personio.SyncPreflight, error) {
+	day, err := time.Parse(time.RFC3339, dayRFC3339)
+	if err != nil {
+		return nil, fmt.Errorf("parse day: %w", err)
+	}
+	a.logger.Info("app: PreflightSyncDay", "day", day.Format("2006-01-02"))
+	syncer, err := a.currentSyncer()
+	if err != nil {
+		return nil, err
+	}
+	return syncer.Preflight(a.ctx, day.UTC())
+}
+
+// ImportPersonioDay pulls existing Personio periods for the given day into
+// the local tag-block table. Periods are trimmed against existing local
+// blocks (local blocks win) and inserted with a tag resolved from
+// personio_project_id, falling back to a placeholder tag.
+func (a *App) ImportPersonioDay(dayRFC3339 string) (*personio.ImportResult, error) {
+	day, err := time.Parse(time.RFC3339, dayRFC3339)
+	if err != nil {
+		return nil, fmt.Errorf("parse day: %w", err)
+	}
+	a.logger.Info("app: ImportPersonioDay", "day", day.Format("2006-01-02"))
+	syncer, err := a.currentSyncer()
+	if err != nil {
+		return nil, err
+	}
+	res, err := syncer.ImportDay(a.ctx, day.UTC())
+	if err != nil {
+		a.logger.Error("app: ImportPersonioDay failed", "err", err)
+		return res, err
+	}
+	a.logger.Info("app: ImportPersonioDay done",
+		"considered", res.PeriodsConsidered,
+		"blocks_created", res.BlocksCreated,
+		"skipped", res.PeriodsSkipped,
+		"errors", len(res.Errors))
+	return res, nil
 }
 
 // ----- Quick-tag-picker --------------------------------------------------

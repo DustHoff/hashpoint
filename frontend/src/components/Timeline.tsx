@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { addMonths, format, subMonths } from "date-fns";
 import { de } from "date-fns/locale";
 import { api } from "../api";
-import type { ProcessTrack, Tag, TagBlock } from "../types";
+import type { ProcessTrack, SyncPreflight, Tag, TagBlock } from "../types";
 import {
   dateInputValue,
   formatDuration,
@@ -11,6 +11,7 @@ import {
   startOfDayUTCISO,
 } from "../lib/time";
 import MonthCalendar from "./MonthCalendar";
+import SyncConflictModal from "./SyncConflictModal";
 
 type ViewMode = "day" | "month";
 
@@ -122,6 +123,7 @@ export default function Timeline() {
   const [syncMessage, setSyncMessage] = useState<
     { level: "success" | "info" | "error"; text: string } | null
   >(null);
+  const [syncConflict, setSyncConflict] = useState<SyncPreflight | null>(null);
 
   // Shared view window for both strips.
   const [viewStart, setViewStart] = useState<number>(() => dayBounds(new Date()).from);
@@ -382,7 +384,9 @@ export default function Timeline() {
     setPaused(!paused);
   }
 
-  async function syncDay() {
+  // Run the actual override (PUT) — extracted so the modal can call it
+  // after user confirmation, and preflight-clean cases can run it inline.
+  async function runOverrideSync() {
     setSyncing(true);
     setSyncMessage(null);
     try {
@@ -412,6 +416,27 @@ export default function Timeline() {
       setSyncing(false);
       refresh();
     }
+  }
+
+  // Preflight first: ask Personio what's already on the day. If existing
+  // periods are present, surface the override/import modal. Otherwise push
+  // straight away — the warning would be empty noise.
+  async function syncDay() {
+    setSyncing(true);
+    setSyncMessage(null);
+    try {
+      const pre = await api.preflightSyncDay(startOfDayUTCISO(day));
+      if (pre && (pre.existing_periods.length > 0 || !pre.trackable)) {
+        setSyncing(false);
+        setSyncConflict(pre);
+        return;
+      }
+    } catch (e) {
+      setSyncing(false);
+      setSyncMessage({ level: "error", text: `Sync-Preflight fehlgeschlagen: ${String(e)}` });
+      return;
+    }
+    await runOverrideSync();
   }
 
   const totalTaggedSec = tagBlocks.reduce((s, b) => s + b.duration_sec, 0);
@@ -1661,6 +1686,19 @@ export default function Timeline() {
       </div>
       </div>
         </>
+      )}
+
+      {syncConflict && (
+        <SyncConflictModal
+          preflight={syncConflict}
+          onOverride={() => api.syncDay(startOfDayUTCISO(day))}
+          onImport={() => api.importPersonioDay(startOfDayUTCISO(day))}
+          onClose={(banner) => {
+            setSyncConflict(null);
+            if (banner) setSyncMessage(banner);
+            refresh();
+          }}
+        />
       )}
     </div>
   );
