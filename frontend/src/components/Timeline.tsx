@@ -1,4 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { addMonths, format, subMonths } from "date-fns";
+import { de } from "date-fns/locale";
 import { api } from "../api";
 import type { ProcessTrack, Tag, TagBlock } from "../types";
 import {
@@ -8,6 +10,9 @@ import {
   fromDateInput,
   startOfDayUTCISO,
 } from "../lib/time";
+import MonthCalendar from "./MonthCalendar";
+
+type ViewMode = "day" | "month";
 
 const MS_PER_DAY = 24 * 3600 * 1000;
 const MIN_VIEW_SPAN_MS = 5 * 60 * 1000;
@@ -95,7 +100,9 @@ function groupTracksForTable(tracks: ProcessTrack[]): TrackGroup[] {
 }
 
 export default function Timeline() {
+  const [viewMode, setViewMode] = useState<ViewMode>("day");
   const [day, setDay] = useState<Date>(new Date());
+  const [month, setMonth] = useState<Date>(new Date());
   const [tagBlocks, setTagBlocks] = useState<TagBlock[]>([]);
   const [processTracks, setProcessTracks] = useState<ProcessTrack[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
@@ -713,7 +720,6 @@ export default function Timeline() {
   // Cancel any in-flight auto-pan RAF on unmount so we don't leak frames.
   useEffect(() => {
     return () => stopAutoPan();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // -- Tag-strip mouse handlers (drag to create manual range) ---------------
@@ -969,50 +975,123 @@ export default function Timeline() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <input
-          type="date"
-          value={dateInputValue(day)}
-          onChange={(e) => setDay(fromDateInput(e.target.value))}
-          className="rounded bg-surface px-2 py-1 text-sm text-slate-100"
-        />
-        <button
-          onClick={() => setDay((d) => new Date(d.getTime() - 24 * 3600 * 1000))}
-          className="rounded bg-surface px-3 py-1 text-sm hover:bg-slate-700"
-        >
-          ← Vortag
-        </button>
-        <button
-          onClick={() => setDay((d) => new Date(d.getTime() + 24 * 3600 * 1000))}
-          className="rounded bg-surface px-3 py-1 text-sm hover:bg-slate-700"
-        >
-          Folgetag →
-        </button>
-        <span className="ml-auto text-sm text-slate-400">
-          Getaggt: {formatDuration(totalTaggedSec)}
-        </span>
-        <button
-          onClick={togglePause}
-          className={`rounded px-3 py-1 text-sm ${
-            paused ? "bg-amber-600" : "bg-emerald-600"
-          } text-white`}
-        >
-          {paused ? "Fortsetzen" : "Pausieren"}
-        </button>
-        <button
-          onClick={syncDay}
-          disabled={syncing}
-          className="rounded bg-accent px-3 py-1 text-sm text-white disabled:opacity-50"
-        >
-          {syncing ? "Synchronisiere…" : "Sync zu Personio"}
-        </button>
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex rounded bg-surface p-0.5 text-sm">
+          <button
+            onClick={() => setViewMode("day")}
+            className={`rounded px-3 py-1 transition-colors ${
+              viewMode === "day"
+                ? "bg-accent text-white"
+                : "text-slate-300 hover:bg-slate-700"
+            }`}
+          >
+            Tag
+          </button>
+          <button
+            onClick={() => {
+              setMonth(day);
+              setViewMode("month");
+            }}
+            className={`rounded px-3 py-1 transition-colors ${
+              viewMode === "month"
+                ? "bg-accent text-white"
+                : "text-slate-300 hover:bg-slate-700"
+            }`}
+          >
+            Monat
+          </button>
+        </div>
+
+        {viewMode === "day" && (
+          <>
+            <input
+              type="date"
+              value={dateInputValue(day)}
+              onChange={(e) => setDay(fromDateInput(e.target.value))}
+              className="rounded bg-surface px-2 py-1 text-sm text-slate-100"
+            />
+            <button
+              onClick={() =>
+                setDay((d) => new Date(d.getTime() - 24 * 3600 * 1000))
+              }
+              className="rounded bg-surface px-3 py-1 text-sm hover:bg-slate-700"
+            >
+              ← Vortag
+            </button>
+            <button
+              onClick={() =>
+                setDay((d) => new Date(d.getTime() + 24 * 3600 * 1000))
+              }
+              className="rounded bg-surface px-3 py-1 text-sm hover:bg-slate-700"
+            >
+              Folgetag →
+            </button>
+            <span className="ml-auto text-sm text-slate-400">
+              Getaggt: {formatDuration(totalTaggedSec)}
+            </span>
+            <button
+              onClick={togglePause}
+              className={`rounded px-3 py-1 text-sm ${
+                paused ? "bg-amber-600" : "bg-emerald-600"
+              } text-white`}
+            >
+              {paused ? "Fortsetzen" : "Pausieren"}
+            </button>
+            <button
+              onClick={syncDay}
+              disabled={syncing}
+              className="rounded bg-accent px-3 py-1 text-sm text-white disabled:opacity-50"
+            >
+              {syncing ? "Synchronisiere…" : "Sync zu Personio"}
+            </button>
+          </>
+        )}
+
+        {viewMode === "month" && (
+          <>
+            <button
+              onClick={() => setMonth((m) => subMonths(m, 1))}
+              className="rounded bg-surface px-3 py-1 text-sm hover:bg-slate-700"
+            >
+              ← Vormonat
+            </button>
+            <span className="min-w-[10rem] text-center text-sm font-semibold capitalize text-slate-100">
+              {format(month, "MMMM yyyy", { locale: de })}
+            </span>
+            <button
+              onClick={() => setMonth((m) => addMonths(m, 1))}
+              className="rounded bg-surface px-3 py-1 text-sm hover:bg-slate-700"
+            >
+              Folgemonat →
+            </button>
+            <button
+              onClick={() => setMonth(new Date())}
+              className="ml-auto rounded bg-surface px-3 py-1 text-sm hover:bg-slate-700"
+            >
+              Heute
+            </button>
+          </>
+        )}
       </div>
 
-      {error && (
-        <div className="rounded bg-red-900/40 px-3 py-2 text-sm text-red-200">
-          {error}
-        </div>
+      {viewMode === "month" && (
+        <MonthCalendar
+          month={month}
+          tags={tags}
+          onSelectDay={(d) => {
+            setDay(d);
+            setViewMode("day");
+          }}
+        />
       )}
+
+      {viewMode === "day" && (
+        <>
+          {error && (
+            <div className="rounded bg-red-900/40 px-3 py-2 text-sm text-red-200">
+              {error}
+            </div>
+          )}
 
       {syncMessage && (
         <div
@@ -1581,6 +1660,8 @@ export default function Timeline() {
         </ul>
       </div>
       </div>
+        </>
+      )}
     </div>
   );
 }

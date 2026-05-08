@@ -28,6 +28,8 @@ Der Tab besteht aus:
 
 ### Kopfbereich
 
+Ganz links steht der **Ansichts-Umschalter** zwischen `Tag` und `Monat`. Die Tagesansicht zeigt die Zeitstrahl-Streifen und Listen wie unten beschrieben; die Monatsansicht ist in [Monatsansicht](#monatsansicht) erklärt. Die übrigen Bedienelemente unten gelten in der Tagesansicht:
+
 | Element | Funktion |
 | --- | --- |
 | **Datums-Eingabe** | Datum wählen (klicken oder `YYYY-MM-DD` eingeben). |
@@ -149,6 +151,40 @@ Bei einem **offenen** manuellen Tag (siehe [Systemtray](tray.md)) wird die beim 
 - **Fortsetzen:** Aktiviert die Erfassung wieder. Der nächste Fensterwechsel öffnet einen neuen Process-Track; passende Auto-Tag-Regeln greifen wieder.
 
 Pausieren ist nützlich, wenn Sie an etwas Privatem oder nicht erfasswürdigem arbeiten. Der Status lässt sich auch über das Tray-Menü („Pause Tracking") oder die Einstellungen umschalten und wird persistiert — nach einem Neustart bleibt die letzte Wahl erhalten.
+
+## Monatsansicht
+
+Über den Umschalter `Tag | Monat` im Kopfbereich wechseln Sie in eine Kalender-Ansicht des aktuellen Monats. Sie ist als Überblick gedacht — zum Erfassen und Bearbeiten gehen Sie zurück in die Tagesansicht.
+
+### Kopfbereich der Monatsansicht
+
+| Element | Funktion |
+| --- | --- |
+| **← Vormonat** | Springt einen Monat zurück. |
+| **Monatsname Jahr** | Aktuell angezeigter Monat (z. B. *Mai 2026*). |
+| **Folgemonat →** | Springt einen Monat vor. |
+| **Heute** | Springt zum aktuellen Monat zurück. |
+
+Über den Buttons steht — sofern es im sichtbaren Monat getaggte Zeit gibt — die Summe als *Getaggt im Monat: X h Y m*.
+
+### Kalender-Raster
+
+Das Raster zeigt sieben Spalten von Montag bis Sonntag, sechs Wochenzeilen. Tage aus dem Vor- bzw. Folgemonat sind ausgegraut, bleiben aber klickbar. Der heutige Tag ist mit einem farbigen Rahmen hervorgehoben.
+
+Pro Tageskachel sehen Sie:
+
+- **Tagesnummer** oben links.
+- **Sync-Status** als Symbol oben rechts:
+  - `✓` (grün) — alle abgeschlossenen Tag-Blöcke des Tages sind an Personio übertragen.
+  - `◐` (amber) — nur ein Teil der Tag-Blöcke ist gesynct.
+  - `⊘` (rot) — kein Tag-Block ist bisher gesynct.
+  - kein Symbol — der Tag enthält keine abgeschlossenen Tag-Blöcke (z. B. Wochenende, Urlaub, oder es läuft nur ein noch offener Tag-Block).
+- **Getaggte Zeit** als kompakte Summe (`6h 30m`).
+- **Tag-Farbleiste** als dünner Balken am unteren Rand: jede Tag-Farbe nimmt den Anteil der Zeit ein, den der jeweilige Tag an diesem Tag hatte. Tooltip auf einem Segment zeigt Tag und Dauer.
+
+### Drilldown in die Tagesansicht
+
+Ein Klick auf eine Tageskachel wechselt zurück in die Tagesansicht und lädt diesen Tag — egal ob es ein Tag des aktuellen Monats oder ein ausgegrauter Rand-Tag ist. Über den Umschalter zurück zu `Monat` landen Sie wieder im Monat des zuletzt geöffneten Tages.
 
 ## Fehlerbanner
 
