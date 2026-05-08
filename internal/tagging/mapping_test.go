@@ -11,11 +11,11 @@ func ptr[T any](v T) *T { return &v }
 func TestResolve_SubInheritsParent(t *testing.T) {
 	t.Parallel()
 	parent := storage.Tag{
-		ID:                1,
-		Name:              "#projekta",
-		PersonioProjectID: ptr("PRJ-1"),
+		ID:                 1,
+		Name:               "#projekta",
+		PersonioProjectID:  ptr("PRJ-1"),
 		PersonioActivityID: ptr("ACT-1"),
-		SyncToPersonio:    true,
+		SyncToPersonio:     true,
 	}
 	sub := storage.Tag{
 		ID:          2,
@@ -43,9 +43,9 @@ func TestResolve_SubInheritsParent(t *testing.T) {
 func TestResolve_SubOverridesParent(t *testing.T) {
 	t.Parallel()
 	parent := storage.Tag{
-		ID:                1,
-		Name:              "#projekta",
-		PersonioProjectID: ptr("PRJ-1"),
+		ID:                 1,
+		Name:               "#projekta",
+		PersonioProjectID:  ptr("PRJ-1"),
 		PersonioActivityID: ptr("ACT-1"),
 	}
 	sub := storage.Tag{

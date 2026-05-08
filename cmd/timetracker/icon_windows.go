@@ -47,17 +47,17 @@ func trayIcon() []byte {
 	// BITMAPINFOHEADER + pixel + mask
 	var bmp bytes.Buffer
 	writeLE := func(v any) { _ = binary.Write(&bmp, binary.LittleEndian, v) }
-	writeLE(uint32(40))         // size
-	writeLE(int32(size))        // width
-	writeLE(int32(size * 2))    // height (= 2 * actual because of XOR+AND)
-	writeLE(uint16(1))          // planes
-	writeLE(uint16(bpp))        // bpp
-	writeLE(uint32(0))          // compression
+	writeLE(uint32(40))      // size
+	writeLE(int32(size))     // width
+	writeLE(int32(size * 2)) // height (= 2 * actual because of XOR+AND)
+	writeLE(uint16(1))       // planes
+	writeLE(uint16(bpp))     // bpp
+	writeLE(uint32(0))       // compression
 	writeLE(uint32(len(xor) + len(andMask)))
-	writeLE(int32(0))   // xres
-	writeLE(int32(0))   // yres
-	writeLE(uint32(0))  // clrUsed
-	writeLE(uint32(0))  // clrImportant
+	writeLE(int32(0))  // xres
+	writeLE(int32(0))  // yres
+	writeLE(uint32(0)) // clrUsed
+	writeLE(uint32(0)) // clrImportant
 	bmp.Write(xor)
 	bmp.Write(andMask)
 

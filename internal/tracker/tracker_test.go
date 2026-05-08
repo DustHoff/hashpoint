@@ -103,8 +103,8 @@ func (r *fakeRepo) ListByDay(context.Context, time.Time) ([]storage.ProcessTrack
 func (r *fakeRepo) ListBetween(context.Context, time.Time, time.Time) ([]storage.ProcessTrack, error) {
 	panic("not used")
 }
-func (r *fakeRepo) LastEnd(context.Context) (time.Time, error)                  { panic("not used") }
-func (r *fakeRepo) Get(context.Context, int64) (*storage.ProcessTrack, error)   { panic("not used") }
+func (r *fakeRepo) LastEnd(context.Context) (time.Time, error)                { panic("not used") }
+func (r *fakeRepo) Get(context.Context, int64) (*storage.ProcessTrack, error) { panic("not used") }
 
 // stubCommSource feeds a scripted set of windows to each call.
 type stubCommSource struct {
@@ -139,7 +139,7 @@ type recordingObserver struct {
 }
 
 func (o *recordingObserver) OnFocusChanged(context.Context, string, string, time.Time) {}
-func (o *recordingObserver) OnFocusCleared(context.Context, time.Time)                  {}
+func (o *recordingObserver) OnFocusCleared(context.Context, time.Time)                 {}
 func (o *recordingObserver) OnCommunicationChanged(_ context.Context, sessions []CommSession, _ time.Time) {
 	o.mu.Lock()
 	defer o.mu.Unlock()

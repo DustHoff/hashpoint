@@ -71,8 +71,8 @@ func newOrchEnv(t *testing.T, granularity time.Duration) *orchTestEnv {
 	return &orchTestEnv{
 		t: t, ctx: ctx,
 		tracks: tracks, blocks: blocks, tags: tagRepo, rules: ruleRepo,
-		orch:    orch,
-		tagWeb:  web.ID, tagCode: code.ID,
+		orch:   orch,
+		tagWeb: web.ID, tagCode: code.ID,
 		ruleWeb: rule.ID,
 		now:     now,
 	}

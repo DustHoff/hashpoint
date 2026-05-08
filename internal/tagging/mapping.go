@@ -5,12 +5,12 @@ import "github.com/onesi/hashpoint/internal/storage"
 // EffectiveMapping is the resolved Personio mapping for a tag — the sub-tag's
 // project/activity if set, otherwise inherited from the parent.
 type EffectiveMapping struct {
-	ParentName        string
-	SubName           string // empty if the tag itself is a parent.
-	SubDescription    string
-	ProjectID         string
-	ActivityID        string
-	SyncToPersonio    bool
+	ParentName     string
+	SubName        string // empty if the tag itself is a parent.
+	SubDescription string
+	ProjectID      string
+	ActivityID     string
+	SyncToPersonio bool
 }
 
 // Resolve walks the parent chain and returns the effective Personio mapping
