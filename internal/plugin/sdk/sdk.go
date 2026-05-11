@@ -1,0 +1,297 @@
+// Package sdk defines the Hashpoint plugin contract: the Go interfaces a
+// plugin author implements, the value types crossing the host↔plugin
+// boundary, and the convenience helpers (Serve, PluginMap) that wire the
+// implementation up to hashicorp/go-plugin's net/rpc transport.
+//
+// A plugin process is a separate executable Hashpoint launches as a
+// subprocess. Communication goes over net/rpc multiplexed via yamux, so
+// crashing a plugin never crashes the host. The transport is net/rpc
+// rather than gRPC to keep the Hashpoint build pure-Go without a protoc
+// toolchain; the SDK contract is transport-agnostic, so a future migration
+// to gRPC requires only swapping the rpc_*.go wiring.
+//
+// Plugin author skeleton:
+//
+//	package main
+//
+//	import (
+//	    "context"
+//
+//	    sdk "github.com/onesi/hashpoint/internal/plugin/sdk"
+//	)
+//
+//	type myPlugin struct {
+//	    host        sdk.HostAPI
+//	    endpoint    string
+//	    tokenHandle sdk.SecretHandle
+//	}
+//
+//	func (p *myPlugin) Init(ctx context.Context, host sdk.HostAPI) error {
+//	    p.host = host
+//	    return nil
+//	}
+//	func (p *myPlugin) Metadata(_ context.Context) (sdk.Metadata, error) {
+//	    return sdk.Metadata{
+//	        Name:         "oncall-example",
+//	        Version:      "0.1.0",
+//	        APIVersion:   sdk.HostAPIVersion,
+//	        Capabilities: []sdk.Capability{sdk.CapOnCallDocumentation},
+//	    }, nil
+//	}
+//	func (p *myPlugin) Configure(_ context.Context, cfg sdk.PluginConfig) error {
+//	    p.endpoint = cfg.Fields["endpoint"]
+//	    p.tokenHandle = cfg.Secrets["api_token"]
+//	    return nil
+//	}
+//	func (p *myPlugin) Submit(ctx context.Context, doc sdk.OnCallDocument) (sdk.SubmissionResult, error) {
+//	    token, err := p.host.RedeemSecret(ctx, p.tokenHandle)
+//	    if err != nil { return sdk.SubmissionResult{}, err }
+//	    // ... do something with token + doc ...
+//	    _ = token
+//	    return sdk.SubmissionResult{ExternalRef: "...", ExternalURL: "..."}, nil
+//	}
+//
+//	func main() { sdk.Serve(&myPlugin{}) }
+package sdk
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	hplugin "github.com/hashicorp/go-plugin"
+)
+
+// HostAPIVersion is bumped on every breaking change to the SDK surface
+// (interface methods, wire types, handshake semantics). The host refuses
+// to load plugins whose Metadata.APIVersion does not equal this value,
+// avoiding silent ABI mismatch.
+const HostAPIVersion = 1
+
+// Handshake is the hashicorp/go-plugin handshake. Plugin binaries embed
+// these constants via Serve(); a mismatch surfaces as an immediate launch
+// failure rather than a subtle wire-format error later. Change
+// MagicCookieValue to deliberately force every user to re-install plugins
+// (e.g. after a breaking SDK change unrelated to ProtocolVersion).
+var Handshake = hplugin.HandshakeConfig{
+	ProtocolVersion:  1,
+	MagicCookieKey:   "HASHPOINT_PLUGIN",
+	MagicCookieValue: "v1-oncall-doc",
+}
+
+// Plugin-set keys. Both host and plugin must agree on these strings;
+// adding a new capability adds a new key here AND a new entry in
+// PluginMap / HostSidePluginMap.
+const (
+	pluginKeyCore   = "plugin"
+	pluginKeyOnCall = "oncall_documentation"
+)
+
+// Capability is the string each plugin advertises in Metadata.Capabilities
+// so the host knows which RPC services to dispense. A plugin may advertise
+// multiple capabilities by implementing the corresponding Go interfaces.
+type Capability string
+
+// Capability values. Add new ones below — never re-use a retired string.
+const (
+	// CapOnCallDocumentation is advertised by plugins that implement
+	// OnCallDocumentationHandler.
+	CapOnCallDocumentation Capability = "oncall_documentation"
+)
+
+// Metadata is the plugin's self-description. Returned by Plugin.Metadata
+// once per plugin lifetime (the host caches the result).
+type Metadata struct {
+	// Name must match the plugin's directory under PluginsDir. Used
+	// everywhere the host needs to identify the plugin (logs, config
+	// section, oncall_submissions.plugin_name).
+	Name string
+	// Version is informational, displayed in the settings UI.
+	Version string
+	// APIVersion MUST equal HostAPIVersion. The host refuses mismatches.
+	APIVersion int
+	// Capabilities lists the capability strings this plugin handles.
+	// The host only dispenses RPC clients for capabilities advertised here.
+	Capabilities []Capability
+	// Description is the one-line text shown in the settings UI.
+	Description string
+}
+
+// SecretHandle is an opaque pointer to a secret stored in the host's
+// credential store (wincred on Windows). The plaintext never crosses the
+// host↔plugin boundary at Configure() time; the plugin redeems the handle
+// via HostAPI.RedeemSecret() on-demand, holding the plaintext in memory
+// only for the duration of an outbound call.
+//
+// Handles are per-plugin and per-process: leaking a handle from plugin A
+// gives nothing useful to plugin B, and all handles die on host restart.
+type SecretHandle string
+
+// PluginConfig is what Configure() delivers. Fields are TOML-defined
+// per-plugin values; Secrets are SecretHandles keyed by the secret name
+// declared in the plugin's manifest under [config_schema.secrets].
+type PluginConfig struct {
+	Fields  map[string]string
+	Secrets map[string]SecretHandle
+}
+
+// HostAPI is the reverse-RPC surface the plugin uses to talk back into the
+// host. Implementations live in the host process; the plugin receives a
+// client stub via Init().
+//
+// Methods are kept narrow on purpose: anything richer should live in a
+// capability-specific RPC, not in a "kitchen sink" host API.
+type HostAPI interface {
+	// RedeemSecret returns the plaintext for a SecretHandle the host
+	// previously delivered in PluginConfig.Secrets. The plaintext is
+	// in-memory only — callers must not write it to logs or disk.
+	// Returns ErrUnknownSecretHandle for a stale / unrecognised handle.
+	RedeemSecret(ctx context.Context, h SecretHandle) (string, error)
+
+	// Log forwards a structured log line to the host's slog handler. The
+	// host prefixes the plugin's Name automatically, so plugins should
+	// not include their own name in the message. Levels: "debug", "info",
+	// "warn", "error" (other strings degrade to info).
+	Log(ctx context.Context, level, message string, fields map[string]string) error
+}
+
+// Plugin is the base interface every plugin must implement. The host
+// invokes Init → Metadata → Configure in that order once on startup, then
+// dispenses any capability-specific handlers the plugin advertises.
+type Plugin interface {
+	// Init delivers the HostAPI client. Plugins typically store it on the
+	// receiver for later use. Called exactly once.
+	Init(ctx context.Context, host HostAPI) error
+
+	// Metadata is called once after Init. Must be cheap and side-effect
+	// free — the host may call it before Configure to decide whether to
+	// load the plugin at all.
+	Metadata(ctx context.Context) (Metadata, error)
+
+	// Configure delivers the user's per-plugin settings. Called once after
+	// Metadata and again whenever the user saves new settings from the
+	// settings UI. Plugins should return ErrConfigInvalid (wrapped with
+	// fmt.Errorf("%w: detail", sdk.ErrConfigInvalid)) on validation
+	// failures — the host surfaces the message verbatim.
+	Configure(ctx context.Context, cfg PluginConfig) error
+}
+
+// IncidentType discriminates the two flavours the off-duty form supports.
+type IncidentType string
+
+const (
+	IncidentPlannedMaintenance IncidentType = "planned_maintenance"
+	IncidentServiceDisruption  IncidentType = "service_disruption"
+)
+
+// OnCallDocument is the payload the host sends to OnCallDocumentationHandler
+// plugins. Times are UTC. The plugin is responsible for idempotency on
+// retry — use LocalID as a deduplication key when filing tickets remotely
+// so a retried Submit does not create a duplicate.
+type OnCallDocument struct {
+	// LocalID is stable per Hashpoint document (UUID-shaped string).
+	LocalID string
+	// BlockID is the Hashpoint tag-block primary key. Useful for cross-
+	// linking but the plugin should not assume it is stable across
+	// database resets.
+	BlockID int64
+	// StartTime and EndTime span the off-duty work, UTC.
+	StartTime time.Time
+	EndTime   time.Time
+	// TagName is the resolved display name (e.g. "#oncall/billing").
+	TagName string
+	// Application is the user-entered "which system was affected" field.
+	Application string
+	// IncidentType is the user's classification.
+	IncidentType IncidentType
+	// Solution is free-form text — the on-caller's notes.
+	Solution string
+}
+
+// SubmissionResult is the plugin's response on success. Both fields are
+// optional; the host displays ExternalRef as a chip in the inbox and
+// ExternalURL as a clickable link.
+type SubmissionResult struct {
+	ExternalRef string
+	ExternalURL string
+}
+
+// OnCallDocumentationHandler is implemented by plugins advertising
+// CapOnCallDocumentation. The host fans Submit out to every running
+// plugin advertising the capability; per-plugin results are tracked in
+// the oncall_submissions table.
+//
+// Submit MUST be idempotent (use OnCallDocument.LocalID as a dedupe key on
+// the remote side). Returning ErrTransient signals the host should keep
+// the submission in 'failed' state and the user may retry; any other
+// error is treated identically but surfaced verbatim in the UI.
+type OnCallDocumentationHandler interface {
+	Submit(ctx context.Context, doc OnCallDocument) (SubmissionResult, error)
+}
+
+// Sentinel errors plugins may return. Wrap them with fmt.Errorf("%w: detail", ...)
+// to attach context.
+var (
+	// ErrConfigInvalid signals user-fixable misconfiguration. The host
+	// surfaces the wrapping detail in the settings UI banner.
+	ErrConfigInvalid = errors.New("plugin: config invalid")
+
+	// ErrNotConfigured signals the plugin cannot serve its capability
+	// because required settings are missing. Submit calls fail fast.
+	ErrNotConfigured = errors.New("plugin: not configured")
+
+	// ErrTransient signals the host that retry has a chance of succeeding
+	// (network blip, remote 5xx, …). The doc stays in 'failed' status and
+	// the user may click Retry.
+	ErrTransient = errors.New("plugin: transient failure")
+
+	// ErrUnknownSecretHandle is returned by HostAPI.RedeemSecret when the
+	// handle is stale (host restart) or never issued.
+	ErrUnknownSecretHandle = errors.New("plugin: unknown secret handle")
+)
+
+// Serve is the entry point a plugin's main() calls. It blocks until the
+// host disconnects, then returns. Equivalent to:
+//
+//	hplugin.Serve(&hplugin.ServeConfig{
+//	    HandshakeConfig: Handshake,
+//	    Plugins:         PluginMap(impl),
+//	})
+func Serve(impl Plugin) {
+	hplugin.Serve(&hplugin.ServeConfig{
+		HandshakeConfig: Handshake,
+		Plugins:         PluginMap(impl),
+	})
+}
+
+// PluginMap returns the plugin set the SERVER side (plugin process)
+// registers: always includes the core "plugin" service, plus a
+// capability-specific service for every interface impl satisfies.
+//
+// The host calls HostSidePluginMap() to get the matching CLIENT-side set.
+func PluginMap(impl Plugin) hplugin.PluginSet {
+	set := hplugin.PluginSet{
+		pluginKeyCore: &corePluginAdapter{impl: impl},
+	}
+	if h, ok := impl.(OnCallDocumentationHandler); ok {
+		set[pluginKeyOnCall] = &oncallPluginAdapter{impl: h}
+	}
+	return set
+}
+
+// HostSidePluginMap returns the plugin set the HOST registers with
+// plugin.NewClient. Server-impl fields are nil — the host only dispenses
+// clients.
+func HostSidePluginMap() hplugin.PluginSet {
+	return hplugin.PluginSet{
+		pluginKeyCore:   &corePluginAdapter{},
+		pluginKeyOnCall: &oncallPluginAdapter{},
+	}
+}
+
+// CoreKey and OnCallKey export the plugin-set keys so the host can
+// Dispense() the right service.
+const (
+	CoreKey   = pluginKeyCore
+	OnCallKey = pluginKeyOnCall
+)
