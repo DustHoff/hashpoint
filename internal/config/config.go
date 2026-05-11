@@ -37,6 +37,23 @@ type Config struct {
 	QuickTag      QuickTagConfig      `toml:"quick_tag"     json:"quick_tag"`
 	Communication CommunicationConfig `toml:"communication" json:"communication"`
 	WorkSchedule  WorkScheduleConfig  `toml:"work_schedule" json:"work_schedule"`
+	OnCall        OnCallConfig        `toml:"on_call"       json:"on_call"`
+	// Plugins is opaque per-plugin field config. Keys match the plugin's
+	// directory name under PluginsDir; values are the {field: value} pairs
+	// the plugin's manifest declares under config_schema.fields. Secrets are
+	// never stored here — they live in Windows Credential Manager under
+	// target "TimeTracker:plugin:<plugin-name>:<secret-key>" and are
+	// surfaced to the plugin via opaque SecretHandles.
+	Plugins map[string]map[string]string `toml:"plugins" json:"plugins"`
+}
+
+// OnCallConfig configures the on-call ("Rufbereitschaft") documentation
+// pipeline. When a tag block overlaps off-hours per WorkScheduleConfig AND
+// its tag (or any ancestor) is in TagIDs, the orchestrator enqueues a
+// documentation row that the user fills out on the Rufbereitschaft tab.
+// Empty TagIDs ⇒ feature dormant (no docs are ever enqueued).
+type OnCallConfig struct {
+	TagIDs []int64 `toml:"tag_ids" json:"tag_ids"`
 }
 
 // TrackingConfig holds polling/idle parameters.
@@ -305,6 +322,9 @@ type Paths struct {
 	// permissions inherited from %LOCALAPPDATA%; the file is encrypted
 	// regardless.
 	AuthDir string // %LOCALAPPDATA%\TimeTracker\auth
+	// PluginsDir holds installed plugin binaries (and their manifest.toml).
+	// Each plugin lives under PluginsDir\<plugin-name>\.
+	PluginsDir string // %APPDATA%\TimeTracker\plugins
 }
 
 // PollInterval returns the poll interval as a duration.
@@ -380,6 +400,7 @@ func ResolvePaths() (Paths, error) {
 		DBFile:     filepath.Join(dataDir, "data.db"),
 		LogDir:     filepath.Join(dataDir, "log"),
 		AuthDir:    filepath.Join(dataDir, "auth"),
+		PluginsDir: filepath.Join(cfgDir, "plugins"),
 	}, nil
 }
 

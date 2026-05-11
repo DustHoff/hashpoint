@@ -28,5 +28,9 @@ func Default() *Config {
 			EndHour:   18,
 			WorkDays:  []string{"Mon", "Tue", "Wed", "Thu", "Fri"},
 		},
+		OnCall: OnCallConfig{
+			TagIDs: nil,
+		},
+		Plugins: map[string]map[string]string{},
 	}
 }
