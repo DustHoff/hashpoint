@@ -125,3 +125,76 @@ type SettingsRepository interface {
 	Set(ctx context.Context, key, value string) error
 	Delete(ctx context.Context, key string) error
 }
+
+// OnCallFilter restricts OnCallRepository.List to a slice of the inbox.
+// A nil pointer means "no filter on that dimension". An empty IncludeStale
+// false means stale rows are excluded (the inbox default); set to true to
+// surface them with the "tag changed" banner.
+type OnCallFilter struct {
+	Status       *OnCallDocStatus
+	From         *time.Time // UTC, inclusive — filters tag block start_time
+	To           *time.Time // UTC, exclusive
+	IncludeStale bool
+}
+
+// OnCallRepository persists on-call ("Rufbereitschaft") documentation rows
+// and their per-plugin submission attempts. Two tables back this interface:
+//
+//   - oncall_documentations: one row per tag block (UNIQUE block_id),
+//     created lazily by EnsureForBlock when the orchestrator decides the
+//     block qualifies for off-duty documentation.
+//
+//   - oncall_submissions: one row per (doc, plugin), inserted on the first
+//     fan-out and updated as the plugin reports back. Successful rows are
+//     final; failed rows are re-dispatched on retry.
+//
+// All reads load submissions via a follow-up query and zip them onto the
+// returned OnCallDoc.Submissions slice — the rolled-up status is computed
+// in Go (OnCallDoc.Status()) rather than stored.
+type OnCallRepository interface {
+	// EnsureForBlock is idempotent: returns the existing doc if one is
+	// already linked to blockID, or inserts a fresh one otherwise.
+	// tagAtCreation captures the block's current TagID so the orchestrator
+	// can detect drift later (re-tag, resize out of off-hours → mark stale).
+	EnsureForBlock(ctx context.Context, blockID, tagAtCreation int64) (*OnCallDoc, error)
+	// GetByBlock returns the doc + its submissions, or ErrNotFound.
+	GetByBlock(ctx context.Context, blockID int64) (*OnCallDoc, error)
+	// Get returns the doc + its submissions by primary key, or ErrNotFound.
+	Get(ctx context.Context, id int64) (*OnCallDoc, error)
+	// List returns docs matching filter, joined with their submissions,
+	// ordered by the block's start_time descending (newest first — the
+	// inbox shows the latest off-duty incident at the top).
+	List(ctx context.Context, filter OnCallFilter) ([]OnCallDoc, error)
+	// UpdateDraft writes the user's form input. Safe to call repeatedly;
+	// updated_at is touched on every call.
+	UpdateDraft(ctx context.Context, id int64, application string, incidentType OnCallIncidentType, solution string) error
+	// MarkStale sets stale=1. Idempotent.
+	MarkStale(ctx context.Context, id int64) error
+	// ClearStale sets stale=0. Idempotent.
+	ClearStale(ctx context.Context, id int64) error
+	// Dismiss deletes the doc (and cascades its submissions). Used when the
+	// user clicks "Discard" on a stale row; the host refuses to dismiss a
+	// doc that has any non-pending submission, to avoid losing references
+	// to remote tickets that were actually filed.
+	Dismiss(ctx context.Context, id int64) error
+	// DeleteByBlock removes the doc tied to blockID, if any. FK cascade
+	// covers the tag-block delete path, but this lets the orchestrator
+	// reconcile explicitly when needed.
+	DeleteByBlock(ctx context.Context, blockID int64) error
+
+	// EnsureSubmission inserts (or returns) the submission row for
+	// (docID, pluginName). The fresh row's status is 'pending'; an
+	// existing row's status is left as-is so retries can transition
+	// only failed rows back to pending via MarkSubmissionPending.
+	EnsureSubmission(ctx context.Context, docID int64, pluginName string) (*OnCallSubmission, error)
+	// MarkSubmissionPending resets a failed/submitted row to pending —
+	// used at the start of a retry dispatch. Callers should restrict
+	// this to rows in state 'failed' (idempotent for that case).
+	MarkSubmissionPending(ctx context.Context, id int64) error
+	// MarkSubmissionSubmitted records a successful plugin response.
+	MarkSubmissionSubmitted(ctx context.Context, id int64, externalRef, externalURL string, at time.Time) error
+	// MarkSubmissionFailed records a plugin error.
+	MarkSubmissionFailed(ctx context.Context, id int64, errMsg string, at time.Time) error
+	// ListSubmissionsByDoc returns the per-plugin attempts for docID.
+	ListSubmissionsByDoc(ctx context.Context, docID int64) ([]OnCallSubmission, error)
+}
