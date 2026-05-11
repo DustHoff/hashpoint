@@ -36,6 +36,7 @@ type Config struct {
 	Entra         EntraConfig         `toml:"entra"         json:"entra"`
 	QuickTag      QuickTagConfig      `toml:"quick_tag"     json:"quick_tag"`
 	Communication CommunicationConfig `toml:"communication" json:"communication"`
+	WorkSchedule  WorkScheduleConfig  `toml:"work_schedule" json:"work_schedule"`
 }
 
 // TrackingConfig holds polling/idle parameters.
@@ -158,6 +159,114 @@ func NormalizeProcessNames(n []string) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+// WorkScheduleConfig captures the user's nominal working hours and working
+// weekdays. The values are purely informational today: they seed the calendar
+// view's "is this a workday" shading and are surfaced in the settings UI so
+// downstream features (sync filtering, expected-hours reporting) can consume
+// them later without another config migration.
+//
+// StartHour and EndHour are integer hour-of-day values in the local timezone:
+// StartHour is inclusive, EndHour is exclusive, so the default 8..18 means
+// "08:00 up to but not including 18:00" — i.e. a 10-hour window. Validate()
+// enforces 0 <= StartHour < EndHour <= 24.
+//
+// WorkDays is a list of canonical English weekday short names ("Mon" .. "Sun").
+// English keys keep the on-disk TOML locale-independent; the UI maps them to
+// localized German labels (Mo, Di, ...). An empty WorkDays list is legal and
+// means "no day is a working day"; the calendar then renders every cell
+// muted. Order in the slice does not matter — NormalizeWorkDays sorts to
+// canonical Mon→Sun order and drops duplicates / unknown values.
+type WorkScheduleConfig struct {
+	StartHour int      `toml:"start_hour" json:"start_hour"`
+	EndHour   int      `toml:"end_hour"   json:"end_hour"`
+	WorkDays  []string `toml:"work_days"  json:"work_days"`
+}
+
+// workDayOrder is the canonical Mon→Sun ordering used for serialisation and
+// the time.Weekday → string mapping below. The package-private slice lets
+// NormalizeWorkDays sort deterministically without a per-call allocation.
+var workDayOrder = []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+
+// workDayByWeekday translates Go's time.Weekday (Sunday=0) to the canonical
+// short name used in TOML / JSON.
+var workDayByWeekday = map[time.Weekday]string{
+	time.Monday:    "Mon",
+	time.Tuesday:   "Tue",
+	time.Wednesday: "Wed",
+	time.Thursday:  "Thu",
+	time.Friday:    "Fri",
+	time.Saturday:  "Sat",
+	time.Sunday:    "Sun",
+}
+
+// canonicalWorkDay maps any accepted spelling ("mon", "Monday", "MON") to the
+// canonical short form. Returns "" for unknown input so the validator can
+// surface a clear error message instead of silently dropping the entry.
+func canonicalWorkDay(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "mon", "monday":
+		return "Mon"
+	case "tue", "tues", "tuesday":
+		return "Tue"
+	case "wed", "weds", "wednesday":
+		return "Wed"
+	case "thu", "thur", "thurs", "thursday":
+		return "Thu"
+	case "fri", "friday":
+		return "Fri"
+	case "sat", "saturday":
+		return "Sat"
+	case "sun", "sunday":
+		return "Sun"
+	}
+	return ""
+}
+
+// NormalizeWorkDays returns a sanitized copy of n: each entry is trimmed and
+// case-normalised to the canonical short form ("Mon" .. "Sun"); unknown
+// entries are dropped; duplicates are collapsed; the result is sorted in
+// canonical Mon→Sun order so the on-disk TOML stays stable across saves.
+// A nil / empty input returns nil so callers can distinguish "no days
+// configured" from "explicitly all days unselected" — both legal states.
+func NormalizeWorkDays(n []string) []string {
+	if len(n) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(n))
+	for _, raw := range n {
+		c := canonicalWorkDay(raw)
+		if c == "" {
+			continue
+		}
+		seen[c] = struct{}{}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for _, d := range workDayOrder {
+		if _, ok := seen[d]; ok {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// IsWorkDay reports whether the local-time weekday of t is in the configured
+// WorkDays list. Returns false for an empty list (no days configured).
+func (w WorkScheduleConfig) IsWorkDay(t time.Time) bool {
+	name, ok := workDayByWeekday[t.Weekday()]
+	if !ok {
+		return false
+	}
+	for _, d := range w.WorkDays {
+		if d == name {
+			return true
+		}
+	}
+	return false
 }
 
 // NormalizeTitleExcludePhrases returns a sanitized copy of n: trimmed,
@@ -296,6 +405,7 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.Communication.ProcessNames = NormalizeProcessNames(cfg.Communication.ProcessNames)
 	cfg.Communication.TitleExcludePhrases = NormalizeTitleExcludePhrases(cfg.Communication.TitleExcludePhrases)
+	cfg.WorkSchedule.WorkDays = NormalizeWorkDays(cfg.WorkSchedule.WorkDays)
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
@@ -417,6 +527,25 @@ func (c *Config) Validate() error {
 	if c.QuickTag.Enabled {
 		if _, err := ParseHotkey(c.QuickTag.Hotkey); err != nil {
 			errs = append(errs, "quick_tag.hotkey ungültig: "+err.Error())
+		}
+	}
+	// Work schedule: hours in [0,24], start strictly before end (an empty or
+	// inverted window has no meaningful interpretation). Unknown weekday
+	// strings are reported individually so the user can spot a typo;
+	// NormalizeWorkDays would otherwise silently drop them.
+	if c.WorkSchedule.StartHour < 0 || c.WorkSchedule.StartHour > 23 {
+		errs = append(errs, "work_schedule.start_hour must be in [0,23]")
+	}
+	if c.WorkSchedule.EndHour < 1 || c.WorkSchedule.EndHour > 24 {
+		errs = append(errs, "work_schedule.end_hour must be in [1,24]")
+	}
+	if c.WorkSchedule.StartHour >= 0 && c.WorkSchedule.EndHour <= 24 &&
+		c.WorkSchedule.StartHour >= c.WorkSchedule.EndHour {
+		errs = append(errs, "work_schedule.start_hour must be strictly less than work_schedule.end_hour")
+	}
+	for _, d := range c.WorkSchedule.WorkDays {
+		if canonicalWorkDay(d) == "" {
+			errs = append(errs, "work_schedule.work_days enthält unbekannten Wochentag: "+d)
 		}
 	}
 	if len(errs) == 0 {

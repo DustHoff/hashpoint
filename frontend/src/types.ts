@@ -121,12 +121,24 @@ export interface CommunicationConfig {
   title_exclude_phrases: string[];
 }
 
+// Canonical English short-name keys for the seven weekdays. Matches the Go
+// side's WorkScheduleConfig.WorkDays vocabulary; the UI maps these to
+// localized German labels at render time.
+export type WorkDay = "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun";
+
+export interface WorkScheduleConfig {
+  start_hour: number; // 0..23, inclusive
+  end_hour: number; // 1..24, exclusive; must be > start_hour
+  work_days: WorkDay[];
+}
+
 export interface AppConfig {
   tracking: TrackingConfig;
   personio: PersonioConfig;
   entra: EntraConfig;
   quick_tag: QuickTagConfig;
   communication: CommunicationConfig;
+  work_schedule: WorkScheduleConfig;
 }
 
 export interface QuickTagSlot {

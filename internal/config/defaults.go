@@ -23,5 +23,10 @@ func Default() *Config {
 			ProcessNames:        []string{"teams.exe"},
 			TitleExcludePhrases: nil,
 		},
+		WorkSchedule: WorkScheduleConfig{
+			StartHour: 8,
+			EndHour:   18,
+			WorkDays:  []string{"Mon", "Tue", "Wed", "Thu", "Fri"},
+		},
 	}
 }

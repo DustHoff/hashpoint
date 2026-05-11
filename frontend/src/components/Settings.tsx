@@ -1,7 +1,25 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { log } from "../lib/log";
-import type { AppConfig, EntraStatus, PersonioStatus } from "../types";
+import type {
+  AppConfig,
+  EntraStatus,
+  PersonioStatus,
+  WorkDay,
+} from "../types";
+
+// Weekday rows for the work-schedule checkbox row. Key is the canonical
+// English short name that round-trips through TOML; label is the German
+// abbreviation surfaced to the user.
+const WORK_DAYS: ReadonlyArray<{ key: WorkDay; label: string }> = [
+  { key: "Mon", label: "Mo" },
+  { key: "Tue", label: "Di" },
+  { key: "Wed", label: "Mi" },
+  { key: "Thu", label: "Do" },
+  { key: "Fri", label: "Fr" },
+  { key: "Sat", label: "Sa" },
+  { key: "Sun", label: "So" },
+];
 
 const emptyConfig: AppConfig = {
   tracking: {
@@ -14,6 +32,11 @@ const emptyConfig: AppConfig = {
   entra: { client_id: "", tenant_id: "" },
   quick_tag: { enabled: true, hotkey: "Ctrl+Alt+T" },
   communication: { process_names: ["teams.exe"], title_exclude_phrases: [] },
+  work_schedule: {
+    start_hour: 8,
+    end_hour: 18,
+    work_days: ["Mon", "Tue", "Wed", "Thu", "Fri"],
+  },
 };
 
 // normalize defends against backends that omit (or rename) sub-objects so a
@@ -46,6 +69,14 @@ function normalize(c: Partial<AppConfig> | null | undefined): AppConfig {
       title_exclude_phrases:
         c?.communication?.title_exclude_phrases ??
         emptyConfig.communication.title_exclude_phrases,
+    },
+    work_schedule: {
+      start_hour:
+        c?.work_schedule?.start_hour ?? emptyConfig.work_schedule.start_hour,
+      end_hour:
+        c?.work_schedule?.end_hour ?? emptyConfig.work_schedule.end_hour,
+      work_days:
+        c?.work_schedule?.work_days ?? emptyConfig.work_schedule.work_days,
     },
   };
 }
@@ -245,6 +276,107 @@ export default function Settings() {
             }
             className="w-24 rounded bg-slate-900/60 px-2 py-1 text-sm"
           />
+        </Field>
+      </section>
+
+      {/* Work-schedule section ------------------------------------------ */}
+      <section className="space-y-3 rounded bg-surface p-4">
+        <h3 className="text-sm font-semibold text-slate-200">Arbeitszeit</h3>
+        <p className="text-[11px] text-slate-500">
+          Nominale tägliche Arbeitszeit und Arbeitstage. Wird aktuell zur
+          Hervorhebung im Monatskalender genutzt (Nicht-Arbeitstage werden
+          gedämpft dargestellt). Die Werte beeinflussen die Erfassung selbst
+          nicht — die läuft weiterhin durchgehend, solange sie aktiv ist.
+        </p>
+        <div className="flex flex-wrap items-end gap-4">
+          <Field
+            label="Arbeitsbeginn"
+            help="Volle Stunde (0–23), inklusiv."
+          >
+            <select
+              value={config.work_schedule.start_hour}
+              onChange={(e) =>
+                update("work_schedule", {
+                  ...config.work_schedule,
+                  start_hour: Number(e.target.value),
+                })
+              }
+              className="w-24 rounded bg-slate-900/60 px-2 py-1 text-sm"
+            >
+              {Array.from({ length: 24 }, (_, h) => (
+                <option key={h} value={h}>
+                  {String(h).padStart(2, "0")}:00
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field
+            label="Arbeitsende"
+            help="Volle Stunde (1–24), exklusiv — d. h. 18:00 = bis 17:59."
+          >
+            <select
+              value={config.work_schedule.end_hour}
+              onChange={(e) =>
+                update("work_schedule", {
+                  ...config.work_schedule,
+                  end_hour: Number(e.target.value),
+                })
+              }
+              className="w-24 rounded bg-slate-900/60 px-2 py-1 text-sm"
+            >
+              {Array.from({ length: 24 }, (_, i) => {
+                const h = i + 1;
+                return (
+                  <option key={h} value={h}>
+                    {h === 24 ? "24:00" : `${String(h).padStart(2, "0")}:00`}
+                  </option>
+                );
+              })}
+            </select>
+          </Field>
+        </div>
+        <Field
+          label="Arbeitstage"
+          help="Aktive Tage werden im Kalender normal dargestellt, inaktive gedämpft."
+        >
+          <div className="flex flex-wrap gap-1">
+            {WORK_DAYS.map(({ key, label }) => {
+              const checked = config.work_schedule.work_days.includes(key);
+              return (
+                <label
+                  key={key}
+                  className={`flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-xs ${
+                    checked
+                      ? "bg-accent/80 text-white"
+                      : "bg-slate-900/60 text-slate-400"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => {
+                      const next = e.target.checked
+                        ? [...config.work_schedule.work_days, key]
+                        : config.work_schedule.work_days.filter(
+                            (d) => d !== key,
+                          );
+                      update("work_schedule", {
+                        ...config.work_schedule,
+                        // Re-sort to canonical Mo→So order so the on-disk
+                        // TOML stays stable across saves regardless of
+                        // click sequence.
+                        work_days: WORK_DAYS.map((w) => w.key).filter((k) =>
+                          next.includes(k),
+                        ),
+                      });
+                    }}
+                    className="h-3.5 w-3.5"
+                  />
+                  <span>{label}</span>
+                </label>
+              );
+            })}
+          </div>
         </Field>
       </section>
 
