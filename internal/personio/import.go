@@ -109,11 +109,16 @@ func (s *Syncer) Preflight(ctx context.Context, day time.Time) (*SyncPreflight, 
 		}
 	}
 
+	// ExistingPeriods is preallocated as an empty slice (not nil) so the
+	// JSON payload sent to the frontend always carries `[]` instead of
+	// `null` — the TS interface declares it as a non-nullable array, and
+	// `.length` access would otherwise crash on Personio-clean days.
 	out := &SyncPreflight{
-		Day:       dateStr,
-		DayID:     strings.TrimSpace(tc.DayID),
-		State:     tc.State,
-		Trackable: tc.Trackable(),
+		Day:             dateStr,
+		DayID:           strings.TrimSpace(tc.DayID),
+		State:           tc.State,
+		Trackable:       tc.Trackable(),
+		ExistingPeriods: []PreflightPeriod{},
 	}
 	for _, p := range tc.Periods {
 		if !strings.EqualFold(p.Type, "work") {

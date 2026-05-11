@@ -204,6 +204,16 @@ func TestPreflight_NoExistingPeriods(t *testing.T) {
 	if pre.DayID != "day-uuid" {
 		t.Errorf("expected day_id=day-uuid, got %q", pre.DayID)
 	}
+	// Regression: ExistingPeriods must serialize as [] (not null) so the
+	// frontend's `existing_periods.length` access does not blow up on
+	// Personio-clean days.
+	buf, err := json.Marshal(pre)
+	if err != nil {
+		t.Fatalf("marshal preflight: %v", err)
+	}
+	if !strings.Contains(string(buf), `"existing_periods":[]`) {
+		t.Errorf("expected existing_periods to marshal as [], got %s", buf)
+	}
 }
 
 func TestPreflight_BreakPeriodsIgnored(t *testing.T) {
