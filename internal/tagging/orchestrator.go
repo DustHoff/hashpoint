@@ -60,7 +60,21 @@ type Orchestrator struct {
 	// the focused process to potentially open a regular openAuto or
 	// resume a paused manual.
 	openCommAuto *autoState
+
+	// blockClosedHook fires after every block transitions from open to
+	// closed (logBlockClosed). Used by the App layer to trigger oncall.
+	// Recheck without coupling the orchestrator to the plugin system.
+	// Dispatched in a goroutine so downstream I/O does not extend the
+	// orchestrator's mu.Lock window. Set once via SetBlockClosedHook.
+	hookMu          sync.RWMutex
+	blockClosedHook BlockClosedHook
 }
+
+// BlockClosedHook is invoked once per block-close transition. The blockID
+// is the only argument because callers (recheck) re-read the block's
+// current state from the repo — passing a stale snapshot through the
+// callback would race with subsequent edits.
+type BlockClosedHook func(ctx context.Context, blockID int64)
 
 type focusInfo struct{ name, title string }
 
@@ -133,6 +147,14 @@ func NewOrchestrator(
 	}
 }
 
+// SetBlockClosedHook installs the callback fired after every block-close
+// transition. Pass nil to clear. Safe to call at any time.
+func (o *Orchestrator) SetBlockClosedHook(h BlockClosedHook) {
+	o.hookMu.Lock()
+	o.blockClosedHook = h
+	o.hookMu.Unlock()
+}
+
 // SetClock overrides the wall-clock source (for tests).
 func (o *Orchestrator) SetClock(f func() time.Time) {
 	o.mu.Lock()
@@ -173,6 +195,18 @@ func (o *Orchestrator) logBlockClosed(b storage.TagBlock, end time.Time, reason 
 	}
 	args = append(args, extra...)
 	o.logger.Info("tag block closed", args...)
+
+	// Notify subscribers (e.g. the oncall Recheck hook). Dispatched in a
+	// goroutine so downstream I/O does not extend the o.mu critical
+	// section the caller is holding. Hook is read under hookMu, not
+	// o.mu, so a hook that wants to call back into the orchestrator
+	// will not deadlock.
+	o.hookMu.RLock()
+	h := o.blockClosedHook
+	o.hookMu.RUnlock()
+	if h != nil {
+		go h(context.Background(), b.ID)
+	}
 }
 
 // Recover closes every tag block left open by a previous crash. Manual
