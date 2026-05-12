@@ -240,24 +240,33 @@ export interface OnCallDocChangedPayload {
 
 // Plugin admin -----------------------------------------------------------
 
-export type PluginState = "running" | "failed" | "disabled";
+// PluginState mirrors internal/plugin.PluginState. `needs_config` is the
+// state the host parks a plugin in when its manifest declares required
+// fields the user has not yet filled in — the subprocess is not running
+// and the inbox skips it for fan-outs.
+export type PluginState =
+  | "running"
+  | "needs_config"
+  | "failed"
+  | "disabled";
+
 export type PluginCapability = "oncall_documentation";
+
+// FieldType discriminates input rendering + persistence strategy.
+// `password` values are encrypted at rest and never round-tripped to
+// the UI — the API surfaces a `secrets_set` flag so the form can hint
+// "saved" without exposing the cleartext.
+export type FieldType = "text" | "password" | "boolean";
 
 export interface ManifestField {
   label: string;
-  type: string;
+  type: FieldType;
   required: boolean;
   default?: string;
 }
 
-export interface ManifestSecret {
-  label: string;
-  required: boolean;
-}
-
 export interface ManifestConfigSchema {
   fields: Record<string, ManifestField>;
-  secrets: Record<string, ManifestSecret>;
 }
 
 export interface PluginInfo {
@@ -267,5 +276,16 @@ export interface PluginInfo {
   capabilities: PluginCapability[];
   state: PluginState;
   last_error?: string;
+  enabled: boolean;
+  missing_fields?: string[];
   config_schema: ManifestConfigSchema;
+}
+
+// PluginConfigView is the payload returned by api.pluginGetConfig.
+// `fields` carries the plain values (text / boolean as strings);
+// `secrets_set[key] === true` means a password is persisted but its
+// cleartext is intentionally absent so the UI can't leak it.
+export interface PluginConfigView {
+  fields: Record<string, string>;
+  secrets_set: Record<string, boolean>;
 }

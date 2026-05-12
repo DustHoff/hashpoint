@@ -9,6 +9,7 @@ import type {
   OnCallDocView,
   OnCallListFilter,
   PersonioStatus,
+  PluginConfigView,
   PluginInfo,
   ProcessTrack,
   QuickTagSlot,
@@ -171,13 +172,15 @@ export const api = {
   // Plugin admin -------------------------------------------------------
   pluginList: () => bridge().PluginList() as Promise<PluginInfo[]>,
   pluginGetConfig: (name: string) =>
-    bridge().PluginGetConfig(name) as Promise<Record<string, string>>,
+    bridge().PluginGetConfig(name) as Promise<PluginConfigView>,
   pluginSetConfig: (name: string, fields: Record<string, string>) =>
     bridge().PluginSetConfig(name, fields) as Promise<void>,
   pluginSetSecret: (name: string, key: string, value: string) =>
     bridge().PluginSetSecret(name, key, value) as Promise<void>,
   pluginDeleteSecret: (name: string, key: string) =>
     bridge().PluginDeleteSecret(name, key) as Promise<void>,
+  pluginSetEnabled: (name: string, enabled: boolean) =>
+    bridge().PluginSetEnabled(name, enabled) as Promise<void>,
   pluginReload: (name: string) =>
     bridge().PluginReload(name) as Promise<void>,
 
