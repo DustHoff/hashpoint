@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import Timeline from "./components/Timeline";
+import OnCall from "./components/OnCall";
 import TagManager from "./components/TagManager";
 import RuleManager from "./components/RuleManager";
 import Settings from "./components/Settings";
@@ -11,10 +12,18 @@ import QuickTagPicker from "./components/QuickTagPicker";
 import SyncConflictModal from "./components/SyncConflictModal";
 import type { SyncPreflight } from "./types";
 
-type Tab = "timeline" | "tags" | "rules" | "settings" | "help" | "about";
+type Tab =
+  | "timeline"
+  | "oncall"
+  | "tags"
+  | "rules"
+  | "settings"
+  | "help"
+  | "about";
 
 const tabs: { id: Tab; label: string }[] = [
   { id: "timeline", label: "Zeitachse" },
+  { id: "oncall", label: "Rufbereitschaft" },
   { id: "tags", label: "Tags" },
   { id: "rules", label: "Auto-Tagging" },
   { id: "settings", label: "Einstellungen" },
@@ -154,6 +163,7 @@ export default function App() {
       )}
       <main className="flex-1 overflow-auto p-4">
         {tab === "timeline" && <Timeline />}
+        {tab === "oncall" && <OnCall />}
         {tab === "tags" && <TagManager />}
         {tab === "rules" && <RuleManager />}
         {tab === "settings" && <Settings />}

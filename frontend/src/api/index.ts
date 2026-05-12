@@ -5,7 +5,11 @@ import type {
   AppConfig,
   EntraStatus,
   ImportResult,
+  OnCallDocDraft,
+  OnCallDocView,
+  OnCallListFilter,
   PersonioStatus,
+  PluginInfo,
   ProcessTrack,
   QuickTagSlot,
   Rule,
@@ -151,6 +155,31 @@ export const api = {
   entraStatus: () => bridge().EntraStatus() as Promise<EntraStatus>,
   entraLogin: () => bridge().EntraLogin() as Promise<void>,
   entraLogout: () => bridge().EntraLogout() as Promise<void>,
+
+  // On-call documentation ----------------------------------------------
+  onCallDocList: (filter: OnCallListFilter = {}) =>
+    bridge().OnCallDocList(filter) as Promise<OnCallDocView[]>,
+  onCallDocGet: (id: number) =>
+    bridge().OnCallDocGet(id) as Promise<OnCallDocView | null>,
+  onCallDocSave: (id: number, draft: OnCallDocDraft) =>
+    bridge().OnCallDocSave(id, draft) as Promise<void>,
+  onCallDocSubmit: (id: number) =>
+    bridge().OnCallDocSubmit(id) as Promise<void>,
+  onCallDocDismiss: (id: number) =>
+    bridge().OnCallDocDismiss(id) as Promise<void>,
+
+  // Plugin admin -------------------------------------------------------
+  pluginList: () => bridge().PluginList() as Promise<PluginInfo[]>,
+  pluginGetConfig: (name: string) =>
+    bridge().PluginGetConfig(name) as Promise<Record<string, string>>,
+  pluginSetConfig: (name: string, fields: Record<string, string>) =>
+    bridge().PluginSetConfig(name, fields) as Promise<void>,
+  pluginSetSecret: (name: string, key: string, value: string) =>
+    bridge().PluginSetSecret(name, key, value) as Promise<void>,
+  pluginDeleteSecret: (name: string, key: string) =>
+    bridge().PluginDeleteSecret(name, key) as Promise<void>,
+  pluginReload: (name: string) =>
+    bridge().PluginReload(name) as Promise<void>,
 
   // Log forwarding ------------------------------------------------------
   logFrontend: (

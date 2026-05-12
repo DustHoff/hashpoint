@@ -168,3 +168,104 @@ export interface EntraStatus {
   client_id?: string;
   reason?: string;
 }
+
+// On-call ("Rufbereitschaft") --------------------------------------------
+
+// Status discriminators must match storage.OnCallDocStatus + the literal
+// strings the Go side serialises. Treat as opaque on the frontend; the
+// roll-up is computed server-side from the per-plugin Submissions rows.
+export type OnCallDocStatus =
+  | "draft"
+  | "pending"
+  | "submitted"
+  | "partial"
+  | "failed";
+
+export type OnCallIncidentType =
+  | ""
+  | "planned_maintenance"
+  | "service_disruption";
+
+export interface OnCallSubmissionView {
+  plugin_name: string;
+  status: "pending" | "submitted" | "failed";
+  external_ref?: string;
+  external_url?: string;
+  last_error?: string;
+  submitted_at?: string;
+}
+
+export interface OnCallDocView {
+  id: number;
+  block_id: number;
+  start_time: string; // RFC3339 UTC
+  end_time: string;
+  tag_id: number;
+  tag_name: string;
+  tag_at_creation: number;
+  stale: boolean;
+  application: string;
+  incident_type: OnCallIncidentType;
+  solution: string;
+  status: OnCallDocStatus;
+  submissions?: OnCallSubmissionView[];
+}
+
+export interface OnCallDocDraft {
+  application: string;
+  incident_type: OnCallIncidentType;
+  solution: string;
+}
+
+export interface OnCallListFilter {
+  status?: OnCallDocStatus;
+  from?: string;
+  to?: string;
+  include_stale?: boolean;
+}
+
+// Per-plugin submit result event payload.
+export interface OnCallSubmitResultPayload {
+  doc_id: number;
+  plugin_name: string;
+  status: "submitted" | "failed";
+  external_ref?: string;
+  external_url?: string;
+  error_message?: string;
+}
+
+export interface OnCallDocChangedPayload {
+  doc_id: number;
+}
+
+// Plugin admin -----------------------------------------------------------
+
+export type PluginState = "running" | "failed" | "disabled";
+export type PluginCapability = "oncall_documentation";
+
+export interface ManifestField {
+  label: string;
+  type: string;
+  required: boolean;
+  default?: string;
+}
+
+export interface ManifestSecret {
+  label: string;
+  required: boolean;
+}
+
+export interface ManifestConfigSchema {
+  fields: Record<string, ManifestField>;
+  secrets: Record<string, ManifestSecret>;
+}
+
+export interface PluginInfo {
+  name: string;
+  version: string;
+  description: string;
+  capabilities: PluginCapability[];
+  state: PluginState;
+  last_error?: string;
+  config_schema: ManifestConfigSchema;
+}
