@@ -19,6 +19,7 @@ import (
 	"github.com/onesi/hashpoint/internal/entra"
 	"github.com/onesi/hashpoint/internal/logging"
 	"github.com/onesi/hashpoint/internal/personio"
+	pluginhost "github.com/onesi/hashpoint/internal/plugin"
 	"github.com/onesi/hashpoint/internal/storage"
 	"github.com/onesi/hashpoint/internal/tagging"
 	"github.com/onesi/hashpoint/internal/tracker"
@@ -95,6 +96,7 @@ func run() error {
 	tags := storage.NewTagRepo(db)
 	rules := storage.NewRuleRepo(db)
 	settings := storage.NewSettingsRepo(db)
+	oncallRepo := storage.NewOnCallRepo(db)
 
 	orchestrator := tagging.NewOrchestrator(tagBlocks, tracks, rules, slog.Default())
 	orchestrator.SetGranularity(cfg.Tracking.TagBlockGranularity())
@@ -152,11 +154,14 @@ func run() error {
 		Tags:         tags,
 		Rules:        rules,
 		Settings:     settings,
+		OnCall:       oncallRepo,
 		Tracker:      trk,
 		Orchestrator: orchestrator,
 		Sessions:     sessionStore,
 		SyncerFor:    syncerFor,
 		EntraFor:     entraFor,
+		PluginsDir:   paths.PluginsDir,
+		Secrets:      pluginhost.WinCredStore{},
 		ConfigPath:   paths.ConfigFile,
 		Config:       cfg,
 		OnConfigSet: func(c *config.Config) error {

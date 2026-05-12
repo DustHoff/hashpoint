@@ -16,6 +16,7 @@ import (
 	"github.com/onesi/hashpoint/internal/config"
 	"github.com/onesi/hashpoint/internal/entra"
 	"github.com/onesi/hashpoint/internal/personio"
+	pluginhost "github.com/onesi/hashpoint/internal/plugin"
 	"github.com/onesi/hashpoint/internal/storage"
 	"github.com/onesi/hashpoint/internal/tagging"
 	"github.com/onesi/hashpoint/internal/tracker"
@@ -108,9 +109,19 @@ type Deps struct {
 	Tags         storage.TagRepository
 	Rules        storage.RuleRepository
 	Settings     storage.SettingsRepository
+	OnCall       storage.OnCallRepository
 	Tracker      *tracker.Tracker
 	Orchestrator *tagging.Orchestrator
 	Sessions     personio.SessionStore
+	// PluginsDir is where Hashpoint scans for plugin binaries. Empty ⇒
+	// the plugin system is disabled (no Host is constructed; oncall doc
+	// submissions silently fail to "no plugin available", per product
+	// decision: doc stays in draft).
+	PluginsDir string
+	// Secrets is the SecretStore the plugin Host uses for redeeming
+	// SecretHandles. Production wires plugin.WinCredStore{}; tests
+	// inject plugin.NewInMemorySecretStore().
+	Secrets pluginhost.SecretStore
 	// SyncerFor returns a Syncer wired against the given session, or nil if
 	// the session is not usable (e.g. tenant unset). Constructed lazily so
 	// session changes from the UI take effect immediately.
@@ -146,6 +157,11 @@ type App struct {
 	entraMgr entra.Manager
 
 	quickTagState quickTagWindowState
+
+	// pluginHost is the live plugin manager — constructed in New() iff
+	// deps.PluginsDir is non-empty. nil otherwise so the OnCall* methods
+	// can short-circuit cleanly when the feature is disabled.
+	pluginHost *pluginhost.Host
 }
 
 // quickTagWindowState captures the main-window placement before the
@@ -185,6 +201,27 @@ func New(deps Deps) *App {
 			a.entraMgr = mgr
 		}
 	}
+
+	// Construct the plugin host if a plugins directory was provided.
+	// Wires App as the FieldsProvider so plugins pick up their
+	// config.toml [plugins.<name>] section automatically. The host is
+	// not started here — Startup() launches plugins in a goroutine.
+	if deps.PluginsDir != "" && deps.Secrets != nil {
+		a.pluginHost = pluginhost.NewHost(pluginhost.HostDeps{
+			Logger:     a.logger,
+			PluginsDir: deps.PluginsDir,
+			Secrets:    deps.Secrets,
+			Fields:     pluginFieldsAdapter{app: a},
+		})
+	}
+
+	// Wire the orchestrator's block-closed hook to the oncall Recheck
+	// pipeline. The hook is best-effort — failures are logged, not
+	// surfaced — because tagging operations must not be blocked by
+	// downstream plugin bookkeeping.
+	if deps.Orchestrator != nil {
+		deps.Orchestrator.SetBlockClosedHook(a.onBlockClosedForOnCall)
+	}
 	return a
 }
 
@@ -210,6 +247,19 @@ func (a *App) Startup(ctx context.Context) {
 		if err := a.deps.Orchestrator.Recover(ctx); err != nil {
 			a.logger.Warn("startup: orchestrator recover failed", "err", err)
 		}
+	}
+
+	// Launch installed plugins in a detached goroutine. Each plugin
+	// starts its own subprocess + handshake, which can take a noticeable
+	// fraction of a second; we deliberately don't block the main window
+	// behind it. Failures are recorded on the PluginInfo for the
+	// settings UI but never propagate up.
+	if a.pluginHost != nil {
+		go func() {
+			if err := a.pluginHost.Start(ctx); err != nil {
+				a.logger.Warn("plugin host start failed", "err", err)
+			}
+		}()
 	}
 
 	// Background goroutine: previous-day Personio sync. Runs detached so
@@ -345,7 +395,13 @@ func (a *App) emitStartupConflict(pre *personio.SyncPreflight) {
 
 // Shutdown is invoked by Wails on window close. Tracker shutdown is handled
 // in main; nothing to do here.
-func (a *App) Shutdown(_ context.Context) {}
+func (a *App) Shutdown(ctx context.Context) {
+	if a.pluginHost != nil {
+		if err := a.pluginHost.Stop(ctx); err != nil {
+			a.logger.Warn("plugin host stop failed", "err", err)
+		}
+	}
+}
 
 // ShowWindow brings the Wails main window to the foreground.
 func (a *App) ShowWindow() {
@@ -534,7 +590,9 @@ func (a *App) TagBlocksBetween(fromRFC3339, toRFC3339 string) ([]storage.TagBloc
 
 // CreateManualTagRange tags the given time range manually. Snaps to
 // granularity. Trims/splits/deletes auto-tag blocks the range overlaps;
-// rejects overlap with existing manual blocks.
+// rejects overlap with existing manual blocks. After the orchestrator
+// commits, recheckOnCallOverlapping reconciles any blocks the range
+// touched so a freshly-created off-hours block enqueues its doc.
 func (a *App) CreateManualTagRange(startRFC3339, endRFC3339 string, tagID int64, description string) error {
 	start, err := time.Parse(time.RFC3339, startRFC3339)
 	if err != nil {
@@ -547,12 +605,19 @@ func (a *App) CreateManualTagRange(startRFC3339, endRFC3339 string, tagID int64,
 	if a.deps.Orchestrator == nil {
 		return errors.New("orchestrator not configured")
 	}
-	return a.deps.Orchestrator.CreateManualRange(a.ctx, tagID, description, start.UTC(), end.UTC())
+	if err := a.deps.Orchestrator.CreateManualRange(a.ctx, tagID, description, start.UTC(), end.UTC()); err != nil {
+		return err
+	}
+	a.recheckOnCallOverlapping(a.ctx, start.UTC(), end.UTC())
+	return nil
 }
 
 // ResizeTagBlock changes the start and end of a closed tag block. The new
 // range snaps to granularity and is rejected if it would overlap another
-// tag block. Auto-tag blocks are promoted to manual on resize.
+// tag block. Auto-tag blocks are promoted to manual on resize. After a
+// successful resize the block's OnCall doc may need to be marked stale
+// (block moved fully into working hours) or freshly enqueued (block
+// moved into off-hours); recheckOnCallByID handles both.
 func (a *App) ResizeTagBlock(id int64, startRFC3339, endRFC3339 string) error {
 	a.logger.Info("app: ResizeTagBlock", "id", id, "start", startRFC3339, "end", endRFC3339)
 	start, err := time.Parse(time.RFC3339, startRFC3339)
@@ -566,7 +631,11 @@ func (a *App) ResizeTagBlock(id int64, startRFC3339, endRFC3339 string) error {
 	if a.deps.Orchestrator == nil {
 		return errors.New("orchestrator not configured")
 	}
-	return a.deps.Orchestrator.ResizeBlock(a.ctx, id, start.UTC(), end.UTC())
+	if err := a.deps.Orchestrator.ResizeBlock(a.ctx, id, start.UTC(), end.UTC()); err != nil {
+		return err
+	}
+	a.recheckOnCallByID(a.ctx, id)
+	return nil
 }
 
 // SetTagBlockDescription updates the description on a tag block.
@@ -579,12 +648,18 @@ func (a *App) SetTagBlockDescription(id int64, description string) error {
 	return a.deps.TagBlocks.SetDescription(a.ctx, id, ptr)
 }
 
-// SetTagBlockTag re-points an existing tag block to a different tag.
+// SetTagBlockTag re-points an existing tag block to a different tag. The
+// block's OnCall doc may transition stale↔active if the new tag is in/out
+// of the configured on-call set; recheckOnCallByID handles both.
 func (a *App) SetTagBlockTag(id, tagID int64) error {
 	if tagID <= 0 {
 		return fmt.Errorf("invalid tag id: %d", tagID)
 	}
-	return a.deps.TagBlocks.SetTag(a.ctx, id, tagID)
+	if err := a.deps.TagBlocks.SetTag(a.ctx, id, tagID); err != nil {
+		return err
+	}
+	a.recheckOnCallByID(a.ctx, id)
+	return nil
 }
 
 // DeleteTagBlock removes a tag block.
