@@ -126,6 +126,44 @@ type SettingsRepository interface {
 	Delete(ctx context.Context, key string) error
 }
 
+// PluginSettingsRepository persists per-plugin configuration:
+//
+//   - plugin_state holds the user-controlled enable flag. A plugin that
+//     has never been touched (no row) defaults to enabled, so newly
+//     discovered plugins run on first start without an opt-in step.
+//   - plugin_settings holds the user-entered config values. Rows with
+//     is_secret=1 are stored encrypted (DPAPI in production) and are
+//     decrypted on read so callers always work with cleartext.
+//
+// The split between state and settings tables is deliberate: a
+// disable→enable cycle preserves previously-entered field values
+// because they sit in a different table than the toggle.
+type PluginSettingsRepository interface {
+	// GetEnabled returns whether the plugin is currently enabled. A
+	// plugin with no row defaults to true.
+	GetEnabled(ctx context.Context, name string) (bool, error)
+	// SetEnabled upserts the state row.
+	SetEnabled(ctx context.Context, name string, enabled bool) error
+	// GetFields returns the plain and secret values for the plugin's
+	// settings. Both maps are non-nil even when empty; secret values
+	// are decrypted in-place.
+	GetFields(ctx context.Context, name string) (plain map[string]string, secrets map[string]string, err error)
+	// GetSecret returns the decrypted value for a single secret key,
+	// with found=false when the row is absent. Cheaper than GetFields
+	// when callers only need one value.
+	GetSecret(ctx context.Context, name, key string) (value string, found bool, err error)
+	// SetField upserts a plain field.
+	SetField(ctx context.Context, name, key, value string) error
+	// SetSecretField upserts a value that is encrypted at rest.
+	SetSecretField(ctx context.Context, name, key, value string) error
+	// DeleteField removes one row (plain or secret). Missing rows are
+	// not an error.
+	DeleteField(ctx context.Context, name, key string) error
+	// Clear removes every row for the plugin (settings + state). Used
+	// when a plugin is uninstalled.
+	Clear(ctx context.Context, name string) error
+}
+
 // OnCallFilter restricts OnCallRepository.List to a slice of the inbox.
 // A nil pointer means "no filter on that dimension". An empty IncludeStale
 // false means stale rows are excluded (the inbox default); set to true to
