@@ -31,6 +31,9 @@ coverage.html
 .vscode/
 *.iml
 
+# Claude Code local tool settings
+.claude/
+
 # OS
 Thumbs.db
 .DS_Store
