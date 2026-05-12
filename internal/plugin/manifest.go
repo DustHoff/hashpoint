@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/onesi/hashpoint/internal/plugin/sdk"
 )
 
 // Manifest is the contents of <plugin-dir>/manifest.toml. The file
@@ -35,33 +36,31 @@ type Manifest struct {
 	Description string `toml:"description"`
 	// Capabilities are the sdk.Capability strings the plugin advertises.
 	Capabilities []string `toml:"capabilities"`
-	// ConfigSchema describes the per-plugin TOML config the user is
-	// expected to fill in via the settings UI.
+	// ConfigSchema describes the per-plugin settings the user fills in
+	// via the Plugins tab. Values are persisted in the plugin_settings
+	// table; password-typed fields are encrypted at rest.
 	ConfigSchema ManifestConfigSchema `toml:"config_schema"`
 }
 
-// ManifestConfigSchema is the form-shape the settings UI renders. Fields
-// are non-secret TOML values stored in config.toml [plugins.<name>];
-// Secrets are wincred-backed and resolved via SecretHandles.
+// ManifestConfigSchema is the form shape the settings UI renders. There
+// is intentionally no separate "secrets" map: every field — secret or
+// not — lives here, distinguished by its Type. The host derives
+// is_secret from sdk.FieldTypePassword when persisting.
 type ManifestConfigSchema struct {
-	Fields  map[string]ManifestField  `toml:"fields"  json:"fields"`
-	Secrets map[string]ManifestSecret `toml:"secrets" json:"secrets"`
+	Fields map[string]ManifestField `toml:"fields" json:"fields"`
 }
 
-// ManifestField describes one non-secret config value.
+// ManifestField describes one config field. Type drives both the UI
+// input element AND the persistence + delivery strategy:
+//
+//   - text / boolean → PluginConfig.Fields (plain in DB)
+//   - password       → PluginConfig.Secrets (encrypted in DB, surfaced
+//     to the plugin as a SecretHandle the plugin redeems on demand)
 type ManifestField struct {
-	Label    string `toml:"label"    json:"label"`
-	Type     string `toml:"type"     json:"type"` // "string" | "bool" | "int" — host treats unknown as "string"
-	Required bool   `toml:"required" json:"required"`
-	Default  string `toml:"default"  json:"default,omitempty"`
-}
-
-// ManifestSecret describes one secret value the plugin needs. Stored in
-// Windows Credential Manager under target
-// "TimeTracker:plugin:<plugin-name>:<key>".
-type ManifestSecret struct {
-	Label    string `toml:"label"    json:"label"`
-	Required bool   `toml:"required" json:"required"`
+	Label    string        `toml:"label"    json:"label"`
+	Type     sdk.FieldType `toml:"type"     json:"type"`
+	Required bool          `toml:"required" json:"required"`
+	Default  string        `toml:"default"  json:"default,omitempty"`
 }
 
 // ErrManifestMismatch is returned when manifest.name disagrees with the
@@ -96,8 +95,11 @@ func LoadManifest(dir string) (*Manifest, error) {
 	if m.ConfigSchema.Fields == nil {
 		m.ConfigSchema.Fields = map[string]ManifestField{}
 	}
-	if m.ConfigSchema.Secrets == nil {
-		m.ConfigSchema.Secrets = map[string]ManifestSecret{}
+	for key, f := range m.ConfigSchema.Fields {
+		if !sdk.IsValidFieldType(f.Type) {
+			return nil, fmt.Errorf("manifest: field %q has unknown type %q (want one of: %s)",
+				key, f.Type, sdk.SupportedFieldTypes())
+		}
 	}
 	return &m, nil
 }

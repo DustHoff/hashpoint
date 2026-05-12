@@ -30,41 +30,58 @@ const (
 	// StateRunning means the plugin process is alive and Configure
 	// succeeded — it can serve any capability it advertises.
 	StateRunning PluginState = "running"
+	// StateNeedsConfig means the plugin's manifest declares one or more
+	// required fields that the user has not yet filled in. The subprocess
+	// is never started in this state; capability fan-outs skip the
+	// plugin. Filling the missing fields + saving triggers a Reload
+	// which can promote the plugin to StateRunning.
+	StateNeedsConfig PluginState = "needs_config"
 	// StateFailed means we tried to launch / init / configure the plugin
 	// and something went wrong. LastError carries the cause.
 	StateFailed PluginState = "failed"
-	// StateDisabled is reserved for a future "user toggled this off"
-	// switch. Not produced today.
+	// StateDisabled means the user toggled the plugin off via the
+	// settings UI. The subprocess is not running and capability fan-outs
+	// skip it. The enable flag is persisted in plugin_state and survives
+	// an app restart.
 	StateDisabled PluginState = "disabled"
 )
 
 // PluginInfo is the read-model the settings UI sees. Returned from
 // Host.List(); never holds RPC handles.
 type PluginInfo struct {
-	Name         string               `json:"name"`
-	Version      string               `json:"version"`
-	Description  string               `json:"description"`
-	Capabilities []sdk.Capability     `json:"capabilities"`
-	State        PluginState          `json:"state"`
-	LastError    string               `json:"last_error,omitempty"`
-	ConfigSchema ManifestConfigSchema `json:"config_schema"`
+	Name          string               `json:"name"`
+	Version       string               `json:"version"`
+	Description   string               `json:"description"`
+	Capabilities  []sdk.Capability     `json:"capabilities"`
+	State         PluginState          `json:"state"`
+	LastError     string               `json:"last_error,omitempty"`
+	Enabled       bool                 `json:"enabled"`
+	MissingFields []string             `json:"missing_fields,omitempty"`
+	ConfigSchema  ManifestConfigSchema `json:"config_schema"`
 }
 
-// FieldsProvider is implemented by the App layer to feed per-plugin
-// fields (non-secret config values) from config.toml [plugins.<name>]
-// into the host without the host taking a direct dep on internal/config.
-type FieldsProvider interface {
-	// PluginFields returns a fresh copy of the field map for pluginName.
-	// Returning nil is equivalent to returning an empty map.
-	PluginFields(pluginName string) map[string]string
+// SettingsStore is the persistence surface the host needs for per-plugin
+// configuration and the enable flag. Satisfied at runtime by
+// storage.PluginSettingsRepo; tests can inject an in-memory fake.
+//
+// Decoupling via a local interface keeps internal/plugin independent of
+// internal/storage — the host doesn't care how settings are stored, just
+// that it can read/write them.
+type SettingsStore interface {
+	GetEnabled(ctx context.Context, name string) (bool, error)
+	SetEnabled(ctx context.Context, name string, enabled bool) error
+	GetFields(ctx context.Context, name string) (plain map[string]string, secrets map[string]string, err error)
+	GetSecret(ctx context.Context, name, key string) (value string, found bool, err error)
+	SetField(ctx context.Context, name, key, value string) error
+	SetSecretField(ctx context.Context, name, key, value string) error
+	DeleteField(ctx context.Context, name, key string) error
 }
 
 // HostDeps wires the Host to its surrounding environment.
 type HostDeps struct {
 	Logger     *slog.Logger
 	PluginsDir string
-	Secrets    SecretStore
-	Fields     FieldsProvider
+	Settings   SettingsStore
 	// SubmitTimeout caps each per-plugin Submit() call during
 	// SubmitOnCallDoc fan-out. Zero ⇒ defaultSubmitTimeout.
 	SubmitTimeout time.Duration
@@ -84,7 +101,7 @@ type Host struct {
 	handles *handleRegistry
 }
 
-// pluginInstance is the host's internal view of one running plugin.
+// pluginInstance is the host's internal view of one discovered plugin.
 // State transitions go through Host methods only — never mutate fields
 // directly outside of host.go.
 type pluginInstance struct {
@@ -93,6 +110,7 @@ type pluginInstance struct {
 
 	state   PluginState
 	lastErr string
+	missing []string // populated only when state == StateNeedsConfig
 
 	// running-only fields (nil when state != StateRunning)
 	client    *hplugin.Client
@@ -126,12 +144,13 @@ func NewHost(deps HostDeps) *Host {
 	}
 }
 
-// Start discovers every plugin directory under deps.PluginsDir, validates
-// its manifest, launches the subprocess and walks the Init→Metadata→
-// Configure handshake. A failure on any one plugin is logged and the
-// plugin is recorded in StateFailed; Start returns nil unless something
-// catastrophic happens (e.g. PluginsDir unreadable for a reason other
-// than "missing").
+// Start discovers every plugin directory under deps.PluginsDir. For each:
+// if the persisted enabled flag is false the plugin is recorded in
+// StateDisabled (manifest loaded for the UI, no subprocess); otherwise
+// the launch handshake runs and the plugin lands in StateRunning,
+// StateNeedsConfig, or StateFailed depending on the outcome. A failure
+// on any one plugin never affects the others — the host catalogs the
+// problem and moves on.
 func (h *Host) Start(ctx context.Context) error {
 	entries, err := os.ReadDir(h.deps.PluginsDir)
 	if err != nil {
@@ -146,15 +165,27 @@ func (h *Host) Start(ctx context.Context) error {
 		if !e.IsDir() {
 			continue
 		}
-		if err := h.launch(ctx, e.Name()); err != nil {
+		name := e.Name()
+		enabled, err := h.deps.Settings.GetEnabled(ctx, name)
+		if err != nil {
+			h.log.Warn("read plugin enabled failed; treating as enabled",
+				"name", name, "err", err)
+			enabled = true
+		}
+		if !enabled {
+			h.recordDisabled(name)
+			continue
+		}
+		if err := h.launch(ctx, name); err != nil {
 			h.log.Warn("plugin launch failed",
-				"name", e.Name(), "err", err)
+				"name", name, "err", err)
 		}
 	}
 	return nil
 }
 
-// Stop kills every running plugin subprocess. Idempotent.
+// Stop kills every running plugin subprocess. Idempotent. Used at app
+// shutdown — after Stop the host is unusable.
 func (h *Host) Stop(_ context.Context) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -163,7 +194,6 @@ func (h *Host) Stop(_ context.Context) error {
 			p.client.Kill()
 		}
 		h.handles.revokeFor(name)
-		p.state = StateDisabled
 		p.client = nil
 		p.rpcClient = nil
 		p.core = nil
@@ -172,9 +202,10 @@ func (h *Host) Stop(_ context.Context) error {
 	return nil
 }
 
-// Reload tears down and re-launches a single plugin. Used after a config
-// or secret change. Reloading a never-launched name attempts a fresh
-// launch.
+// Reload tears down the named plugin's subprocess (if running) and
+// re-evaluates from scratch: persisted enable flag, manifest, required
+// fields, then either recordDisabled, recordNeedsConfig, or a fresh
+// launch. Used after SetConfig / SetSecret / SetEnabled.
 func (h *Host) Reload(ctx context.Context, name string) error {
 	h.mu.Lock()
 	if p, ok := h.plugins[name]; ok {
@@ -185,6 +216,15 @@ func (h *Host) Reload(ctx context.Context, name string) error {
 		delete(h.plugins, name)
 	}
 	h.mu.Unlock()
+
+	enabled, err := h.deps.Settings.GetEnabled(ctx, name)
+	if err != nil {
+		return fmt.Errorf("read enabled: %w", err)
+	}
+	if !enabled {
+		h.recordDisabled(name)
+		return nil
+	}
 	return h.launch(ctx, name)
 }
 
@@ -220,9 +260,11 @@ type SubmitResult struct {
 }
 
 // SubmitOnCallDoc dispatches doc to every running plugin advertising
-// CapOnCallDocumentation. Each plugin gets its own goroutine with a
-// per-plugin timeout (deps.SubmitTimeout). The sink is invoked once per
-// plugin in arbitrary order.
+// CapOnCallDocumentation. Plugins in any non-running state (disabled,
+// needs_config, failed) are silently skipped — they cannot serve the
+// capability. Each plugin gets its own goroutine with a per-plugin
+// timeout (deps.SubmitTimeout). The sink is invoked once per plugin
+// in arbitrary order.
 //
 // Returns ErrNoOnCallPlugin when no plugin can take the document — the
 // caller treats that as a no-op (doc stays in draft state) per product
@@ -261,16 +303,66 @@ func (h *Host) SubmitOnCallDoc(ctx context.Context, doc sdk.OnCallDocument, sink
 	return nil
 }
 
-// SetSecret persists a per-plugin secret. The plugin is NOT automatically
-// reloaded — callers that need the new value to take effect must call
-// Reload(name).
-func (h *Host) SetSecret(name, key, value string) error {
-	return h.deps.Secrets.Set(name, key, value)
+// SetEnabled persists the user-controlled enable flag and immediately
+// applies it: enabling launches the plugin (or moves it to needs_config
+// when required fields are missing); disabling stops the subprocess.
+func (h *Host) SetEnabled(ctx context.Context, name string, enabled bool) error {
+	if err := h.deps.Settings.SetEnabled(ctx, name, enabled); err != nil {
+		return fmt.Errorf("persist enabled: %w", err)
+	}
+	return h.Reload(ctx, name)
 }
 
-// DeleteSecret removes a per-plugin secret. Same reload caveat as SetSecret.
-func (h *Host) DeleteSecret(name, key string) error {
-	return h.deps.Secrets.Delete(name, key)
+// SetConfig replaces the plain (text + boolean) fields for the plugin
+// with the supplied map, then reloads. Password fields are managed
+// separately via SetSecret / DeleteSecret — values supplied here for
+// password keys are silently ignored. Keys declared in the manifest but
+// absent from the supplied map are deleted from the store (the user
+// cleared the field).
+func (h *Host) SetConfig(ctx context.Context, name string, fields map[string]string) error {
+	h.mu.RLock()
+	inst, ok := h.plugins[name]
+	h.mu.RUnlock()
+	if !ok || inst.manifest == nil {
+		return fmt.Errorf("plugin %q not loaded", name)
+	}
+	for key, f := range inst.manifest.ConfigSchema.Fields {
+		if f.Type == sdk.FieldTypePassword {
+			continue
+		}
+		if val, present := fields[key]; present {
+			if err := h.deps.Settings.SetField(ctx, name, key, val); err != nil {
+				return err
+			}
+		} else {
+			if err := h.deps.Settings.DeleteField(ctx, name, key); err != nil {
+				return err
+			}
+		}
+	}
+	return h.Reload(ctx, name)
+}
+
+// SetSecret persists a single password-typed field (encrypted at rest)
+// and reloads the plugin so the new value takes effect. Empty values
+// are treated as "leave the existing secret alone" — to clear a secret,
+// call DeleteSecret.
+func (h *Host) SetSecret(ctx context.Context, name, key, value string) error {
+	if value == "" {
+		return h.Reload(ctx, name)
+	}
+	if err := h.deps.Settings.SetSecretField(ctx, name, key, value); err != nil {
+		return fmt.Errorf("persist secret: %w", err)
+	}
+	return h.Reload(ctx, name)
+}
+
+// DeleteSecret removes a password-typed field and reloads.
+func (h *Host) DeleteSecret(ctx context.Context, name, key string) error {
+	if err := h.deps.Settings.DeleteField(ctx, name, key); err != nil {
+		return fmt.Errorf("delete secret: %w", err)
+	}
+	return h.Reload(ctx, name)
 }
 
 // --- launch path --------------------------------------------------------
@@ -283,15 +375,28 @@ func (h *Host) launch(ctx context.Context, name string) error {
 		return err
 	}
 	if man.APIVersion != sdk.HostAPIVersion {
-		err := fmt.Errorf("manifest api_version %d != host %d", man.APIVersion, sdk.HostAPIVersion)
-		h.recordFailure(name, man, err)
+		e := fmt.Errorf("manifest api_version %d != host %d", man.APIVersion, sdk.HostAPIVersion)
+		h.recordFailure(name, man, e)
+		return e
+	}
+
+	cfg, missing, err := h.buildConfig(ctx, name, man)
+	if err != nil {
+		h.recordFailure(name, man, fmt.Errorf("build config: %w", err))
 		return err
 	}
+	if len(missing) > 0 {
+		h.recordNeedsConfig(name, man, missing)
+		h.log.Info("plugin parked in needs_config",
+			"name", name, "missing", missing)
+		return nil
+	}
+
 	binPath := filepath.Join(dir, pluginBinaryName(name))
 	if _, err := os.Stat(binPath); err != nil {
-		err := fmt.Errorf("plugin binary missing: %s", binPath)
-		h.recordFailure(name, man, err)
-		return err
+		e := fmt.Errorf("plugin binary missing: %s", binPath)
+		h.recordFailure(name, man, e)
+		return e
 	}
 
 	client := hplugin.NewClient(&hplugin.ClientConfig{
@@ -305,60 +410,59 @@ func (h *Host) launch(ctx context.Context, name string) error {
 	rpcClient, err := client.Client()
 	if err != nil {
 		client.Kill()
-		err := fmt.Errorf("dial plugin: %w", err)
-		h.recordFailure(name, man, err)
-		return err
+		e := fmt.Errorf("dial plugin: %w", err)
+		h.recordFailure(name, man, e)
+		return e
 	}
 
 	rawCore, err := rpcClient.Dispense(sdk.CoreKey)
 	if err != nil {
 		client.Kill()
-		err := fmt.Errorf("dispense core: %w", err)
-		h.recordFailure(name, man, err)
-		return err
+		e := fmt.Errorf("dispense core: %w", err)
+		h.recordFailure(name, man, e)
+		return e
 	}
 	core, ok := rawCore.(sdk.Plugin)
 	if !ok {
 		client.Kill()
-		err := fmt.Errorf("core plugin: unexpected type %T", rawCore)
-		h.recordFailure(name, man, err)
-		return err
+		e := fmt.Errorf("core plugin: unexpected type %T", rawCore)
+		h.recordFailure(name, man, e)
+		return e
 	}
 
 	api := &boundHostAPI{
 		pluginName: name,
 		log:        h.log.With("plugin", name),
 		handles:    h.handles,
-		secrets:    h.deps.Secrets,
+		settings:   h.deps.Settings,
 	}
 	if err := core.Init(ctx, api); err != nil {
 		client.Kill()
-		err := fmt.Errorf("plugin Init: %w", err)
-		h.recordFailure(name, man, err)
-		return err
+		e := fmt.Errorf("plugin Init: %w", err)
+		h.recordFailure(name, man, e)
+		return e
 	}
 
 	meta, err := core.Metadata(ctx)
 	if err != nil {
 		client.Kill()
-		err := fmt.Errorf("plugin Metadata: %w", err)
-		h.recordFailure(name, man, err)
-		return err
+		e := fmt.Errorf("plugin Metadata: %w", err)
+		h.recordFailure(name, man, e)
+		return e
 	}
 	if meta.APIVersion != sdk.HostAPIVersion {
 		client.Kill()
-		err := fmt.Errorf("plugin runtime api_version %d != host %d",
+		e := fmt.Errorf("plugin runtime api_version %d != host %d",
 			meta.APIVersion, sdk.HostAPIVersion)
-		h.recordFailure(name, man, err)
-		return err
+		h.recordFailure(name, man, e)
+		return e
 	}
 
-	cfg := h.buildConfig(name, man)
 	if err := core.Configure(ctx, cfg); err != nil {
 		client.Kill()
-		err := fmt.Errorf("plugin Configure: %w", err)
-		h.recordFailure(name, man, err)
-		return err
+		e := fmt.Errorf("plugin Configure: %w", err)
+		h.recordFailure(name, man, e)
+		return e
 	}
 
 	inst := &pluginInstance{
@@ -418,41 +522,127 @@ func (h *Host) recordFailure(name string, man *Manifest, cause error) {
 	inst.manifest = man
 	inst.state = StateFailed
 	inst.lastErr = cause.Error()
+	inst.missing = nil
 	inst.client = nil
 	inst.rpcClient = nil
 	inst.core = nil
 	inst.onCall = nil
 }
 
-// buildConfig assembles the PluginConfig delivered to Plugin.Configure.
-// Fields come from the user's config.toml [plugins.<name>] section
-// (provided via FieldsProvider) overlaid on top of manifest defaults;
-// Secrets are minted SecretHandles — one per secret key in the manifest.
-func (h *Host) buildConfig(name string, man *Manifest) sdk.PluginConfig {
-	fields := map[string]string{}
-	if h.deps.Fields != nil {
-		for k, v := range h.deps.Fields.PluginFields(name) {
-			fields[k] = v
+// recordNeedsConfig parks a plugin in StateNeedsConfig with the list of
+// required-but-unset field keys. No subprocess is alive in this state.
+func (h *Host) recordNeedsConfig(name string, man *Manifest, missing []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	inst := h.plugins[name]
+	if inst == nil {
+		inst = &pluginInstance{name: name}
+		h.plugins[name] = inst
+	}
+	inst.manifest = man
+	inst.state = StateNeedsConfig
+	inst.lastErr = ""
+	inst.missing = append(inst.missing[:0], missing...)
+	inst.client = nil
+	inst.rpcClient = nil
+	inst.core = nil
+	inst.onCall = nil
+}
+
+// recordDisabled records a plugin in StateDisabled. The manifest is
+// loaded on a best-effort basis so the settings UI can render the
+// plugin's name and version even while it is off.
+func (h *Host) recordDisabled(name string) {
+	dir := filepath.Join(h.deps.PluginsDir, name)
+	man, manErr := LoadManifest(dir)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	inst := h.plugins[name]
+	if inst == nil {
+		inst = &pluginInstance{name: name}
+		h.plugins[name] = inst
+	}
+	if manErr == nil {
+		inst.manifest = man
+		inst.lastErr = ""
+	} else {
+		inst.lastErr = fmt.Sprintf("manifest unreadable: %v", manErr)
+	}
+	inst.state = StateDisabled
+	inst.missing = nil
+	inst.client = nil
+	inst.rpcClient = nil
+	inst.core = nil
+	inst.onCall = nil
+}
+
+// buildConfig assembles the PluginConfig delivered to Plugin.Configure
+// and reports any required fields that are missing. The launch path
+// short-circuits to StateNeedsConfig when missing is non-empty, so the
+// subprocess is never started against an incomplete configuration.
+//
+// SecretHandles are minted only after the missing-fields check passes,
+// to avoid leaking handles into the registry for plugins that will
+// never reach StateRunning.
+func (h *Host) buildConfig(ctx context.Context, name string, man *Manifest) (sdk.PluginConfig, []string, error) {
+	plain, secrets, err := h.deps.Settings.GetFields(ctx, name)
+	if err != nil {
+		return sdk.PluginConfig{}, nil, fmt.Errorf("read plugin fields: %w", err)
+	}
+
+	plainOut := map[string]string{}
+	var passwordKeys []string
+	var missing []string
+
+	for key, f := range man.ConfigSchema.Fields {
+		if f.Type == sdk.FieldTypePassword {
+			if _, ok := secrets[key]; !ok {
+				if f.Required {
+					missing = append(missing, key)
+				}
+				continue
+			}
+			passwordKeys = append(passwordKeys, key)
+			continue
 		}
-	}
-	for k, f := range man.ConfigSchema.Fields {
-		if _, ok := fields[k]; !ok && f.Default != "" {
-			fields[k] = f.Default
+		val, ok := plain[key]
+		if !ok || val == "" {
+			if f.Default != "" {
+				val = f.Default
+				ok = true
+			}
 		}
+		if !ok {
+			if f.Required {
+				missing = append(missing, key)
+			}
+			continue
+		}
+		plainOut[key] = val
 	}
-	secrets := map[string]sdk.SecretHandle{}
-	for k := range man.ConfigSchema.Secrets {
-		secrets[k] = h.handles.mint(name, k)
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		return sdk.PluginConfig{}, missing, nil
 	}
-	return sdk.PluginConfig{Fields: fields, Secrets: secrets}
+
+	cfg := sdk.PluginConfig{
+		Fields:  plainOut,
+		Secrets: map[string]sdk.SecretHandle{},
+	}
+	for _, k := range passwordKeys {
+		cfg.Secrets[k] = h.handles.mint(name, k)
+	}
+	return cfg, nil, nil
 }
 
 // info is the read-model projection of pluginInstance.
 func (p *pluginInstance) info() PluginInfo {
 	out := PluginInfo{
-		Name:      p.name,
-		State:     p.state,
-		LastError: p.lastErr,
+		Name:          p.name,
+		State:         p.state,
+		LastError:     p.lastErr,
+		Enabled:       p.state != StateDisabled,
+		MissingFields: append([]string(nil), p.missing...),
 	}
 	if p.manifest != nil {
 		out.Version = p.manifest.Version

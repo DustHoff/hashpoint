@@ -17,14 +17,15 @@ type boundHostAPI struct {
 	pluginName string
 	log        *slog.Logger
 	handles    *handleRegistry
-	secrets    SecretStore
+	settings   SettingsStore
 }
 
 // RedeemSecret resolves the handle to (plugin, key), confirms the plugin
-// name matches the caller, and returns the plaintext from SecretStore.
-// Returns ErrUnknownSecretHandle for stale or cross-plugin handles —
-// callers should treat that as a non-retryable configuration error.
-func (a *boundHostAPI) RedeemSecret(_ context.Context, h sdk.SecretHandle) (string, error) {
+// name matches the caller, and returns the plaintext from the settings
+// store. Returns ErrUnknownSecretHandle for stale, cross-plugin, or
+// since-deleted secrets — callers should treat that as a non-retryable
+// configuration error.
+func (a *boundHostAPI) RedeemSecret(ctx context.Context, h sdk.SecretHandle) (string, error) {
 	entry, ok := a.handles.lookup(h)
 	if !ok {
 		return "", fmt.Errorf("%w: stale handle", sdk.ErrUnknownSecretHandle)
@@ -37,9 +38,12 @@ func (a *boundHostAPI) RedeemSecret(_ context.Context, h sdk.SecretHandle) (stri
 			"caller", a.pluginName, "handle_owner", entry.pluginName)
 		return "", fmt.Errorf("%w: not owned by caller", sdk.ErrUnknownSecretHandle)
 	}
-	v, err := a.secrets.Get(a.pluginName, entry.secretKey)
+	v, found, err := a.settings.GetSecret(ctx, a.pluginName, entry.secretKey)
 	if err != nil {
 		return "", fmt.Errorf("redeem %s/%s: %w", a.pluginName, entry.secretKey, err)
+	}
+	if !found {
+		return "", fmt.Errorf("%w: secret no longer present", sdk.ErrUnknownSecretHandle)
 	}
 	return v, nil
 }

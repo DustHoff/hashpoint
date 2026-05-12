@@ -38,13 +38,11 @@ type Config struct {
 	Communication CommunicationConfig `toml:"communication" json:"communication"`
 	WorkSchedule  WorkScheduleConfig  `toml:"work_schedule" json:"work_schedule"`
 	OnCall        OnCallConfig        `toml:"on_call"       json:"on_call"`
-	// Plugins is opaque per-plugin field config. Keys match the plugin's
-	// directory name under PluginsDir; values are the {field: value} pairs
-	// the plugin's manifest declares under config_schema.fields. Secrets are
-	// never stored here — they live in Windows Credential Manager under
-	// target "TimeTracker:plugin:<plugin-name>:<secret-key>" and are
-	// surfaced to the plugin via opaque SecretHandles.
-	Plugins map[string]map[string]string `toml:"plugins" json:"plugins"`
+	// Per-plugin configuration is NOT stored in config.toml — it lives
+	// in the plugin_settings table (DPAPI-encrypted for password fields)
+	// and is reached via storage.PluginSettingsRepo. That keeps secret
+	// blobs out of a file users might check into source control by
+	// accident.
 }
 
 // OnCallConfig configures the on-call ("Rufbereitschaft") documentation

@@ -118,10 +118,9 @@ type Deps struct {
 	// submissions silently fail to "no plugin available", per product
 	// decision: doc stays in draft).
 	PluginsDir string
-	// Secrets is the SecretStore the plugin Host uses for redeeming
-	// SecretHandles. Production wires plugin.WinCredStore{}; tests
-	// inject plugin.NewInMemorySecretStore().
-	Secrets pluginhost.SecretStore
+	// PluginSettings persists per-plugin config + the enable flag. Nil
+	// disables the plugin system (same effect as empty PluginsDir).
+	PluginSettings storage.PluginSettingsRepository
 	// SyncerFor returns a Syncer wired against the given session, or nil if
 	// the session is not usable (e.g. tenant unset). Constructed lazily so
 	// session changes from the UI take effect immediately.
@@ -202,16 +201,16 @@ func New(deps Deps) *App {
 		}
 	}
 
-	// Construct the plugin host if a plugins directory was provided.
-	// Wires App as the FieldsProvider so plugins pick up their
-	// config.toml [plugins.<name>] section automatically. The host is
-	// not started here — Startup() launches plugins in a goroutine.
-	if deps.PluginsDir != "" && deps.Secrets != nil {
+	// Construct the plugin host if a plugins directory + settings
+	// repo are provided. The host reads/writes per-plugin config
+	// directly through the repo; the App layer never has to shuttle
+	// values through config.toml. Startup() launches plugins in a
+	// goroutine.
+	if deps.PluginsDir != "" && deps.PluginSettings != nil {
 		a.pluginHost = pluginhost.NewHost(pluginhost.HostDeps{
 			Logger:     a.logger,
 			PluginsDir: deps.PluginsDir,
-			Secrets:    deps.Secrets,
-			Fields:     pluginFieldsAdapter{app: a},
+			Settings:   deps.PluginSettings,
 		})
 	}
 

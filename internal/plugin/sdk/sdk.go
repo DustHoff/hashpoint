@@ -99,6 +99,42 @@ const (
 	CapOnCallDocumentation Capability = "oncall_documentation"
 )
 
+// FieldType identifies the input element AND the persistence strategy
+// for a config field declared in the manifest. Booleans are serialised
+// as the strings "true" / "false" when delivered via PluginConfig.Fields.
+// Password values never appear in PluginConfig.Fields — the host mints
+// a SecretHandle for each password field and places it in
+// PluginConfig.Secrets, so the cleartext stays out of the Configure
+// payload and only crosses the wire when the plugin redeems it.
+type FieldType string
+
+// Supported FieldType values. Adding a new type requires host-side
+// rendering support and an explicit branch in the persistence layer —
+// keep the list closed and well-known.
+const (
+	FieldTypeText     FieldType = "text"
+	FieldTypePassword FieldType = "password"
+	FieldTypeBool     FieldType = "boolean"
+)
+
+// IsValidFieldType reports whether t is one of the supported FieldType
+// values. The host uses this to reject manifests with unknown types
+// at load time rather than silently degrading to "text".
+func IsValidFieldType(t FieldType) bool {
+	switch t {
+	case FieldTypeText, FieldTypePassword, FieldTypeBool:
+		return true
+	}
+	return false
+}
+
+// SupportedFieldTypes returns the legal FieldType values as a comma-
+// separated string. Suitable for embedding in error messages produced
+// by the manifest loader.
+func SupportedFieldTypes() string {
+	return string(FieldTypeText) + ", " + string(FieldTypePassword) + ", " + string(FieldTypeBool)
+}
+
 // Metadata is the plugin's self-description. Returned by Plugin.Metadata
 // once per plugin lifetime (the host caches the result).
 type Metadata struct {
@@ -118,18 +154,26 @@ type Metadata struct {
 }
 
 // SecretHandle is an opaque pointer to a secret stored in the host's
-// credential store (wincred on Windows). The plaintext never crosses the
-// host↔plugin boundary at Configure() time; the plugin redeems the handle
-// via HostAPI.RedeemSecret() on-demand, holding the plaintext in memory
+// plugin_settings table (DPAPI-encrypted at rest, CurrentUser scope on
+// Windows). The plaintext never crosses the host↔plugin boundary at
+// Configure() time; the plugin redeems the handle via
+// HostAPI.RedeemSecret() on-demand, holding the plaintext in memory
 // only for the duration of an outbound call.
 //
 // Handles are per-plugin and per-process: leaking a handle from plugin A
 // gives nothing useful to plugin B, and all handles die on host restart.
 type SecretHandle string
 
-// PluginConfig is what Configure() delivers. Fields are TOML-defined
-// per-plugin values; Secrets are SecretHandles keyed by the secret name
-// declared in the plugin's manifest under [config_schema.secrets].
+// PluginConfig is what Configure() delivers.
+//
+// Fields contains the user-entered values for every manifest field
+// whose type is "text" or "boolean" (booleans serialised as "true" /
+// "false"). Secrets contains SecretHandles for fields whose type is
+// "password" — the plugin redeems them lazily via HostAPI.RedeemSecret
+// so the cleartext never crosses the Configure() payload. A field that
+// the user has not filled in is absent from both maps (the plugin
+// should detect this and return ErrNotConfigured if the value is
+// required for its capability).
 type PluginConfig struct {
 	Fields  map[string]string
 	Secrets map[string]SecretHandle

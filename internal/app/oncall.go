@@ -83,29 +83,13 @@ type OnCallSubmissionView struct {
 	SubmittedAt string `json:"submitted_at,omitempty"` // RFC3339
 }
 
-// pluginFieldsAdapter lets the plugin Host read per-plugin field values
-// from the App's live Config without a circular import.
-type pluginFieldsAdapter struct {
-	app *App
-}
-
-// PluginFields returns a fresh copy of the field map under [plugins.<name>].
-// Concurrent reads with SaveConfig are serialized via App.mu.
-func (a pluginFieldsAdapter) PluginFields(name string) map[string]string {
-	a.app.mu.Lock()
-	defer a.app.mu.Unlock()
-	if a.app.cfg == nil || a.app.cfg.Plugins == nil {
-		return nil
-	}
-	src := a.app.cfg.Plugins[name]
-	if src == nil {
-		return nil
-	}
-	out := make(map[string]string, len(src))
-	for k, v := range src {
-		out[k] = v
-	}
-	return out
+// PluginConfigView is what the settings UI receives for one plugin: the
+// plain fields verbatim plus a "which secrets are set" projection that
+// lets the form differentiate "leave existing value" from "explicitly
+// clear" without ever exposing the cleartext.
+type PluginConfigView struct {
+	Fields     map[string]string `json:"fields"`
+	SecretsSet map[string]bool   `json:"secrets_set"`
 }
 
 // onBlockClosedForOnCall is the orchestrator hook the App wires in New().
@@ -353,74 +337,66 @@ func (a *App) PluginList() ([]pluginhost.PluginInfo, error) {
 	return a.pluginHost.List(), nil
 }
 
-// PluginGetConfig returns the persisted [plugins.<name>] section.
-func (a *App) PluginGetConfig(name string) (map[string]string, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.cfg == nil || a.cfg.Plugins == nil {
-		return map[string]string{}, nil
+// PluginGetConfig returns the plain fields and a SecretsSet projection
+// for the named plugin. Secret cleartexts are never returned — the UI
+// uses SecretsSet to render "stored" badges next to password inputs.
+func (a *App) PluginGetConfig(name string) (PluginConfigView, error) {
+	view := PluginConfigView{
+		Fields:     map[string]string{},
+		SecretsSet: map[string]bool{},
 	}
-	src := a.cfg.Plugins[name]
-	out := make(map[string]string, len(src))
-	for k, v := range src {
-		out[k] = v
+	if a.deps.PluginSettings == nil {
+		return view, nil
 	}
-	return out, nil
+	plain, secrets, err := a.deps.PluginSettings.GetFields(a.ctx, name)
+	if err != nil {
+		return view, fmt.Errorf("read plugin config: %w", err)
+	}
+	view.Fields = plain
+	for k := range secrets {
+		view.SecretsSet[k] = true
+	}
+	return view, nil
 }
 
-// PluginSetConfig replaces the [plugins.<name>] section and reloads the
-// plugin so the new fields take effect. Secrets are NOT included here —
-// PluginSetSecret writes to the credential store independently.
+// PluginSetConfig writes the plain (text + boolean) fields for the plugin
+// and reloads it. Password fields are persisted via PluginSetSecret —
+// password keys appearing here are silently ignored by the host so a
+// frontend mistake never overwrites a secret with cleartext.
 func (a *App) PluginSetConfig(name string, fields map[string]string) error {
-	a.mu.Lock()
-	if a.cfg == nil {
-		a.mu.Unlock()
-		return errors.New("config not loaded")
-	}
-	if a.cfg.Plugins == nil {
-		a.cfg.Plugins = map[string]map[string]string{}
-	}
-	clone := make(map[string]string, len(fields))
-	for k, v := range fields {
-		clone[k] = v
-	}
-	a.cfg.Plugins[name] = clone
-	cfgCopy := *a.cfg
-	a.mu.Unlock()
-	if a.deps.OnConfigSet != nil {
-		if err := a.deps.OnConfigSet(&cfgCopy); err != nil {
-			return fmt.Errorf("persist config: %w", err)
-		}
-	}
 	if a.pluginHost == nil {
-		return nil
+		return errors.New("plugin host not configured")
 	}
-	return a.pluginHost.Reload(a.ctx, name)
+	return a.pluginHost.SetConfig(a.ctx, name, fields)
 }
 
-// PluginSetSecret writes a per-plugin secret to the credential store. The
-// plugin is reloaded so the new secret takes effect — handles minted
-// before the change become stale and ErrUnknownSecretHandle replays will
-// surface if the plugin still holds them.
+// PluginSetSecret writes one encrypted field. Empty value leaves the
+// stored secret untouched (frontend convention: omit unchanged
+// passwords); use PluginDeleteSecret to explicitly clear.
 func (a *App) PluginSetSecret(name, key, value string) error {
 	if a.pluginHost == nil {
 		return errors.New("plugin host not configured")
 	}
-	if err := a.pluginHost.SetSecret(name, key, value); err != nil {
-		return err
-	}
-	return a.pluginHost.Reload(a.ctx, name)
+	return a.pluginHost.SetSecret(a.ctx, name, key, value)
 }
 
-// PluginDeleteSecret removes a per-plugin secret + reloads.
+// PluginDeleteSecret clears one secret and reloads.
 func (a *App) PluginDeleteSecret(name, key string) error {
 	if a.pluginHost == nil {
 		return errors.New("plugin host not configured")
 	}
-	if err := a.pluginHost.DeleteSecret(name, key); err != nil {
-		return err
+	return a.pluginHost.DeleteSecret(a.ctx, name, key)
+}
+
+// PluginSetEnabled persists the user-controlled enable flag and applies
+// it immediately: enabling launches the plugin (or moves it to
+// needs_config when required fields are missing); disabling stops the
+// subprocess.
+func (a *App) PluginSetEnabled(name string, enabled bool) error {
+	if a.pluginHost == nil {
+		return errors.New("plugin host not configured")
 	}
-	return a.pluginHost.Reload(a.ctx, name)
+	return a.pluginHost.SetEnabled(a.ctx, name, enabled)
 }
 
 // PluginReload rebuilds the named plugin (e.g. after a manual binary swap).

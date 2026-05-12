@@ -11,8 +11,8 @@ import (
 // handleRegistry maps random opaque tokens to (pluginName, secretKey)
 // pairs. Plugins receive handles in PluginConfig.Secrets at Configure()
 // time and redeem them via HostAPI.RedeemSecret() — the host resolves
-// the pair via the registry, fetches the plaintext from SecretStore,
-// and returns it.
+// the pair via the registry, fetches the (encrypted) value from
+// SettingsStore.GetSecret, decrypts it, and returns the plaintext.
 //
 // All entries are in-memory only: a host restart re-mints every handle,
 // so a leaked handle dies on the next start. Per-plugin revocation

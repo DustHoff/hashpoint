@@ -31,6 +31,5 @@ func Default() *Config {
 		OnCall: OnCallConfig{
 			TagIDs: nil,
 		},
-		Plugins: map[string]map[string]string{},
 	}
 }
