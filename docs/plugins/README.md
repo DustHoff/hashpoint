@@ -47,55 +47,67 @@ capabilities = ["oncall_documentation"]
 
 [config_schema.fields.endpoint]
 label    = "Endpoint URL"
-type     = "string"
+type     = "text"
 required = true
 
-[config_schema.secrets.api_token]
+[config_schema.fields.api_token]
 label    = "API Token"
+type     = "password"
 required = true
 ```
 
-The host renders the settings UI from `config_schema` alone — it doesn't
+The host renders the Plugins tab from `config_schema` alone — it doesn't
 need to launch the plugin to know what fields the plugin wants.
 
 `api_version` MUST equal Hashpoint's current `sdk.HostAPIVersion`. A
-mismatch surfaces in the settings UI with a clear error message; the
-plugin stays in `failed` state until rebuilt against the matching SDK.
+mismatch surfaces with a clear error message; the plugin stays in
+`failed` state until rebuilt against the matching SDK.
 
 ## Configuration
 
-Field values go into `%APPDATA%\TimeTracker\config.toml`:
+Plugin configuration lives in the SQLite database (table
+`plugin_settings`, columns `plugin_name, key, value, is_secret`). The
+Plugins tab in the settings UI is the only supported way to edit it;
+the host writes via `Host.SetConfig` / `SetSecret` and reloads the
+plugin on every change.
 
-```toml
-[plugins.oncall-example]
-endpoint = "https://jira.example.com/rest/servicedeskapi"
-```
+- `text` and `boolean` fields are stored as UTF-8 bytes and delivered
+  to the plugin in `PluginConfig.Fields`.
+- `password` fields are DPAPI-encrypted before insertion. They are
+  bound to the current Windows user account, so copying `data.db` to
+  another machine leaves the secrets unreadable. The plugin receives
+  an opaque `SecretHandle` it redeems via `HostAPI.RedeemSecret` —
+  the cleartext only enters plugin memory at the moment of redemption.
 
-Secrets are stored in Windows Credential Manager under target
-`TimeTracker:plugin:<plugin-name>:<key>`, written via the in-app settings
-UI. **Secrets never appear in config.toml** and never cross the
-host↔plugin boundary at config time — the plugin receives an opaque
-`SecretHandle` and redeems it via `HostAPI.RedeemSecret` only at the
-moment it needs the plaintext.
+There is also a `plugin_state` table that holds the enable flag per
+plugin. Disabled plugins are recorded in `state=disabled` and never
+launched; their configuration is preserved across the disable→enable
+cycle.
 
 ## Lifecycle
 
 1. **Discovery** — at host startup, Hashpoint scans `PluginsDir` for
-   subdirectories with a valid `manifest.toml`.
-2. **Launch** — each plugin's executable is started; the host and plugin
-   shake hands via the magic-cookie protocol (mismatch ⇒ launch fails).
-3. **Init** — host calls `Plugin.Init(host HostAPI)`. The plugin stores
-   the HostAPI reference for later reverse-RPC.
-4. **Metadata** — host calls `Plugin.Metadata()` to learn name, version,
-   capabilities. The host caches the result.
-5. **Configure** — host calls `Plugin.Configure(cfg)` with the merged
-   field values + fresh SecretHandles. Called again on every settings
-   save.
-6. **Use** — when the user submits an on-call doc, the host fans the
-   payload out to every running `oncall_documentation` plugin in
-   parallel. Per-plugin results are persisted; the inbox refreshes live.
-7. **Shutdown** — `Host.Stop()` kills every subprocess; SecretHandles
-   are dropped (a leaked handle dies on host restart).
+   subdirectories.
+2. **Enable check** — for each directory the host reads
+   `plugin_state.enabled`; rows with `enabled=0` are recorded as
+   `state=disabled` and **skipped** (no subprocess).
+3. **Manifest load** — the host parses `manifest.toml` and rejects
+   plugins whose name does not equal the directory name or whose
+   `api_version` does not equal `sdk.HostAPIVersion`.
+4. **Required-field gate** — the host reads `plugin_settings` and
+   compares against the manifest. If any required field is unset and
+   has no `default`, the plugin is parked in `state=needs_config`
+   with the missing keys attached; **no subprocess is launched**.
+5. **Launch** — handshake via the magic-cookie protocol.
+6. **Init** — host calls `Plugin.Init(host HostAPI)`.
+7. **Metadata** — host calls `Plugin.Metadata()` to learn name,
+   version, capabilities.
+8. **Configure** — host calls `Plugin.Configure(cfg)` with the merged
+   field values + fresh SecretHandles.
+9. **Use** — capability fan-outs (today: on-call submit) only target
+   plugins in `state=running`.
+10. **Shutdown** — `Host.Stop()` kills every subprocess; SecretHandles
+    are dropped (a leaked handle dies on host restart).
 
 ## When to write a plugin
 

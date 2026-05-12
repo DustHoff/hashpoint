@@ -109,15 +109,20 @@ is transparent.
 
 ## Secret model
 
-The host stores secrets in Windows Credential Manager under
-`TimeTracker:plugin:<plugin-name>:<key>` (User scope, DPAPI-protected
-by the OS). At every `Configure` call, the host:
+Per-plugin configuration — including secrets — is persisted in the
+SQLite database in the `plugin_settings` table (one row per
+`(plugin_name, key)`). Secret rows have `is_secret = 1` and their
+`value` blob is DPAPI-encrypted (CurrentUser scope) before insertion,
+so a stolen `data.db` is unreadable from any other Windows user
+account. Plain `text` / `boolean` rows are stored as UTF-8 bytes.
 
-1. Mints a fresh random 128-bit hex `SecretHandle` for each secret key
-   declared in the plugin's manifest.
+For every password-typed field declared in the manifest the host:
+
+1. Mints a fresh random 128-bit hex `SecretHandle`.
 2. Stores the mapping `handle → (plugin-name, secret-key)` in an
    in-memory registry.
-3. Sends the handles to the plugin in `PluginConfig.Secrets`.
+3. Sends the handle to the plugin in `PluginConfig.Secrets`. The
+   cleartext does NOT cross the wire at `Configure()` time.
 
 When the plugin calls `HostAPI.RedeemSecret(handle)`:
 
@@ -126,12 +131,33 @@ When the plugin calls `HostAPI.RedeemSecret(handle)`:
 2. The host verifies the caller's plugin-name matches the entry's
    plugin-name (defence against a leaked handle being replayed by a
    different plugin).
-3. The host fetches plaintext from the credential store and returns
-   it. The plaintext lives in memory only for the duration of the
-   plugin's outbound call.
+3. The host runs the encrypted blob through the DPAPI cipher and
+   returns the plaintext. The plaintext lives in memory only for the
+   duration of the plugin's outbound call.
 
 Handles are NOT persisted. A host restart, a plugin reload, or a
 config change re-mints every handle — leaked handles die quickly.
+
+## Enable/disable flag
+
+The `plugin_state` table holds one row per plugin with an
+`enabled` boolean (default `1`). On startup the host loads the row
+for every directory under `PluginsDir`; disabled plugins are recorded
+as `state=disabled` and never launched. Toggling the flag in the
+settings UI calls `Host.SetEnabled` which persists the new value and
+either tears down the subprocess (enabled → disabled) or fires a fresh
+launch (disabled → enabled).
+
+## Required-field gate (`state=needs_config`)
+
+After loading the manifest the host reads the persisted values for
+every field. If any field with `required = true` is missing a value
+(no row in `plugin_settings` AND no `default` in the manifest), the
+plugin is parked in `state=needs_config` and the missing keys are
+attached to its `PluginInfo.MissingFields`. The subprocess is **not**
+started in this state and capability fan-outs skip the plugin. Saving
+the missing values from the Plugins tab calls `SetConfig`/`SetSecret`
+followed by a reload, which re-runs the required-field gate.
 
 ## Per-plugin timeout
 

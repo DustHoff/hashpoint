@@ -191,17 +191,77 @@ the caller tries to set, to keep the attribution truthful.
 
 ```go
 type PluginConfig struct {
-    Fields  map[string]string         // keys come from manifest.toml [config_schema.fields]
-    Secrets map[string]SecretHandle   // keys come from manifest.toml [config_schema.secrets]
+    Fields  map[string]string         // values for type=text and type=boolean fields
+    Secrets map[string]SecretHandle   // handles for type=password fields
 }
+
+type FieldType string
+const (
+    FieldTypeText     FieldType = "text"
+    FieldTypePassword FieldType = "password"
+    FieldTypeBool     FieldType = "boolean"
+)
 ```
 
-Field values are user-supplied non-secret strings (URLs, project keys,
-etc.). The host applies `manifest.toml`'s `default` for any field the
-user has not set.
+Every config field is declared in `manifest.toml` under
+`[config_schema.fields.<key>]` with a `type`, `label`, `required`
+flag, and optional `default`. The host derives the persistence and
+delivery strategy from `type`:
+
+| Type       | UI input                  | Storage          | Delivered to plugin via    |
+|------------|---------------------------|------------------|----------------------------|
+| `text`     | single-line text input    | `plugin_settings` (plain) | `PluginConfig.Fields[key]` |
+| `boolean`  | toggle (`"true"`/`"false"`) | `plugin_settings` (plain) | `PluginConfig.Fields[key]` (string) |
+| `password` | masked input              | `plugin_settings` (DPAPI-encrypted) | `PluginConfig.Secrets[key]` (handle) |
+
+Boolean values cross the wire as the literal strings `"true"` /
+`"false"` — parse with `strconv.ParseBool` plugin-side.
+
+The host applies the manifest `default` for any plain field the user
+has not filled in. Required fields with no stored value and no default
+park the plugin in `state=needs_config`; `Configure` is never called
+in this state — the subprocess does not run at all.
 
 Secret values are NEVER sent over RPC. Each entry in `Secrets` is a
-SecretHandle the plugin can redeem via `HostAPI.RedeemSecret`.
+SecretHandle the plugin redeems via `HostAPI.RedeemSecret`.
+
+## Manifest
+
+`<plugin-dir>/manifest.toml` is the offline self-description the
+settings UI renders even before the subprocess runs:
+
+```toml
+name = "oncall-jira"
+version = "0.1.0"
+api_version = 1
+description = "Files Jira tickets for off-duty work"
+capabilities = ["oncall_documentation"]
+
+[config_schema.fields.endpoint]
+label = "Jira base URL"
+type = "text"
+required = true
+
+[config_schema.fields.dry_run]
+label = "Dry run"
+type = "boolean"
+required = false
+default = "false"
+
+[config_schema.fields.api_token]
+label = "API token"
+type = "password"
+required = true
+```
+
+Rules:
+
+- `name` MUST equal the plugin's directory name.
+- `api_version` MUST equal `sdk.HostAPIVersion`.
+- Every field `type` MUST be one of `text`, `password`, `boolean` —
+  unknown types are rejected at load.
+- There is no separate `secrets` section anymore; password-typed
+  fields ARE the secret declarations.
 
 ## Sentinel errors
 
