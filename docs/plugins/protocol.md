@@ -3,7 +3,7 @@
 Hashpoint plugins talk to the host over [hashicorp/go-plugin][hcl] in
 **net/rpc mode**, multiplexed via yamux. Net/rpc was chosen over gRPC
 to keep the host build pure-Go without a `protoc` toolchain; the SDK
-contract (the Go interfaces in `internal/plugin/sdk`) is transport-
+contract (the Go interfaces in `plugin/sdk`) is transport-
 agnostic, so a future migration to gRPC requires only swapping the
 `rpc_*.go` wiring.
 
@@ -45,7 +45,7 @@ Within each key, `net/rpc` exposes the methods under the prefix `Plugin.`
 (`Plugin.Init`, `Plugin.Submit`, …). Different keys get separate
 multiplexed streams, so a slow `Submit` cannot block `Configure`.
 
-Adding a new capability is three edits in `internal/plugin/sdk`:
+Adding a new capability is three edits in `plugin/sdk`:
 
 1. add the `Capability` constant + the matching Go interface,
 2. add a server/client pair in `rpc.go` mirroring `oncallServer` /

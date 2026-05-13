@@ -1,10 +1,9 @@
 # Plugin API reference
 
-Every plugin import is `github.com/dusthoff/hashpoint/internal/plugin/sdk`.
-For v1 the SDK is internal — plugin authors must build their binary
-inside the Hashpoint repository (typically under `cmd/<plugin-name>/`).
-Promoting the SDK to a public Go module is a planned mechanical change
-that keeps the interfaces below unchanged.
+Every plugin import is `github.com/dusthoff/hashpoint/plugin/sdk`. The
+SDK lives under `plugin/` (outside `internal/`), so plugin authors can
+build their binary in a separate module and `go get` the SDK package
+directly.
 
 ## Quick start
 
@@ -14,7 +13,7 @@ package main
 import (
     "context"
 
-    sdk "github.com/dusthoff/hashpoint/internal/plugin/sdk"
+    sdk "github.com/dusthoff/hashpoint/plugin/sdk"
 )
 
 type myPlugin struct {
