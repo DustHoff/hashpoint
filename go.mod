@@ -1,4 +1,4 @@
-module github.com/onesi/hashpoint
+module github.com/dusthoff/hashpoint
 
 go 1.26
 

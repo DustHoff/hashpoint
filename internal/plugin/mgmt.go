@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/dusthoff/hashpoint/internal/plugin/sdk"
 	hplugin "github.com/hashicorp/go-plugin"
-	"github.com/onesi/hashpoint/internal/plugin/sdk"
 )
 
 // AvailablePluginEntry is the read-model rendered in the "Verfügbare

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onesi/hashpoint/internal/config"
-	"github.com/onesi/hashpoint/internal/storage"
+	"github.com/dusthoff/hashpoint/internal/config"
+	"github.com/dusthoff/hashpoint/internal/storage"
 )
 
 // fakeAncestry returns each tag as its own ancestor plus an explicit

@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/getlantern/systray"
-	"github.com/onesi/hashpoint/internal/app"
-	"github.com/onesi/hashpoint/internal/personio"
-	"github.com/onesi/hashpoint/internal/storage"
+	"github.com/dusthoff/hashpoint/internal/app"
+	"github.com/dusthoff/hashpoint/internal/personio"
+	"github.com/dusthoff/hashpoint/internal/storage"
 )
 
 // manualTagSlotCount caps how many tags we can show in the manual-tag

@@ -17,7 +17,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/onesi/hashpoint/internal/plugin/sdk"
+	"github.com/dusthoff/hashpoint/internal/plugin/sdk"
 )
 
 // Manifest is the contents of <plugin-dir>/manifest.toml. The file

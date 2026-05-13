@@ -7,12 +7,12 @@
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
   "author": {
-    "name": "onesi GmbH"
+    "name": "Dustin Hoffmann"
   },
   "info": {
-    "companyName": "onesi GmbH",
+    "companyName": "Dustin Hoffmann",
     "productName": "Hashpoint TimeTracker",
-    "productIdentifier": "de.onesi.hashpoint",
+    "productIdentifier": "io.github.dusthoff.hashpoint",
     "fileAssociations": [],
     "comments": "Windows-Zeiterfassung mit Personio-Sync"
   }

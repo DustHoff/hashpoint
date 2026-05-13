@@ -14,8 +14,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/onesi/hashpoint/internal/config"
-	"github.com/onesi/hashpoint/internal/storage"
+	"github.com/dusthoff/hashpoint/internal/config"
+	"github.com/dusthoff/hashpoint/internal/storage"
 )
 
 // TagAncestry resolves a tag's ancestor chain. The on-call check matches

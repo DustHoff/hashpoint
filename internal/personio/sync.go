@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/onesi/hashpoint/internal/storage"
-	"github.com/onesi/hashpoint/internal/tagging"
+	"github.com/dusthoff/hashpoint/internal/storage"
+	"github.com/dusthoff/hashpoint/internal/tagging"
 )
 
 // Syncer aggregates tag blocks and pushes them to Personio via the

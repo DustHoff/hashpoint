@@ -1,6 +1,6 @@
 # Plugin API reference
 
-Every plugin import is `github.com/onesi/hashpoint/internal/plugin/sdk`.
+Every plugin import is `github.com/dusthoff/hashpoint/internal/plugin/sdk`.
 For v1 the SDK is internal — plugin authors must build their binary
 inside the Hashpoint repository (typically under `cmd/<plugin-name>/`).
 Promoting the SDK to a public Go module is a planned mechanical change
@@ -14,7 +14,7 @@ package main
 import (
     "context"
 
-    sdk "github.com/onesi/hashpoint/internal/plugin/sdk"
+    sdk "github.com/dusthoff/hashpoint/internal/plugin/sdk"
 )
 
 type myPlugin struct {

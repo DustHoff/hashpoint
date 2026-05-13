@@ -3,7 +3,7 @@ package tagging
 import (
 	"testing"
 
-	"github.com/onesi/hashpoint/internal/storage"
+	"github.com/dusthoff/hashpoint/internal/storage"
 )
 
 func TestCompiledRule_Match(t *testing.T) {
@@ -67,7 +67,7 @@ func TestCompiledRule_Match(t *testing.T) {
 				Pattern:    "slack",
 			},
 			processName: "slack.exe",
-			title:       "Slack | onesi",
+			title:       "Slack | acme",
 			want:        true,
 		},
 	}

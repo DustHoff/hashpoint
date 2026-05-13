@@ -3,7 +3,7 @@ package oncall
 import (
 	"context"
 
-	"github.com/onesi/hashpoint/internal/storage"
+	"github.com/dusthoff/hashpoint/internal/storage"
 )
 
 // TagRepoAncestry adapts a storage.TagRepository to TagAncestry by walking

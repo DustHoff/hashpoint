@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onesi/hashpoint/internal/storage"
-	"github.com/onesi/hashpoint/internal/winapi"
+	"github.com/dusthoff/hashpoint/internal/storage"
+	"github.com/dusthoff/hashpoint/internal/winapi"
 )
 
 func TestTitleExcluded(t *testing.T) {

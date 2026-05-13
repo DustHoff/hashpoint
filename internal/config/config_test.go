@@ -161,8 +161,8 @@ func TestPersonio_AppURL(t *testing.T) {
 	if got := c.Personio.AppURL(); got != "" {
 		t.Errorf("expected empty AppURL when tenant unset; got %q", got)
 	}
-	c.Personio.Tenant = "onesi"
-	if got, want := c.Personio.AppURL(), "https://onesi.personio.de"; got != want {
+	c.Personio.Tenant = "acme"
+	if got, want := c.Personio.AppURL(), "https://acme.personio.de"; got != want {
 		t.Errorf("AppURL=%q want %q", got, want)
 	}
 }
@@ -212,7 +212,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "config.toml")
 	c := Default()
-	c.Personio.Tenant = "onesi"
+	c.Personio.Tenant = "acme"
 	c.Communication.TitleExcludePhrases = []string{"Benachrichtigung", "Reminder"}
 	if err := Save(p, c); err != nil {
 		t.Fatalf("save: %v", err)
@@ -221,7 +221,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if c2.Personio.Tenant != "onesi" {
+	if c2.Personio.Tenant != "acme" {
 		t.Errorf("round-trip lost data: %+v", c2.Personio)
 	}
 	if got, want := c2.Communication.TitleExcludePhrases, []string{"Benachrichtigung", "Reminder"}; !equalStrings(got, want) {

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/onesi/hashpoint/internal/storage"
+	"github.com/dusthoff/hashpoint/internal/storage"
 )
 
 // FallbackTagName is the name of the auto-created tag that catches Personio

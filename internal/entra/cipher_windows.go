@@ -2,7 +2,7 @@
 
 package entra
 
-import "github.com/onesi/hashpoint/internal/winapi"
+import "github.com/dusthoff/hashpoint/internal/winapi"
 
 // dpapiCipher uses Windows Data Protection API (CurrentUser scope) via
 // winapi.ProtectDataCurrentUser / UnprotectDataCurrentUser. The

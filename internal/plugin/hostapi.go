@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/onesi/hashpoint/internal/plugin/sdk"
+	"github.com/dusthoff/hashpoint/internal/plugin/sdk"
 )
 
 // boundHostAPI is the host-side sdk.HostAPI implementation handed to a

@@ -2,7 +2,7 @@
 
 package storage
 
-import "github.com/onesi/hashpoint/internal/winapi"
+import "github.com/dusthoff/hashpoint/internal/winapi"
 
 // dpapiCipher binds plugin secret values to the current Windows user
 // account via winapi.ProtectDataCurrentUser. The ciphertext can only be

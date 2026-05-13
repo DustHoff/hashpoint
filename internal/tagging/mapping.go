@@ -1,6 +1,6 @@
 package tagging
 
-import "github.com/onesi/hashpoint/internal/storage"
+import "github.com/dusthoff/hashpoint/internal/storage"
 
 // EffectiveMapping is the resolved Personio mapping for a tag — the sub-tag's
 // project/activity if set, otherwise inherited from the parent.

@@ -23,13 +23,13 @@
            Name="Hashpoint TimeTracker"
            Language="1031"
            Version="$(var.ProductVersion)"
-           Manufacturer="onesi GmbH"
+           Manufacturer="Dustin Hoffmann"
            UpgradeCode="8B0A3C7E-7D1F-4B23-9A2C-1F8E5D9C0B42">
 
     <Package InstallerVersion="500"
              Compressed="yes"
              InstallScope="perMachine"
-             Manufacturer="onesi GmbH"
+             Manufacturer="Dustin Hoffmann"
              Description="Hashpoint TimeTracker $(var.ProductVersion)"
              Comments="Windows-Zeiterfassung mit Personio-Sync" />
 
@@ -38,8 +38,8 @@
 
     <Icon Id="HashpointIcon.ico" SourceFile="$(var.IconFile)" />
     <Property Id="ARPPRODUCTICON" Value="HashpointIcon.ico" />
-    <Property Id="ARPHELPLINK" Value="https://github.com/onesi/hashpoint" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/onesi/hashpoint" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/dusthoff/hashpoint" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/dusthoff/hashpoint" />
     <Property Id="ARPNOREPAIR" Value="1" />
     <Property Id="ARPNOMODIFY" Value="1" />
 
@@ -75,7 +75,7 @@
                       Directory="ProgramMenuFolder"
                       On="uninstall" />
         <RegistryValue Root="HKCU"
-                       Key="Software\onesi\Hashpoint"
+                       Key="Software\dusthoff\Hashpoint"
                        Name="installed"
                        Type="integer"
                        Value="1"

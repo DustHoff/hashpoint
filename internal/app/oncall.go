@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	pluginhost "github.com/onesi/hashpoint/internal/plugin"
-	"github.com/onesi/hashpoint/internal/plugin/oncall"
-	"github.com/onesi/hashpoint/internal/plugin/sdk"
-	"github.com/onesi/hashpoint/internal/storage"
+	pluginhost "github.com/dusthoff/hashpoint/internal/plugin"
+	"github.com/dusthoff/hashpoint/internal/plugin/oncall"
+	"github.com/dusthoff/hashpoint/internal/plugin/sdk"
+	"github.com/dusthoff/hashpoint/internal/storage"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 

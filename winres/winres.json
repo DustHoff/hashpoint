@@ -8,7 +8,7 @@
     "#1": {
       "0409": {
         "identity": {
-          "name": "de.onesi.hashpoint",
+          "name": "io.github.dusthoff.hashpoint",
           "version": "0.1.0.0"
         },
         "description": "Hashpoint TimeTracker",
@@ -39,11 +39,11 @@
         "info": {
           "0409": {
             "Comments": "Windows-Zeiterfassung mit Personio-Sync",
-            "CompanyName": "onesi GmbH",
+            "CompanyName": "Dustin Hoffmann",
             "FileDescription": "Hashpoint TimeTracker",
             "FileVersion": "0.1.0.0",
             "InternalName": "hashpoint",
-            "LegalCopyright": "Copyright (c) 2026 onesi GmbH",
+            "LegalCopyright": "Copyright (c) 2026 Dustin Hoffmann",
             "OriginalFilename": "hashpoint.exe",
             "ProductName": "Hashpoint TimeTracker",
             "ProductVersion": "0.1.0.0"

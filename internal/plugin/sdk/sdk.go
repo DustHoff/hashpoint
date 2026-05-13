@@ -17,7 +17,7 @@
 //	import (
 //	    "context"
 //
-//	    sdk "github.com/onesi/hashpoint/internal/plugin/sdk"
+//	    sdk "github.com/dusthoff/hashpoint/internal/plugin/sdk"
 //	)
 //
 //	type myPlugin struct {

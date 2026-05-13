@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/onesi/hashpoint/internal/config"
-	"github.com/onesi/hashpoint/internal/storage"
+	"github.com/dusthoff/hashpoint/internal/config"
+	"github.com/dusthoff/hashpoint/internal/storage"
 )
 
 // Recheck reconciles the OnCall doc for a single block against the current

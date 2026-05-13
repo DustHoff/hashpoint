@@ -72,7 +72,7 @@ type TrackingConfig struct {
 // PersonioConfig holds the Personio tenant subdomain. The session cookies
 // captured via the CDP login flow live in the Windows Credential Manager.
 type PersonioConfig struct {
-	// Tenant is the Personio subdomain (e.g. "onesi" → https://onesi.personio.de).
+	// Tenant is the Personio subdomain (e.g. "acme" → https://acme.personio.de).
 	// May be left empty on first start; populated via the in-app settings UI.
 	Tenant string `toml:"tenant" json:"tenant"`
 }
