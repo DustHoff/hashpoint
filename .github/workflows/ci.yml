@@ -36,10 +36,12 @@ jobs:
         run: npm run build
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        # v8 requires golangci-lint v2.x (v1.x dropped Go 1.26 export-data
+        # support and is end-of-life). Pinned to `latest` until a v2 baseline
+        # is established; tighten the pin if a release breaks the build.
+        uses: golangci/golangci-lint-action@v8
         with:
-          version: v1.61
-          args: --timeout=5m
+          version: latest
 
       - name: Frontend lint
         working-directory: frontend

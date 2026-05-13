@@ -1,10 +1,12 @@
+version: "2"
+
 run:
   timeout: 5m
   go: "1.22"
   tests: true
 
 linters:
-  disable-all: true
+  default: none
   enable:
     - errcheck
     - govet
@@ -15,28 +17,29 @@ linters:
     - errorlint
     - ineffassign
     - unused
+  settings:
+    errcheck:
+      check-type-assertions: true
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - "checkPrivateReceivers"
+    gosec:
+      excludes:
+        - G104
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck
+      - path: internal/winapi/
+        linters:
+          - gosec
+          - revive
+
+formatters:
+  enable:
     - gofmt
     - goimports
-
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-  revive:
-    rules:
-      - name: exported
-        arguments:
-          - "checkPrivateReceivers"
-  gosec:
-    excludes:
-      - G104
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - gosec
-        - errcheck
-    - path: internal/winapi/
-      linters:
-        - gosec
-        - revive
