@@ -106,6 +106,11 @@ export interface PersonioConfig {
   tenant: string;
 }
 
+export interface EntraConfig {
+  client_id: string;
+  tenant_id: string;
+}
+
 export interface QuickTagConfig {
   enabled: boolean;
   hotkey: string;
@@ -116,11 +121,24 @@ export interface CommunicationConfig {
   title_exclude_phrases: string[];
 }
 
+// Canonical English short-name keys for the seven weekdays. Matches the Go
+// side's WorkScheduleConfig.WorkDays vocabulary; the UI maps these to
+// localized German labels at render time.
+export type WorkDay = "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun";
+
+export interface WorkScheduleConfig {
+  start_hour: number; // 0..23, inclusive
+  end_hour: number; // 1..24, exclusive; must be > start_hour
+  work_days: WorkDay[];
+}
+
 export interface AppConfig {
   tracking: TrackingConfig;
   personio: PersonioConfig;
+  entra: EntraConfig;
   quick_tag: QuickTagConfig;
   communication: CommunicationConfig;
+  work_schedule: WorkScheduleConfig;
 }
 
 export interface QuickTagSlot {
@@ -139,4 +157,148 @@ export interface PersonioStatus {
   valid: boolean;
   checked_at?: string;
   reason?: string;
+}
+
+export interface EntraStatus {
+  configured: boolean;
+  has_account: boolean;
+  username?: string;
+  home_account_id?: string;
+  tenant_id?: string;
+  client_id?: string;
+  reason?: string;
+}
+
+// On-call ("Rufbereitschaft") --------------------------------------------
+
+// Status discriminators must match storage.OnCallDocStatus + the literal
+// strings the Go side serialises. Treat as opaque on the frontend; the
+// roll-up is computed server-side from the per-plugin Submissions rows.
+export type OnCallDocStatus =
+  | "draft"
+  | "pending"
+  | "submitted"
+  | "partial"
+  | "failed";
+
+export type OnCallIncidentType =
+  | ""
+  | "planned_maintenance"
+  | "service_disruption";
+
+export interface OnCallSubmissionView {
+  plugin_name: string;
+  status: "pending" | "submitted" | "failed";
+  external_ref?: string;
+  external_url?: string;
+  last_error?: string;
+  submitted_at?: string;
+}
+
+export interface OnCallDocView {
+  id: number;
+  block_id: number;
+  start_time: string; // RFC3339 UTC
+  end_time: string;
+  tag_id: number;
+  tag_name: string;
+  tag_at_creation: number;
+  stale: boolean;
+  application: string;
+  incident_type: OnCallIncidentType;
+  solution: string;
+  status: OnCallDocStatus;
+  submissions?: OnCallSubmissionView[];
+}
+
+export interface OnCallDocDraft {
+  application: string;
+  incident_type: OnCallIncidentType;
+  solution: string;
+}
+
+export interface OnCallListFilter {
+  status?: OnCallDocStatus;
+  from?: string;
+  to?: string;
+  include_stale?: boolean;
+}
+
+// Per-plugin submit result event payload.
+export interface OnCallSubmitResultPayload {
+  doc_id: number;
+  plugin_name: string;
+  status: "submitted" | "failed";
+  external_ref?: string;
+  external_url?: string;
+  error_message?: string;
+}
+
+export interface OnCallDocChangedPayload {
+  doc_id: number;
+}
+
+// Plugin admin -----------------------------------------------------------
+
+// PluginState mirrors internal/plugin.PluginState. `needs_config` is the
+// state the host parks a plugin in when its manifest declares required
+// fields the user has not yet filled in — the subprocess is not running
+// and the inbox skips it for fan-outs.
+export type PluginState =
+  | "running"
+  | "needs_config"
+  | "failed"
+  | "disabled";
+
+export type PluginCapability = "oncall_documentation" | "plugin_management";
+
+// FieldType discriminates input rendering + persistence strategy.
+// `password` values are encrypted at rest and never round-tripped to
+// the UI — the API surfaces a `secrets_set` flag so the form can hint
+// "saved" without exposing the cleartext.
+export type FieldType = "text" | "password" | "boolean";
+
+export interface ManifestField {
+  label: string;
+  type: FieldType;
+  required: boolean;
+  default?: string;
+}
+
+export interface ManifestConfigSchema {
+  fields: Record<string, ManifestField>;
+}
+
+export interface PluginInfo {
+  name: string;
+  version: string;
+  description: string;
+  capabilities: PluginCapability[];
+  state: PluginState;
+  last_error?: string;
+  enabled: boolean;
+  missing_fields?: string[];
+  config_schema: ManifestConfigSchema;
+}
+
+// PluginConfigView is the payload returned by api.pluginGetConfig.
+// `fields` carries the plain values (text / boolean as strings);
+// `secrets_set[key] === true` means a password is persisted but its
+// cleartext is intentionally absent so the UI can't leak it.
+export interface PluginConfigView {
+  fields: Record<string, string>;
+  secrets_set: Record<string, boolean>;
+}
+
+// AvailablePluginEntry mirrors internal/plugin.AvailablePluginEntry.
+// `installed_version` is the version currently loaded on disk (empty
+// when the plugin is not installed). `source_plugin` is the name of
+// the running plugin_management plugin that surfaced this entry —
+// Install/Update/Uninstall RPCs route back through it.
+export interface AvailablePluginEntry {
+  name: string;
+  version: string;
+  description: string;
+  source_plugin: string;
+  installed_version: string;
 }

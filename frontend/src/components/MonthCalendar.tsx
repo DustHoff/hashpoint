@@ -15,8 +15,24 @@ import type { Tag, TagBlock } from "../types";
 interface Props {
   month: Date;
   tags: Tag[];
+  // Canonical English short names ("Mon" .. "Sun") of the user's configured
+  // working weekdays. Cells outside this set are rendered muted to make the
+  // working week stand out at a glance.
+  workDays: string[];
   onSelectDay: (day: Date) => void;
 }
+
+// jsDayToWorkDayKey converts JavaScript's getDay() index (Sunday=0) to the
+// canonical short name used in the config / work_days array.
+const JS_DAY_TO_KEY: ReadonlyArray<string> = [
+  "Sun",
+  "Mon",
+  "Tue",
+  "Wed",
+  "Thu",
+  "Fri",
+  "Sat",
+];
 
 type SyncState = "none-blocks" | "all-synced" | "partial" | "none-synced";
 
@@ -58,7 +74,13 @@ function gridRange(month: Date): { start: Date; end: Date } {
   return { start, end };
 }
 
-export default function MonthCalendar({ month, tags, onSelectDay }: Props) {
+export default function MonthCalendar({
+  month,
+  tags,
+  workDays,
+  onSelectDay,
+}: Props) {
+  const workDaySet = useMemo(() => new Set(workDays), [workDays]);
   const [blocks, setBlocks] = useState<TagBlock[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -186,22 +208,39 @@ export default function MonthCalendar({ month, tags, onSelectDay }: Props) {
       )}
 
       <div className="grid grid-cols-7 gap-px overflow-hidden rounded bg-slate-700">
-        {["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"].map((d) => (
-          <div
-            key={d}
-            className="bg-surface px-2 py-1 text-[11px] uppercase tracking-wide text-slate-400"
-          >
-            {d}
-          </div>
-        ))}
+        {(
+          [
+            ["Mo", "Mon"],
+            ["Di", "Tue"],
+            ["Mi", "Wed"],
+            ["Do", "Thu"],
+            ["Fr", "Fri"],
+            ["Sa", "Sat"],
+            ["So", "Sun"],
+          ] as const
+        ).map(([label, key]) => {
+          const isWork = workDaySet.has(key);
+          return (
+            <div
+              key={key}
+              className={`bg-surface px-2 py-1 text-[11px] uppercase tracking-wide ${
+                isWork ? "text-slate-400" : "text-slate-600"
+              }`}
+            >
+              {label}
+            </div>
+          );
+        })}
         {days.map((d) => {
           const key = dateKey(d);
+          const isWork = workDaySet.has(JS_DAY_TO_KEY[d.getDay()]);
           return (
             <DayCell
               key={key}
               day={d}
               inMonth={isSameMonth(d, month)}
               isToday={key === todayKey}
+              isWorkDay={isWork}
               summary={summaryByDay.get(key)}
               tagsByID={tagsByID}
               onClick={() => onSelectDay(d)}
@@ -231,6 +270,12 @@ interface DayCellProps {
   day: Date;
   inMonth: boolean;
   isToday: boolean;
+  // Whether this cell falls on one of the user's configured working
+  // weekdays. Non-workdays are rendered with a dimmer background and muted
+  // text so the working week stands out at a glance. Sync badges, totals,
+  // and the tag-segments bar still render — the cell remains clickable and
+  // informative for any blocks that did get tracked on a non-workday.
+  isWorkDay: boolean;
   summary: DaySummary | undefined;
   tagsByID: Record<number, Tag>;
   onClick: () => void;
@@ -271,6 +316,7 @@ function DayCell({
   day,
   inMonth,
   isToday,
+  isWorkDay,
   summary,
   tagsByID,
   onClick,
@@ -303,13 +349,23 @@ function DayCell({
       onClick={onClick}
       title={tooltip}
       className={`relative flex min-h-[5rem] flex-col gap-1 px-2 py-1.5 text-left text-xs transition-colors hover:bg-slate-700/40 ${
-        inMonth ? "bg-surface" : "bg-surface/40"
+        inMonth
+          ? isWorkDay
+            ? "bg-surface"
+            : "bg-surface/60"
+          : isWorkDay
+            ? "bg-surface/40"
+            : "bg-surface/20"
       } ${isToday ? "ring-2 ring-accent ring-inset" : ""}`}
     >
       <div className="flex items-center justify-between">
         <span
           className={`font-medium ${
-            inMonth ? "text-slate-100" : "text-slate-500"
+            inMonth
+              ? isWorkDay
+                ? "text-slate-100"
+                : "text-slate-500"
+              : "text-slate-500"
           } ${isToday ? "text-accent" : ""}`}
         >
           {format(day, "d")}

@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -16,6 +17,7 @@ import (
 	hashpoint "github.com/onesi/hashpoint"
 	"github.com/onesi/hashpoint/internal/app"
 	"github.com/onesi/hashpoint/internal/config"
+	"github.com/onesi/hashpoint/internal/entra"
 	"github.com/onesi/hashpoint/internal/logging"
 	"github.com/onesi/hashpoint/internal/personio"
 	"github.com/onesi/hashpoint/internal/storage"
@@ -94,6 +96,8 @@ func run() error {
 	tags := storage.NewTagRepo(db)
 	rules := storage.NewRuleRepo(db)
 	settings := storage.NewSettingsRepo(db)
+	oncallRepo := storage.NewOnCallRepo(db)
+	pluginSettingsRepo := storage.NewPluginSettingsRepo(db, storage.NewDPAPICipher())
 
 	orchestrator := tagging.NewOrchestrator(tagBlocks, tracks, rules, slog.Default())
 	orchestrator.SetGranularity(cfg.Tracking.TagBlockGranularity())
@@ -110,6 +114,22 @@ func run() error {
 	}, tracks, slog.Default(), tracker.WithObserver(orchestrator))
 
 	sessionStore := defaultSessionStore()
+
+	// Entra ID is opt-in: build the manager lazily, only when client_id
+	// and tenant_id are filled in. The closure is also wired into the
+	// app so SaveConfig can rebuild the manager on every config change
+	// without touching main.go again.
+	entraFor := func(c config.EntraConfig) (entra.Manager, error) {
+		if !c.Configured() {
+			return nil, nil
+		}
+		return entra.NewManager(entra.Options{
+			ClientID: c.ClientID,
+			TenantID: c.TenantID,
+			CacheDir: paths.AuthDir,
+			Logger:   slog.Default(),
+		})
+	}
 
 	syncerFor := func(sess *personio.Session) *personio.Syncer {
 		if sess == nil {
@@ -130,17 +150,21 @@ func run() error {
 
 	var a *app.App
 	a = app.New(app.Deps{
-		Tracks:       tracks,
-		TagBlocks:    tagBlocks,
-		Tags:         tags,
-		Rules:        rules,
-		Settings:     settings,
-		Tracker:      trk,
-		Orchestrator: orchestrator,
-		Sessions:     sessionStore,
-		SyncerFor:    syncerFor,
-		ConfigPath:   paths.ConfigFile,
-		Config:       cfg,
+		Tracks:         tracks,
+		TagBlocks:      tagBlocks,
+		Tags:           tags,
+		Rules:          rules,
+		Settings:       settings,
+		OnCall:         oncallRepo,
+		Tracker:        trk,
+		Orchestrator:   orchestrator,
+		Sessions:       sessionStore,
+		SyncerFor:      syncerFor,
+		EntraFor:       entraFor,
+		PluginsDir:     paths.PluginsDir,
+		PluginSettings: pluginSettingsRepo,
+		ConfigPath:     paths.ConfigFile,
+		Config:         cfg,
 		OnConfigSet: func(c *config.Config) error {
 			trkMu.Lock()
 			defer trkMu.Unlock()
@@ -184,7 +208,7 @@ func run() error {
 
 	// Tracker goroutine.
 	go func() {
-		if err := trk.Run(ctx); err != nil && err != context.Canceled {
+		if err := trk.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("tracker run failed", "err", err)
 		}
 	}()

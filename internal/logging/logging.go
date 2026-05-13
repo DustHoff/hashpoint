@@ -90,6 +90,9 @@ func newRotatingWriter(dir, base string, maxBytes int64, keep int) (*rotatingWri
 
 func (w *rotatingWriter) open() error {
 	p := filepath.Join(w.dir, w.base)
+	// #nosec G304 -- log file path is fully internal: dir is %LOCALAPPDATA%
+	// (or the config-supplied log dir), base is a hard-coded filename. No
+	// user input flows in.
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err

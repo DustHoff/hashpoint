@@ -11,6 +11,10 @@ func Default() *Config {
 		Personio: PersonioConfig{
 			Tenant: "",
 		},
+		Entra: EntraConfig{
+			ClientID: "",
+			TenantID: "",
+		},
 		QuickTag: QuickTagConfig{
 			Enabled: true,
 			Hotkey:  "Ctrl+Alt+T",
@@ -18,6 +22,14 @@ func Default() *Config {
 		Communication: CommunicationConfig{
 			ProcessNames:        []string{"teams.exe"},
 			TitleExcludePhrases: nil,
+		},
+		WorkSchedule: WorkScheduleConfig{
+			StartHour: 8,
+			EndHour:   18,
+			WorkDays:  []string{"Mon", "Tue", "Wed", "Thu", "Fri"},
+		},
+		OnCall: OnCallConfig{
+			TagIDs: nil,
 		},
 	}
 }

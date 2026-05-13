@@ -120,3 +120,98 @@ type Rule struct {
 	Enabled     bool       `json:"enabled"`
 	CreatedAt   time.Time  `json:"created_at"`
 }
+
+// OnCallDocStatus is the roll-up status of an on-call documentation row,
+// computed from the per-plugin Submissions slice. It is never stored.
+type OnCallDocStatus string
+
+const (
+	// OnCallStatusDraft means the doc exists but has never been submitted —
+	// no Submissions rows. Edits stay local.
+	OnCallStatusDraft OnCallDocStatus = "draft"
+	// OnCallStatusPending means at least one submission is still in flight.
+	OnCallStatusPending OnCallDocStatus = "pending"
+	// OnCallStatusSubmitted means every submission returned ok.
+	OnCallStatusSubmitted OnCallDocStatus = "submitted"
+	// OnCallStatusPartial means a mix of submitted and failed (no pending).
+	// Retry will only re-dispatch the failed ones.
+	OnCallStatusPartial OnCallDocStatus = "partial"
+	// OnCallStatusFailed means every submission failed (no pending).
+	OnCallStatusFailed OnCallDocStatus = "failed"
+)
+
+// OnCallIncidentType discriminates the two flavours the off-duty form
+// supports. The empty string is a legal in-progress value before the user
+// has made a selection.
+type OnCallIncidentType string
+
+const (
+	// OnCallIncidentPlannedMaintenance covers expected work performed
+	// during the on-call window (patching, scheduled migrations, …).
+	OnCallIncidentPlannedMaintenance OnCallIncidentType = "planned_maintenance"
+	// OnCallIncidentServiceDisruption covers unexpected outages the
+	// on-caller responded to.
+	OnCallIncidentServiceDisruption OnCallIncidentType = "service_disruption"
+)
+
+// OnCallDoc is the documentation captured for a single off-duty tag block.
+// At most one doc per block (UNIQUE index on block_id). The Submissions
+// slice is loaded on read (List/Get) and is not stored on the doc row
+// itself — see OnCallSubmission.
+type OnCallDoc struct {
+	ID            int64              `json:"id"`
+	BlockID       int64              `json:"block_id"`
+	TagAtCreation int64              `json:"tag_at_creation"`
+	Stale         bool               `json:"stale"`
+	Application   string             `json:"application"`
+	IncidentType  OnCallIncidentType `json:"incident_type"`
+	Solution      string             `json:"solution"`
+	CreatedAt     time.Time          `json:"created_at"`
+	UpdatedAt     time.Time          `json:"updated_at"`
+	Submissions   []OnCallSubmission `json:"submissions,omitempty"`
+}
+
+// Status rolls up the per-plugin Submissions into a single status the UI
+// can render. Pure function over the slice — never queries the DB.
+func (d OnCallDoc) Status() OnCallDocStatus {
+	if len(d.Submissions) == 0 {
+		return OnCallStatusDraft
+	}
+	var pending, submitted, failed int
+	for _, s := range d.Submissions {
+		switch s.Status {
+		case "pending":
+			pending++
+		case "submitted":
+			submitted++
+		case "failed":
+			failed++
+		}
+	}
+	switch {
+	case pending > 0:
+		return OnCallStatusPending
+	case failed == 0:
+		return OnCallStatusSubmitted
+	case submitted == 0:
+		return OnCallStatusFailed
+	default:
+		return OnCallStatusPartial
+	}
+}
+
+// OnCallSubmission is the per-plugin attempt to push an OnCallDoc to a
+// remote system. A successful row is final — retry skips it to avoid
+// duplicating tickets. A failed row is re-dispatched on the next submit.
+type OnCallSubmission struct {
+	ID          int64      `json:"id"`
+	DocID       int64      `json:"doc_id"`
+	PluginName  string     `json:"plugin_name"`
+	Status      string     `json:"status"` // pending|submitted|failed
+	ExternalRef *string    `json:"external_ref,omitempty"`
+	ExternalURL *string    `json:"external_url,omitempty"`
+	LastError   *string    `json:"last_error,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	SubmittedAt *time.Time `json:"submitted_at,omitempty"`
+}
