@@ -79,6 +79,34 @@ jobs:
           echo "iso=${ISO}" >> "$GITHUB_OUTPUT"
           echo "epoch=${EPOCH}" >> "$GITHUB_OUTPUT"
 
+      - name: Sync winres.json identity.version with tag
+        # go-winres' --product-version / --file-version flags only override
+        # RT_VERSION; the Side-by-Side assembly identity under
+        # RT_MANIFEST.identity.version stays at whatever the JSON committed
+        # in the repo says. Patch it here so hashpoint.exe carries a single
+        # coherent version across both resource tables (Windows uses
+        # identity.version for SxS resolution and the App User Model ID).
+        shell: pwsh
+        run: |
+          $tag = "${{ needs.bump-tag.outputs.new_tag }}".TrimStart("v")
+          if ($tag -notmatch '^\d+(\.\d+){0,3}$') {
+            Write-Error "Tag '$tag' is not a 1-4 part numeric version"
+            exit 1
+          }
+          # Windows manifest assembly-identity requires exactly 4 parts
+          # (major.minor.build.revision); github-tag-action yields N.N.N
+          # so we pad the revision with zero.
+          $parts = $tag.Split(".")
+          while ($parts.Length -lt 4) { $parts += "0" }
+          $fullVersion = $parts -join "."
+          $jsonPath = "winres/winres.json"
+          $j = Get-Content $jsonPath -Raw | ConvertFrom-Json
+          $j.RT_MANIFEST."#1"."0409".identity.version = $fullVersion
+          # Default Depth=2 would flatten the nested manifest tree to
+          # strings; 32 is comfortably above the file's actual depth.
+          ($j | ConvertTo-Json -Depth 32) | Set-Content -Path $jsonPath -Encoding utf8NoBOM
+          Write-Host "Patched winres.json identity.version → $fullVersion"
+
       - name: Generate Windows resource (.syso)
         shell: bash
         run: |

@@ -108,6 +108,16 @@ export default function Timeline() {
   const [processTracks, setProcessTracks] = useState<ProcessTrack[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [granularityMs, setGranularityMs] = useState<number>(0);
+  // Working weekdays from the user config — drives the MonthCalendar's
+  // non-workday muting. Default matches config.WorkScheduleConfig defaults
+  // so the calendar renders sensibly before the first refresh resolves.
+  const [workDays, setWorkDays] = useState<string[]>([
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+  ]);
 
   // Currently-selected tag-blocks (click on top strip / table row).
   const [selectedBlockIDs, setSelectedBlockIDs] = useState<Set<number>>(new Set());
@@ -255,6 +265,9 @@ export default function Timeline() {
       setPaused(p);
       setGranularityMs(
         Math.max(0, cfg?.tracking?.tag_block_granularity_min ?? 0) * 60_000,
+      );
+      setWorkDays(
+        cfg?.work_schedule?.work_days ?? ["Mon", "Tue", "Wed", "Thu", "Fri"],
       );
       setError(null);
     } catch (e) {
@@ -1103,6 +1116,7 @@ export default function Timeline() {
         <MonthCalendar
           month={month}
           tags={tags}
+          workDays={workDays}
           onSelectDay={(d) => {
             setDay(d);
             setViewMode("day");

@@ -8,12 +8,13 @@ nötig.
 
 ## Aufbau des Tabs
 
-Der Tab ist in vier Abschnitte unterteilt:
+Der Tab ist in fünf Abschnitte unterteilt:
 
 1. **Erfassung** — globaler Erfassungs-Schalter, Polling-Intervall, Idle-Schwelle und Tag-Block-Granularität.
 2. **Quick-Tag-Picker** — globaler Hotkey für die schnelle Tag-Auswahl (siehe [Quick-Tag-Picker](quick-tag.md)).
 3. **Kommunikations-Prozesse** — Liste paralleler Erfassungsprozesse (Teams, Zoom, …) für hybride Meetings.
 4. **Personio** — Tenant-Subdomain und interaktive Anmeldung.
+5. **Microsoft Entra ID** — Client-/Tenant-ID und optionale Anmeldung für Microsoft 365 / SharePoint / Custom-APIs.
 
 > **Autostart:** Der TimeTracker bietet hier keinen Autostart-Schalter mehr. Der MSI-Installer aktiviert den Autostart automatisch für den installierenden Account; eine manuelle Aktivierung beschreibt der Abschnitt [Autostart](installation.md#autostart) im Installationskapitel.
 
@@ -133,6 +134,35 @@ können die Anmeldung anstoßen oder zurücksetzen:
 Details zum Login-Flow, zu Validierung und Fehlerbehandlung siehe
 [Personio-Synchronisation](personio.md).
 
+## Microsoft Entra ID
+
+Optionale Anmeldung gegen Ihren Microsoft-Entra-ID-Tenant. Aktiviert nur,
+wenn beide GUIDs eingetragen sind — sonst läuft kein Auth-Code.
+
+| Feld | Bedeutung |
+| --- | --- |
+| **Client ID** | Application (client) ID GUID aus der Entra-ID-App-Registrierung. Format: 8-4-4-4-12 hex. |
+| **Tenant ID** | Directory (tenant) ID GUID. Bewusst Single-Tenant — `common`/`organizations` werden abgelehnt. |
+
+Eingaben mit Klammern (`{...}`) und beliebiger Groß-/Kleinschreibung werden
+beim Speichern auf das Standard-Format normalisiert.
+
+Im Entra-Abschnitt sehen Sie zusätzlich den aktuellen Anmelde-Status und
+können den Login anstoßen oder zurücksetzen:
+
+- **Bei Entra ID anmelden / Erneut anmelden** — öffnet den Standardbrowser
+  auf der Microsoft-Login-Seite. Auf Entra-joined Geräten in der Regel
+  promptlos via PRT-SSO.
+- **Abmelden** — löscht den lokalen, DPAPI-verschlüsselten Token-Cache.
+  Der Windows-Login bleibt davon unberührt.
+
+> Tokens werden DPAPI-verschlüsselt unter
+> `%LOCALAPPDATA%\TimeTracker\auth\msal_cache.bin` abgelegt; die
+> `config.toml` enthält nur die beiden öffentlichen GUIDs.
+
+Details zur App-Registrierung, zum Anmelde-Flow und zur Fehlerbehandlung
+siehe [Microsoft Entra ID](entra-id.md).
+
 ## `config.toml` — direkter Zugriff (optional)
 
 Wer den Editor lieber direkt verwendet, kann die Datei unter
@@ -148,6 +178,10 @@ tag_block_granularity_min  = 0      # 0 = aus; 15 = Tag-Blöcke (manuell+auto) a
 
 [personio]
 tenant = "acme"
+
+[entra]
+client_id = ""   # leer = Entra-ID-Feature aus
+tenant_id = ""   # leer = Entra-ID-Feature aus
 
 [quick_tag]
 enabled = true
@@ -174,3 +208,5 @@ Datei direkt aktualisiert; Werte werden zudem zur Laufzeit übernommen.
 - **Logs:** `%LOCALAPPDATA%\TimeTracker\log\`
 - **Personio-Session:** Windows Credential Manager
   (`TimeTracker.PersonioSession`)
+- **Entra-ID-Token-Cache:** `%LOCALAPPDATA%\TimeTracker\auth\msal_cache.bin`
+  (DPAPI-verschlüsselt, CurrentUser-Scope)

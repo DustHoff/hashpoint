@@ -1,7 +1,25 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { log } from "../lib/log";
-import type { AppConfig, PersonioStatus } from "../types";
+import type {
+  AppConfig,
+  EntraStatus,
+  PersonioStatus,
+  WorkDay,
+} from "../types";
+
+// Weekday rows for the work-schedule checkbox row. Key is the canonical
+// English short name that round-trips through TOML; label is the German
+// abbreviation surfaced to the user.
+const WORK_DAYS: ReadonlyArray<{ key: WorkDay; label: string }> = [
+  { key: "Mon", label: "Mo" },
+  { key: "Tue", label: "Di" },
+  { key: "Wed", label: "Mi" },
+  { key: "Thu", label: "Do" },
+  { key: "Fri", label: "Fr" },
+  { key: "Sat", label: "Sa" },
+  { key: "Sun", label: "So" },
+];
 
 const emptyConfig: AppConfig = {
   tracking: {
@@ -11,8 +29,14 @@ const emptyConfig: AppConfig = {
     tag_block_granularity_min: 0,
   },
   personio: { tenant: "" },
+  entra: { client_id: "", tenant_id: "" },
   quick_tag: { enabled: true, hotkey: "Ctrl+Alt+T" },
   communication: { process_names: ["teams.exe"], title_exclude_phrases: [] },
+  work_schedule: {
+    start_hour: 8,
+    end_hour: 18,
+    work_days: ["Mon", "Tue", "Wed", "Thu", "Fri"],
+  },
 };
 
 // normalize defends against backends that omit (or rename) sub-objects so a
@@ -30,6 +54,10 @@ function normalize(c: Partial<AppConfig> | null | undefined): AppConfig {
         emptyConfig.tracking.tag_block_granularity_min,
     },
     personio: { tenant: c?.personio?.tenant ?? "" },
+    entra: {
+      client_id: c?.entra?.client_id ?? "",
+      tenant_id: c?.entra?.tenant_id ?? "",
+    },
     quick_tag: {
       enabled: c?.quick_tag?.enabled ?? emptyConfig.quick_tag.enabled,
       hotkey: c?.quick_tag?.hotkey ?? emptyConfig.quick_tag.hotkey,
@@ -42,23 +70,38 @@ function normalize(c: Partial<AppConfig> | null | undefined): AppConfig {
         c?.communication?.title_exclude_phrases ??
         emptyConfig.communication.title_exclude_phrases,
     },
+    work_schedule: {
+      start_hour:
+        c?.work_schedule?.start_hour ?? emptyConfig.work_schedule.start_hour,
+      end_hour:
+        c?.work_schedule?.end_hour ?? emptyConfig.work_schedule.end_hour,
+      work_days:
+        c?.work_schedule?.work_days ?? emptyConfig.work_schedule.work_days,
+    },
   };
 }
 
 export default function Settings() {
   const [config, setConfig] = useState<AppConfig>(emptyConfig);
   const [status, setStatus] = useState<PersonioStatus | null>(null);
+  const [entraStatus, setEntraStatus] = useState<EntraStatus | null>(null);
   const [saving, setSaving] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
+  const [entraLoggingIn, setEntraLoggingIn] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function refresh() {
     try {
-      const [c, s] = await Promise.all([api.getConfig(), api.personioStatus()]);
-      log.debug("settings: loaded", { config: c, status: s });
+      const [c, s, es] = await Promise.all([
+        api.getConfig(),
+        api.personioStatus(),
+        api.entraStatus(),
+      ]);
+      log.debug("settings: loaded", { config: c, status: s, entra: es });
       setConfig(normalize(c as Partial<AppConfig>));
       setStatus(s);
+      setEntraStatus(es);
     } catch (e) {
       log.error("settings: refresh failed", { err: String(e) });
       setError(String(e));
@@ -105,6 +148,33 @@ export default function Settings() {
     try {
       await api.personioLogout();
       setMessage("Personio-Session entfernt.");
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function entraLogin() {
+    setEntraLoggingIn(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await api.entraLogin();
+      setMessage("Entra ID-Anmeldung erfolgreich.");
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setEntraLoggingIn(false);
+    }
+  }
+
+  async function entraLogout() {
+    setError(null);
+    setMessage(null);
+    try {
+      await api.entraLogout();
+      setMessage("Entra ID-Session entfernt.");
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -206,6 +276,107 @@ export default function Settings() {
             }
             className="w-24 rounded bg-slate-900/60 px-2 py-1 text-sm"
           />
+        </Field>
+      </section>
+
+      {/* Work-schedule section ------------------------------------------ */}
+      <section className="space-y-3 rounded bg-surface p-4">
+        <h3 className="text-sm font-semibold text-slate-200">Arbeitszeit</h3>
+        <p className="text-[11px] text-slate-500">
+          Nominale tägliche Arbeitszeit und Arbeitstage. Wird aktuell zur
+          Hervorhebung im Monatskalender genutzt (Nicht-Arbeitstage werden
+          gedämpft dargestellt). Die Werte beeinflussen die Erfassung selbst
+          nicht — die läuft weiterhin durchgehend, solange sie aktiv ist.
+        </p>
+        <div className="flex flex-wrap items-end gap-4">
+          <Field
+            label="Arbeitsbeginn"
+            help="Volle Stunde (0–23), inklusiv."
+          >
+            <select
+              value={config.work_schedule.start_hour}
+              onChange={(e) =>
+                update("work_schedule", {
+                  ...config.work_schedule,
+                  start_hour: Number(e.target.value),
+                })
+              }
+              className="w-24 rounded bg-slate-900/60 px-2 py-1 text-sm"
+            >
+              {Array.from({ length: 24 }, (_, h) => (
+                <option key={h} value={h}>
+                  {String(h).padStart(2, "0")}:00
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field
+            label="Arbeitsende"
+            help="Volle Stunde (1–24), exklusiv — d. h. 18:00 = bis 17:59."
+          >
+            <select
+              value={config.work_schedule.end_hour}
+              onChange={(e) =>
+                update("work_schedule", {
+                  ...config.work_schedule,
+                  end_hour: Number(e.target.value),
+                })
+              }
+              className="w-24 rounded bg-slate-900/60 px-2 py-1 text-sm"
+            >
+              {Array.from({ length: 24 }, (_, i) => {
+                const h = i + 1;
+                return (
+                  <option key={h} value={h}>
+                    {h === 24 ? "24:00" : `${String(h).padStart(2, "0")}:00`}
+                  </option>
+                );
+              })}
+            </select>
+          </Field>
+        </div>
+        <Field
+          label="Arbeitstage"
+          help="Aktive Tage werden im Kalender normal dargestellt, inaktive gedämpft."
+        >
+          <div className="flex flex-wrap gap-1">
+            {WORK_DAYS.map(({ key, label }) => {
+              const checked = config.work_schedule.work_days.includes(key);
+              return (
+                <label
+                  key={key}
+                  className={`flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-xs ${
+                    checked
+                      ? "bg-accent/80 text-white"
+                      : "bg-slate-900/60 text-slate-400"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => {
+                      const next = e.target.checked
+                        ? [...config.work_schedule.work_days, key]
+                        : config.work_schedule.work_days.filter(
+                            (d) => d !== key,
+                          );
+                      update("work_schedule", {
+                        ...config.work_schedule,
+                        // Re-sort to canonical Mo→So order so the on-disk
+                        // TOML stays stable across saves regardless of
+                        // click sequence.
+                        work_days: WORK_DAYS.map((w) => w.key).filter((k) =>
+                          next.includes(k),
+                        ),
+                      });
+                    }}
+                    className="h-3.5 w-3.5"
+                  />
+                  <span>{label}</span>
+                </label>
+              );
+            })}
+          </div>
         </Field>
       </section>
 
@@ -456,6 +627,113 @@ export default function Settings() {
           Personio-Login-Seite. Sobald die Anmeldung (inkl. ggf. 2FA)
           abgeschlossen ist, werden die Session-Cookies erfasst und das Fenster
           wieder geschlossen.
+        </p>
+      </section>
+
+      {/* Entra ID section ----------------------------------------------- */}
+      <section className="space-y-3 rounded bg-surface p-4">
+        <h3 className="text-sm font-semibold text-slate-200">
+          Microsoft Entra ID
+        </h3>
+        <p className="text-[11px] text-slate-500">
+          Optionale Anmeldung gegen einen Entra-ID-Tenant für Microsoft Graph
+          (SharePoint, Kalender) und Entra-geschützte Drittanwendungen. Die
+          App-Registrierung muss als „Mobile and desktop applications“ mit
+          Loopback-Redirect <code className="font-mono">http://localhost</code> und
+          aktivierten Public Client Flows angelegt sein.
+        </p>
+        <Field
+          label="Client ID"
+          help='Application (client) ID GUID aus der Entra-ID-App-Registrierung. Format: 8-4-4-4-12 hex, z. B. "11111111-2222-3333-4444-555555555555".'
+        >
+          <input
+            type="text"
+            value={config.entra.client_id}
+            onChange={(e) =>
+              update("entra", { ...config.entra, client_id: e.target.value })
+            }
+            placeholder="00000000-0000-0000-0000-000000000000"
+            className="w-96 rounded bg-slate-900/60 px-2 py-1 font-mono text-sm"
+          />
+        </Field>
+        <Field
+          label="Tenant ID"
+          help="Directory (tenant) ID GUID. „common“ / „organizations“ werden bewusst abgelehnt — die App ist Single-Tenant."
+        >
+          <input
+            type="text"
+            value={config.entra.tenant_id}
+            onChange={(e) =>
+              update("entra", { ...config.entra, tenant_id: e.target.value })
+            }
+            placeholder="00000000-0000-0000-0000-000000000000"
+            className="w-96 rounded bg-slate-900/60 px-2 py-1 font-mono text-sm"
+          />
+        </Field>
+
+        <div className="rounded bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
+          {!entraStatus?.configured ? (
+            <>
+              Feature inaktiv —{" "}
+              {entraStatus?.reason || "Client-ID und Tenant-ID eintragen und speichern."}
+            </>
+          ) : entraStatus.has_account ? (
+            <>
+              Eingeloggt
+              {entraStatus.username && (
+                <>
+                  {" "}als{" "}
+                  <span className="font-mono text-slate-200">
+                    {entraStatus.username}
+                  </span>
+                </>
+              )}
+              {entraStatus.tenant_id && (
+                <>
+                  {" "}im Tenant{" "}
+                  <span className="font-mono text-slate-200">
+                    {entraStatus.tenant_id}
+                  </span>
+                </>
+              )}
+              .
+            </>
+          ) : (
+            <>Konfiguration vorhanden, aber noch nicht angemeldet.</>
+          )}
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={entraLogin}
+            disabled={
+              entraLoggingIn ||
+              !entraStatus?.configured ||
+              !config.entra.client_id ||
+              !config.entra.tenant_id
+            }
+            className="rounded bg-accent px-3 py-1 text-sm text-white disabled:opacity-50"
+          >
+            {entraLoggingIn
+              ? "Browser geöffnet — bitte einloggen…"
+              : entraStatus?.has_account
+                ? "Erneut anmelden"
+                : "Bei Entra ID anmelden"}
+          </button>
+          {entraStatus?.has_account && (
+            <button
+              onClick={entraLogout}
+              className="rounded bg-slate-700 px-3 py-1 text-sm hover:bg-slate-600"
+            >
+              Abmelden
+            </button>
+          )}
+        </div>
+        <p className="text-[11px] text-slate-500">
+          Beim ersten Login öffnet sich der Standardbrowser auf der
+          Microsoft-Login-Seite. Auf Entra-ID-joined Geräten greift das
+          PRT-SSO und der Flow läuft promptlos durch. Folgestarts holen das
+          Token still aus dem DPAPI-verschlüsselten lokalen Cache.
         </p>
       </section>
 

@@ -33,8 +33,25 @@ func urlParse(s string) (*url.URL, error) { return url.Parse(s) }
 type Config struct {
 	Tracking      TrackingConfig      `toml:"tracking"      json:"tracking"`
 	Personio      PersonioConfig      `toml:"personio"      json:"personio"`
+	Entra         EntraConfig         `toml:"entra"         json:"entra"`
 	QuickTag      QuickTagConfig      `toml:"quick_tag"     json:"quick_tag"`
 	Communication CommunicationConfig `toml:"communication" json:"communication"`
+	WorkSchedule  WorkScheduleConfig  `toml:"work_schedule" json:"work_schedule"`
+	OnCall        OnCallConfig        `toml:"on_call"       json:"on_call"`
+	// Per-plugin configuration is NOT stored in config.toml — it lives
+	// in the plugin_settings table (DPAPI-encrypted for password fields)
+	// and is reached via storage.PluginSettingsRepo. That keeps secret
+	// blobs out of a file users might check into source control by
+	// accident.
+}
+
+// OnCallConfig configures the on-call ("Rufbereitschaft") documentation
+// pipeline. When a tag block overlaps off-hours per WorkScheduleConfig AND
+// its tag (or any ancestor) is in TagIDs, the orchestrator enqueues a
+// documentation row that the user fills out on the Rufbereitschaft tab.
+// Empty TagIDs ⇒ feature dormant (no docs are ever enqueued).
+type OnCallConfig struct {
+	TagIDs []int64 `toml:"tag_ids" json:"tag_ids"`
 }
 
 // TrackingConfig holds polling/idle parameters.
@@ -58,6 +75,48 @@ type PersonioConfig struct {
 	// Tenant is the Personio subdomain (e.g. "acme" → https://acme.personio.de).
 	// May be left empty on first start; populated via the in-app settings UI.
 	Tenant string `toml:"tenant" json:"tenant"`
+}
+
+// EntraConfig parameterises the optional Microsoft Entra ID authentication
+// feature used to obtain delegated tokens for Microsoft Graph (SharePoint,
+// calendar) and Entra-protected custom APIs. Both fields are user-supplied
+// and may be left empty: when ClientID or TenantID is missing the entire
+// feature is dormant — no MSAL client is built, no auth code runs at
+// startup, and the related UI surfaces stay disabled.
+//
+// Both values are public identifiers (Application (client) ID and Directory
+// (tenant) ID from the App Registration in the Azure portal). No client
+// secret is ever stored — the authentication uses a public-client / native
+// flow with PKCE and the system browser. The persistent token cache lives
+// next to the database under %LOCALAPPDATA%\TimeTracker\auth and is
+// DPAPI-encrypted (CurrentUser scope), so it never holds plaintext tokens.
+type EntraConfig struct {
+	// ClientID is the Application (client) ID GUID from the Entra ID
+	// App Registration ("Mobile and desktop applications" platform with
+	// Public Client Flows enabled).
+	ClientID string `toml:"client_id" json:"client_id"`
+	// TenantID is the Directory (tenant) ID GUID. We deliberately require
+	// a concrete tenant — single-tenant by design; the values "common"
+	// or "organizations" are rejected by Validate().
+	TenantID string `toml:"tenant_id" json:"tenant_id"`
+}
+
+// Configured reports whether both ClientID and TenantID are filled in.
+// Callers that gate UI entry points or skip building the MSAL client at
+// startup should consult this rather than attempting an AcquireToken call.
+func (e EntraConfig) Configured() bool {
+	return strings.TrimSpace(e.ClientID) != "" && strings.TrimSpace(e.TenantID) != ""
+}
+
+// Authority returns the OIDC authority URL used by MSAL, or the empty
+// string when no tenant is configured. Always single-tenant — the
+// public-cloud login host is hard-coded.
+func (e EntraConfig) Authority() string {
+	t := strings.TrimSpace(e.TenantID)
+	if t == "" {
+		return ""
+	}
+	return "https://login.microsoftonline.com/" + t
 }
 
 // QuickTagConfig configures the global Quick-Tag-Picker hotkey. When
@@ -117,6 +176,114 @@ func NormalizeProcessNames(n []string) []string {
 	return out
 }
 
+// WorkScheduleConfig captures the user's nominal working hours and working
+// weekdays. The values are purely informational today: they seed the calendar
+// view's "is this a workday" shading and are surfaced in the settings UI so
+// downstream features (sync filtering, expected-hours reporting) can consume
+// them later without another config migration.
+//
+// StartHour and EndHour are integer hour-of-day values in the local timezone:
+// StartHour is inclusive, EndHour is exclusive, so the default 8..18 means
+// "08:00 up to but not including 18:00" — i.e. a 10-hour window. Validate()
+// enforces 0 <= StartHour < EndHour <= 24.
+//
+// WorkDays is a list of canonical English weekday short names ("Mon" .. "Sun").
+// English keys keep the on-disk TOML locale-independent; the UI maps them to
+// localized German labels (Mo, Di, ...). An empty WorkDays list is legal and
+// means "no day is a working day"; the calendar then renders every cell
+// muted. Order in the slice does not matter — NormalizeWorkDays sorts to
+// canonical Mon→Sun order and drops duplicates / unknown values.
+type WorkScheduleConfig struct {
+	StartHour int      `toml:"start_hour" json:"start_hour"`
+	EndHour   int      `toml:"end_hour"   json:"end_hour"`
+	WorkDays  []string `toml:"work_days"  json:"work_days"`
+}
+
+// workDayOrder is the canonical Mon→Sun ordering used for serialisation and
+// the time.Weekday → string mapping below. The package-private slice lets
+// NormalizeWorkDays sort deterministically without a per-call allocation.
+var workDayOrder = []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+
+// workDayByWeekday translates Go's time.Weekday (Sunday=0) to the canonical
+// short name used in TOML / JSON.
+var workDayByWeekday = map[time.Weekday]string{
+	time.Monday:    "Mon",
+	time.Tuesday:   "Tue",
+	time.Wednesday: "Wed",
+	time.Thursday:  "Thu",
+	time.Friday:    "Fri",
+	time.Saturday:  "Sat",
+	time.Sunday:    "Sun",
+}
+
+// canonicalWorkDay maps any accepted spelling ("mon", "Monday", "MON") to the
+// canonical short form. Returns "" for unknown input so the validator can
+// surface a clear error message instead of silently dropping the entry.
+func canonicalWorkDay(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "mon", "monday":
+		return "Mon"
+	case "tue", "tues", "tuesday":
+		return "Tue"
+	case "wed", "weds", "wednesday":
+		return "Wed"
+	case "thu", "thur", "thurs", "thursday":
+		return "Thu"
+	case "fri", "friday":
+		return "Fri"
+	case "sat", "saturday":
+		return "Sat"
+	case "sun", "sunday":
+		return "Sun"
+	}
+	return ""
+}
+
+// NormalizeWorkDays returns a sanitized copy of n: each entry is trimmed and
+// case-normalised to the canonical short form ("Mon" .. "Sun"); unknown
+// entries are dropped; duplicates are collapsed; the result is sorted in
+// canonical Mon→Sun order so the on-disk TOML stays stable across saves.
+// A nil / empty input returns nil so callers can distinguish "no days
+// configured" from "explicitly all days unselected" — both legal states.
+func NormalizeWorkDays(n []string) []string {
+	if len(n) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(n))
+	for _, raw := range n {
+		c := canonicalWorkDay(raw)
+		if c == "" {
+			continue
+		}
+		seen[c] = struct{}{}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for _, d := range workDayOrder {
+		if _, ok := seen[d]; ok {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// IsWorkDay reports whether the local-time weekday of t is in the configured
+// WorkDays list. Returns false for an empty list (no days configured).
+func (w WorkScheduleConfig) IsWorkDay(t time.Time) bool {
+	name, ok := workDayByWeekday[t.Weekday()]
+	if !ok {
+		return false
+	}
+	for _, d := range w.WorkDays {
+		if d == name {
+			return true
+		}
+	}
+	return false
+}
+
 // NormalizeTitleExcludePhrases returns a sanitized copy of n: trimmed,
 // empties dropped, deduplicated case-insensitively. Original casing is kept
 // because the phrases are surfaced to the user verbatim in the settings UI;
@@ -148,6 +315,14 @@ type Paths struct {
 	DataDir    string // %LOCALAPPDATA%\TimeTracker
 	DBFile     string // %LOCALAPPDATA%\TimeTracker\data.db
 	LogDir     string // %LOCALAPPDATA%\TimeTracker\log
+	// AuthDir holds DPAPI-encrypted blobs for optional authentication
+	// features (currently the Entra ID MSAL token cache). User-only
+	// permissions inherited from %LOCALAPPDATA%; the file is encrypted
+	// regardless.
+	AuthDir string // %LOCALAPPDATA%\TimeTracker\auth
+	// PluginsDir holds installed plugin binaries (and their manifest.toml).
+	// Each plugin lives under PluginsDir\<plugin-name>\.
+	PluginsDir string // %APPDATA%\TimeTracker\plugins
 }
 
 // PollInterval returns the poll interval as a duration.
@@ -222,6 +397,8 @@ func ResolvePaths() (Paths, error) {
 		DataDir:    dataDir,
 		DBFile:     filepath.Join(dataDir, "data.db"),
 		LogDir:     filepath.Join(dataDir, "log"),
+		AuthDir:    filepath.Join(dataDir, "auth"),
+		PluginsDir: filepath.Join(cfgDir, "plugins"),
 	}, nil
 }
 
@@ -247,6 +424,7 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.Communication.ProcessNames = NormalizeProcessNames(cfg.Communication.ProcessNames)
 	cfg.Communication.TitleExcludePhrases = NormalizeTitleExcludePhrases(cfg.Communication.TitleExcludePhrases)
+	cfg.WorkSchedule.WorkDays = NormalizeWorkDays(cfg.WorkSchedule.WorkDays)
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
@@ -258,6 +436,9 @@ func Save(path string, cfg *Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
+	// #nosec G304 -- path is computed from %APPDATA%\TimeTracker\config.toml
+	// (or an explicit caller-supplied path in tests); never derived from
+	// untrusted input.
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("open config: %w", err)
@@ -271,6 +452,12 @@ func Save(path string, cfg *Config) error {
 }
 
 var tenantRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
+
+// guidRe matches the canonical 8-4-4-4-12 hex GUID form used by Entra ID for
+// both client (application) and directory (tenant) IDs. We reject the
+// well-known meta-tenants "common", "organizations" and "consumers" up the
+// stack — Validate() handles that with a clearer error message.
+var guidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // NormalizeTenant accepts the variety of inputs a user might paste into the
 // settings UI ("example", "example.app.personio.com", "https://example.personio.de/")
@@ -298,6 +485,25 @@ func NormalizeTenant(raw string) string {
 	return s
 }
 
+// NormalizeGUID accepts the variety of GUID encodings users paste into UI
+// inputs ("{abc...}", "ABC-...", surrounding whitespace) and returns the
+// canonical lowercased 8-4-4-4-12 form. Empty / whitespace-only input
+// returns "". Inputs that don't look like a GUID at all are returned
+// trimmed-only so the validator surfaces the problem with the original
+// shape intact.
+func NormalizeGUID(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	s = strings.TrimPrefix(s, "{")
+	s = strings.TrimSuffix(s, "}")
+	if guidRe.MatchString(s) {
+		return strings.ToLower(s)
+	}
+	return s
+}
+
 // Validate checks the config for invalid combinations and ranges. It returns a
 // composite error with all violations.
 func (c *Config) Validate() error {
@@ -317,9 +523,51 @@ func (c *Config) Validate() error {
 				"personio.tenant erwartet den Subdomain-Slug (z. B. \"example\"), nicht eine vollständige URL — bekommen: "+t)
 		}
 	}
+	// Entra ID: client_id and tenant_id are either both empty (feature
+	// disabled) or both present and well-formed. We do *not* allow the
+	// meta-tenants common/organizations/consumers — single-tenant only.
+	cid := strings.TrimSpace(c.Entra.ClientID)
+	tid := strings.TrimSpace(c.Entra.TenantID)
+	switch {
+	case cid == "" && tid == "":
+		// feature disabled — nothing to validate.
+	case cid == "" || tid == "":
+		errs = append(errs, "entra.client_id und entra.tenant_id müssen entweder beide leer oder beide gesetzt sein")
+	default:
+		if !guidRe.MatchString(cid) {
+			errs = append(errs, "entra.client_id erwartet eine GUID im 8-4-4-4-12-Format — bekommen: "+cid)
+		}
+		switch strings.ToLower(tid) {
+		case "common", "organizations", "consumers":
+			errs = append(errs, "entra.tenant_id muss eine konkrete Directory-GUID sein, nicht \""+tid+"\" (Multi-Tenant ist nicht unterstützt)")
+		default:
+			if !guidRe.MatchString(tid) {
+				errs = append(errs, "entra.tenant_id erwartet eine GUID im 8-4-4-4-12-Format — bekommen: "+tid)
+			}
+		}
+	}
 	if c.QuickTag.Enabled {
 		if _, err := ParseHotkey(c.QuickTag.Hotkey); err != nil {
 			errs = append(errs, "quick_tag.hotkey ungültig: "+err.Error())
+		}
+	}
+	// Work schedule: hours in [0,24], start strictly before end (an empty or
+	// inverted window has no meaningful interpretation). Unknown weekday
+	// strings are reported individually so the user can spot a typo;
+	// NormalizeWorkDays would otherwise silently drop them.
+	if c.WorkSchedule.StartHour < 0 || c.WorkSchedule.StartHour > 23 {
+		errs = append(errs, "work_schedule.start_hour must be in [0,23]")
+	}
+	if c.WorkSchedule.EndHour < 1 || c.WorkSchedule.EndHour > 24 {
+		errs = append(errs, "work_schedule.end_hour must be in [1,24]")
+	}
+	if c.WorkSchedule.StartHour >= 0 && c.WorkSchedule.EndHour <= 24 &&
+		c.WorkSchedule.StartHour >= c.WorkSchedule.EndHour {
+		errs = append(errs, "work_schedule.start_hour must be strictly less than work_schedule.end_hour")
+	}
+	for _, d := range c.WorkSchedule.WorkDays {
+		if canonicalWorkDay(d) == "" {
+			errs = append(errs, "work_schedule.work_days enthält unbekannten Wochentag: "+d)
 		}
 	}
 	if len(errs) == 0 {

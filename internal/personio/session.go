@@ -63,6 +63,10 @@ type SessionCookie struct {
 func (s Session) HTTPCookies() []*http.Cookie {
 	out := make([]*http.Cookie, 0, len(s.Cookies))
 	for _, c := range s.Cookies {
+		// #nosec G124 -- we are *replaying* cookies that Personio set on us
+		// during the chromedp login flow, not minting fresh cookies for any
+		// third party. Secure/HttpOnly/SameSite faithfully mirror whatever
+		// Personio's server emitted (see the SameSite switch below).
 		hc := &http.Cookie{
 			Name:     c.Name,
 			Value:    c.Value,

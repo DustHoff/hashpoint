@@ -21,12 +21,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: v1.61
-          args: --timeout=5m
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -34,6 +28,20 @@ jobs:
       - name: Frontend install
         working-directory: frontend
         run: npm ci || npm install
+
+      - name: Frontend build
+        # Populate frontend/dist so the //go:embed all:frontend/dist in
+        # frontend.go resolves during golangci-lint's typecheck pass.
+        working-directory: frontend
+        run: npm run build
+
+      - name: golangci-lint
+        # v8 requires golangci-lint v2.x (v1.x dropped Go 1.26 export-data
+        # support and is end-of-life). Pinned to `latest` until a v2 baseline
+        # is established; tighten the pin if a release breaks the build.
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
 
       - name: Frontend lint
         working-directory: frontend
@@ -53,6 +61,20 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Frontend install
+        working-directory: frontend
+        run: npm ci || npm install
+
+      - name: Frontend build
+        # Populate frontend/dist so the //go:embed all:frontend/dist in
+        # frontend.go resolves before `go test ./...` builds the root pkg.
+        working-directory: frontend
+        run: npm run build
 
       - name: Unit tests
         run: go test ./... -race -coverprofile=coverage.out

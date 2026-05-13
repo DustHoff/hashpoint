@@ -20,6 +20,7 @@ Der TimeTracker ist eine Windows-Desktop-Anwendung, die im Hintergrund automatis
 | [Tags verwalten](tags.md) | Tag-Hierarchie, Farben, Personio-Mappings |
 | [Auto-Tagging-Regeln](auto-tagging.md) | Regeln definieren, testen und auf Historie anwenden |
 | [Personio-Synchronisation](personio.md) | Voraussetzungen, Sync-Logik, Fehlerbehandlung |
+| [Microsoft Entra ID](entra-id.md) | Optionale Anmeldung für Microsoft 365, SharePoint, Kalender, Custom-APIs |
 | [Systemtray](tray.md) | Tray-Menü, Pause, manuelles Tagging, Beenden |
 | [Quick-Tag-Picker](quick-tag.md) | Globaler Hotkey für blitzschnelles manuelles Taggen |
 
@@ -43,3 +44,5 @@ Der TimeTracker ist eine Windows-Desktop-Anwendung, die im Hintergrund automatis
 - **Datenbank & Logs:** `%LOCALAPPDATA%\TimeTracker\`
 - **Personio-Session:** Windows Credential Manager
   (`TimeTracker.PersonioSession`)
+- **Entra-ID-Token-Cache:** `%LOCALAPPDATA%\TimeTracker\auth\msal_cache.bin`
+  (DPAPI-verschlüsselt)

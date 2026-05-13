@@ -14,7 +14,9 @@ import (
 
 	hashpoint "github.com/dusthoff/hashpoint"
 	"github.com/dusthoff/hashpoint/internal/config"
+	"github.com/dusthoff/hashpoint/internal/entra"
 	"github.com/dusthoff/hashpoint/internal/personio"
+	pluginhost "github.com/dusthoff/hashpoint/internal/plugin"
 	"github.com/dusthoff/hashpoint/internal/storage"
 	"github.com/dusthoff/hashpoint/internal/tagging"
 	"github.com/dusthoff/hashpoint/internal/tracker"
@@ -50,6 +52,9 @@ const (
 // startupSyncEvent channel.
 type StartupSyncStatus string
 
+// Startup-sync status values. The trailing comment on each line is the
+// authoritative description; revive's exported rule requires a comment
+// at the block level so the const group is annotated here as well.
 const (
 	StartupSyncSkipped StartupSyncStatus = "skipped" // nothing to sync (no unsynced day)
 	StartupSyncOK      StartupSyncStatus = "ok"      // sync ran, no day-level errors
@@ -82,6 +87,7 @@ var helpPageOrder = []string{
 	"tags",
 	"auto-tagging",
 	"personio",
+	"entra-id",
 	"tray",
 	"quick-tag",
 }
@@ -106,13 +112,28 @@ type Deps struct {
 	Tags         storage.TagRepository
 	Rules        storage.RuleRepository
 	Settings     storage.SettingsRepository
+	OnCall       storage.OnCallRepository
 	Tracker      *tracker.Tracker
 	Orchestrator *tagging.Orchestrator
 	Sessions     personio.SessionStore
+	// PluginsDir is where Hashpoint scans for plugin binaries. Empty ⇒
+	// the plugin system is disabled (no Host is constructed; oncall doc
+	// submissions silently fail to "no plugin available", per product
+	// decision: doc stays in draft).
+	PluginsDir string
+	// PluginSettings persists per-plugin config + the enable flag. Nil
+	// disables the plugin system (same effect as empty PluginsDir).
+	PluginSettings storage.PluginSettingsRepository
 	// SyncerFor returns a Syncer wired against the given session, or nil if
 	// the session is not usable (e.g. tenant unset). Constructed lazily so
 	// session changes from the UI take effect immediately.
-	SyncerFor   func(*personio.Session) *personio.Syncer
+	SyncerFor func(*personio.Session) *personio.Syncer
+	// EntraFor builds (or rebuilds) the Entra ID auth manager from the
+	// given config. Returns (nil, nil) when the feature is not configured
+	// — callers must treat that as "feature disabled" rather than as an
+	// error. SaveConfig invokes this on ClientID/TenantID changes so a
+	// freshly-typed pair takes effect without restart.
+	EntraFor    func(config.EntraConfig) (entra.Manager, error)
 	ConfigPath  string
 	Config      *config.Config
 	OnConfigSet func(*config.Config) error
@@ -131,8 +152,18 @@ type App struct {
 	cfg           *config.Config
 	started       bool
 	windowVisible bool
+	// entraMgr is the live Entra ID auth manager, or nil while the
+	// feature is dormant. SaveConfig swaps it under entraMu when the
+	// user updates client_id / tenant_id; readers must take the lock.
+	entraMu  sync.Mutex
+	entraMgr entra.Manager
 
 	quickTagState quickTagWindowState
+
+	// pluginHost is the live plugin manager — constructed in New() iff
+	// deps.PluginsDir is non-empty. nil otherwise so the OnCall* methods
+	// can short-circuit cleanly when the feature is disabled.
+	pluginHost *pluginhost.Host
 }
 
 // quickTagWindowState captures the main-window placement before the
@@ -147,18 +178,62 @@ type quickTagWindowState struct {
 	y          int
 }
 
-// New constructs the app from its dependencies.
+// New constructs the app from its dependencies. If the bundled config
+// already has client_id/tenant_id filled in (i.e. the user configured
+// Entra ID in a previous session), the manager is built up-front so the
+// status badge has data on first render. A build failure is logged and
+// shrugged off — the rest of the app stays fully functional.
 func New(deps Deps) *App {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
-	return &App{
+	a := &App{
 		deps:          deps,
 		logger:        deps.Logger,
 		cfg:           deps.Config,
 		ctx:           context.Background(),
 		windowVisible: true,
 	}
+	if deps.EntraFor != nil && deps.Config != nil && deps.Config.Entra.Configured() {
+		mgr, err := deps.EntraFor(deps.Config.Entra)
+		if err != nil {
+			a.logger.Warn("entra: initial manager construction failed — feature dormant",
+				"err", err)
+		} else {
+			a.entraMgr = mgr
+		}
+	}
+
+	// Construct the plugin host if a plugins directory + settings
+	// repo are provided. The host reads/writes per-plugin config
+	// directly through the repo; the App layer never has to shuttle
+	// values through config.toml. Startup() launches plugins in a
+	// goroutine.
+	if deps.PluginsDir != "" && deps.PluginSettings != nil {
+		a.pluginHost = pluginhost.NewHost(pluginhost.HostDeps{
+			Logger:     a.logger,
+			PluginsDir: deps.PluginsDir,
+			Settings:   deps.PluginSettings,
+			OnDiscovered: func(info pluginhost.Info) {
+				// a.ctx is set in Startup(); the discovery loop only runs
+				// after Start() (which is invoked from Startup), so by
+				// the time this fires the context is guaranteed valid.
+				if a.ctx == nil {
+					return
+				}
+				wailsruntime.EventsEmit(a.ctx, PluginDiscoveredEvent, info)
+			},
+		})
+	}
+
+	// Wire the orchestrator's block-closed hook to the oncall Recheck
+	// pipeline. The hook is best-effort — failures are logged, not
+	// surfaced — because tagging operations must not be blocked by
+	// downstream plugin bookkeeping.
+	if deps.Orchestrator != nil {
+		deps.Orchestrator.SetBlockClosedHook(a.onBlockClosedForOnCall)
+	}
+	return a
 }
 
 // Startup is invoked by Wails once the runtime is ready. We piggy-back on
@@ -183,6 +258,19 @@ func (a *App) Startup(ctx context.Context) {
 		if err := a.deps.Orchestrator.Recover(ctx); err != nil {
 			a.logger.Warn("startup: orchestrator recover failed", "err", err)
 		}
+	}
+
+	// Launch installed plugins in a detached goroutine. Each plugin
+	// starts its own subprocess + handshake, which can take a noticeable
+	// fraction of a second; we deliberately don't block the main window
+	// behind it. Failures are recorded on the pluginhost.Info for the
+	// settings UI but never propagate up.
+	if a.pluginHost != nil {
+		go func() {
+			if err := a.pluginHost.Start(ctx); err != nil {
+				a.logger.Warn("plugin host start failed", "err", err)
+			}
+		}()
 	}
 
 	// Background goroutine: previous-day Personio sync. Runs detached so
@@ -318,7 +406,13 @@ func (a *App) emitStartupConflict(pre *personio.SyncPreflight) {
 
 // Shutdown is invoked by Wails on window close. Tracker shutdown is handled
 // in main; nothing to do here.
-func (a *App) Shutdown(_ context.Context) {}
+func (a *App) Shutdown(ctx context.Context) {
+	if a.pluginHost != nil {
+		if err := a.pluginHost.Stop(ctx); err != nil {
+			a.logger.Warn("plugin host stop failed", "err", err)
+		}
+	}
+}
 
 // ShowWindow brings the Wails main window to the foreground.
 func (a *App) ShowWindow() {
@@ -507,7 +601,9 @@ func (a *App) TagBlocksBetween(fromRFC3339, toRFC3339 string) ([]storage.TagBloc
 
 // CreateManualTagRange tags the given time range manually. Snaps to
 // granularity. Trims/splits/deletes auto-tag blocks the range overlaps;
-// rejects overlap with existing manual blocks.
+// rejects overlap with existing manual blocks. After the orchestrator
+// commits, recheckOnCallOverlapping reconciles any blocks the range
+// touched so a freshly-created off-hours block enqueues its doc.
 func (a *App) CreateManualTagRange(startRFC3339, endRFC3339 string, tagID int64, description string) error {
 	start, err := time.Parse(time.RFC3339, startRFC3339)
 	if err != nil {
@@ -520,12 +616,19 @@ func (a *App) CreateManualTagRange(startRFC3339, endRFC3339 string, tagID int64,
 	if a.deps.Orchestrator == nil {
 		return errors.New("orchestrator not configured")
 	}
-	return a.deps.Orchestrator.CreateManualRange(a.ctx, tagID, description, start.UTC(), end.UTC())
+	if err := a.deps.Orchestrator.CreateManualRange(a.ctx, tagID, description, start.UTC(), end.UTC()); err != nil {
+		return err
+	}
+	a.recheckOnCallOverlapping(a.ctx, start.UTC(), end.UTC())
+	return nil
 }
 
 // ResizeTagBlock changes the start and end of a closed tag block. The new
 // range snaps to granularity and is rejected if it would overlap another
-// tag block. Auto-tag blocks are promoted to manual on resize.
+// tag block. Auto-tag blocks are promoted to manual on resize. After a
+// successful resize the block's OnCall doc may need to be marked stale
+// (block moved fully into working hours) or freshly enqueued (block
+// moved into off-hours); recheckOnCallByID handles both.
 func (a *App) ResizeTagBlock(id int64, startRFC3339, endRFC3339 string) error {
 	a.logger.Info("app: ResizeTagBlock", "id", id, "start", startRFC3339, "end", endRFC3339)
 	start, err := time.Parse(time.RFC3339, startRFC3339)
@@ -539,7 +642,11 @@ func (a *App) ResizeTagBlock(id int64, startRFC3339, endRFC3339 string) error {
 	if a.deps.Orchestrator == nil {
 		return errors.New("orchestrator not configured")
 	}
-	return a.deps.Orchestrator.ResizeBlock(a.ctx, id, start.UTC(), end.UTC())
+	if err := a.deps.Orchestrator.ResizeBlock(a.ctx, id, start.UTC(), end.UTC()); err != nil {
+		return err
+	}
+	a.recheckOnCallByID(a.ctx, id)
+	return nil
 }
 
 // SetTagBlockDescription updates the description on a tag block.
@@ -552,12 +659,18 @@ func (a *App) SetTagBlockDescription(id int64, description string) error {
 	return a.deps.TagBlocks.SetDescription(a.ctx, id, ptr)
 }
 
-// SetTagBlockTag re-points an existing tag block to a different tag.
+// SetTagBlockTag re-points an existing tag block to a different tag. The
+// block's OnCall doc may transition stale↔active if the new tag is in/out
+// of the configured on-call set; recheckOnCallByID handles both.
 func (a *App) SetTagBlockTag(id, tagID int64) error {
 	if tagID <= 0 {
 		return fmt.Errorf("invalid tag id: %d", tagID)
 	}
-	return a.deps.TagBlocks.SetTag(a.ctx, id, tagID)
+	if err := a.deps.TagBlocks.SetTag(a.ctx, id, tagID); err != nil {
+		return err
+	}
+	a.recheckOnCallByID(a.ctx, id)
+	return nil
 }
 
 // DeleteTagBlock removes a tag block.
@@ -765,17 +878,26 @@ func (a *App) GetConfig() *config.Config {
 func (a *App) SaveConfig(c config.Config) error {
 	rawTenant := c.Personio.Tenant
 	c.Personio.Tenant = config.NormalizeTenant(rawTenant)
+	c.Entra.ClientID = config.NormalizeGUID(c.Entra.ClientID)
+	c.Entra.TenantID = config.NormalizeGUID(c.Entra.TenantID)
 	c.Communication.ProcessNames = config.NormalizeProcessNames(c.Communication.ProcessNames)
 	a.logger.Debug("app: SaveConfig requested",
 		"poll_interval_sec", c.Tracking.PollIntervalSec,
 		"idle_threshold_min", c.Tracking.IdleThresholdMin,
 		"personio_tenant_raw", rawTenant,
 		"personio_tenant", c.Personio.Tenant,
+		"entra_configured", c.Entra.Configured(),
 		"communication_processes", c.Communication.ProcessNames)
 	if err := c.Validate(); err != nil {
 		a.logger.Warn("app: SaveConfig validation failed", "err", err)
 		return err
 	}
+	a.mu.Lock()
+	prevEntra := config.EntraConfig{}
+	if a.cfg != nil {
+		prevEntra = a.cfg.Entra
+	}
+	a.mu.Unlock()
 	if a.deps.ConfigPath != "" {
 		if err := config.Save(a.deps.ConfigPath, &c); err != nil {
 			a.logger.Error("app: SaveConfig persist failed", "err", err, "path", a.deps.ConfigPath)
@@ -789,6 +911,9 @@ func (a *App) SaveConfig(c config.Config) error {
 		if err := a.deps.OnConfigSet(&c); err != nil {
 			a.logger.Warn("OnConfigSet returned error", "err", err)
 		}
+	}
+	if prevEntra != c.Entra {
+		a.applyEntraConfig(c.Entra)
 	}
 	a.logger.Info("app: config saved", "path", a.deps.ConfigPath)
 	return nil
@@ -907,6 +1032,110 @@ func (a *App) PersonioLogout() error {
 		return nil
 	}
 	return a.deps.Sessions.Delete()
+}
+
+// ----- Entra ID -----------------------------------------------------------
+
+// EntraStatusResponse is the JSON shape the Settings tab consumes. The
+// "configured" flag drives whether the Login button is enabled at all;
+// "has_account" drives the badge between "nicht angemeldet" and the
+// signed-in info card.
+type EntraStatusResponse struct {
+	Configured    bool   `json:"configured"`
+	HasAccount    bool   `json:"has_account"`
+	Username      string `json:"username,omitempty"`
+	HomeAccountID string `json:"home_account_id,omitempty"`
+	TenantID      string `json:"tenant_id,omitempty"`
+	ClientID      string `json:"client_id,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+}
+
+// EntraStatus reports the Entra ID auth state without hitting the
+// network. Returns "feature off" with a reason string when ClientID /
+// TenantID are unset or the manager failed to construct.
+func (a *App) EntraStatus() EntraStatusResponse {
+	mgr := a.currentEntra()
+	if mgr == nil || !mgr.Configured() {
+		return EntraStatusResponse{Reason: "Entra ID nicht konfiguriert"}
+	}
+	st := mgr.Status(a.ctx)
+	return EntraStatusResponse{
+		Configured:    true,
+		HasAccount:    st.HasAccount,
+		Username:      st.Username,
+		HomeAccountID: st.HomeAccountID,
+		TenantID:      st.TenantID,
+		ClientID:      st.ClientID,
+	}
+}
+
+// EntraLogin runs an interactive browser login with the default Graph
+// scopes. On Entra-joined Windows the Edge/system-browser PRT-SSO makes
+// this promptless; otherwise the user authenticates as usual.
+func (a *App) EntraLogin() error {
+	mgr := a.currentEntra()
+	if mgr == nil || !mgr.Configured() {
+		// User-facing German message surfaced directly via Wails binding;
+		// "Entra ID" is the Microsoft product name and stays capitalised.
+		return errors.New("Entra ID ist nicht konfiguriert — bitte Client- und Tenant-ID eintragen") //nolint:staticcheck // ST1005: deliberate, proper-noun start
+	}
+	a.logger.Info("app: EntraLogin started")
+	if err := mgr.Login(a.ctx, nil); err != nil {
+		a.logger.Warn("app: EntraLogin failed", "err", err)
+		return fmt.Errorf("entra login: %w", err)
+	}
+	a.logger.Info("app: EntraLogin completed")
+	return nil
+}
+
+// EntraLogout removes the cached account and deletes the encrypted cache
+// blob. The Windows session is unaffected.
+func (a *App) EntraLogout() error {
+	mgr := a.currentEntra()
+	if mgr == nil {
+		return nil
+	}
+	return mgr.Logout(a.ctx)
+}
+
+// currentEntra returns the live Entra manager under entraMu so reads are
+// safe against SaveConfig swaps. Returns nil when the feature is off.
+func (a *App) currentEntra() entra.Manager {
+	a.entraMu.Lock()
+	defer a.entraMu.Unlock()
+	return a.entraMgr
+}
+
+// applyEntraConfig swaps the Entra manager when client_id / tenant_id
+// changed. Called from SaveConfig with the new (already-validated) config.
+// The previous manager (if any) is dropped — its in-memory cache is
+// abandoned, but the on-disk blob remains so the user keeps their
+// previous identity should they revert the configuration. Switching to
+// an unconfigured state nils out the manager.
+func (a *App) applyEntraConfig(cfg config.EntraConfig) {
+	a.entraMu.Lock()
+	defer a.entraMu.Unlock()
+
+	if !cfg.Configured() {
+		if a.entraMgr != nil {
+			a.logger.Info("entra: feature disabled via config — dropping live manager")
+		}
+		a.entraMgr = nil
+		return
+	}
+	if a.deps.EntraFor == nil {
+		a.logger.Warn("entra: EntraFor wiring missing — manager not rebuilt")
+		return
+	}
+	mgr, err := a.deps.EntraFor(cfg)
+	if err != nil {
+		a.logger.Warn("entra: rebuild after config change failed",
+			"err", err)
+		a.entraMgr = nil
+		return
+	}
+	a.entraMgr = mgr
+	a.logger.Info("entra: manager rebuilt from new config")
 }
 
 // SyncDay triggers a sync of the given UTC day.
