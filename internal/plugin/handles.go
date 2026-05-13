@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"sync"
 
-	"github.com/dusthoff/hashpoint/internal/plugin/sdk"
+	"github.com/dusthoff/hashpoint/plugin/sdk"
 )
 
 // handleRegistry maps random opaque tokens to (pluginName, secretKey)

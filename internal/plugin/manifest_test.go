@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dusthoff/hashpoint/internal/plugin/sdk"
+	"github.com/dusthoff/hashpoint/plugin/sdk"
 )
 
 func TestLoadManifest_AcceptsKnownFieldTypes(t *testing.T) {

@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dusthoff/hashpoint/internal/plugin/sdk"
+	"github.com/dusthoff/hashpoint/plugin/sdk"
 	hclog "github.com/hashicorp/go-hclog"
 	hplugin "github.com/hashicorp/go-plugin"
 )

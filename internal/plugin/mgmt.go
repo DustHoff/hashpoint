@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/dusthoff/hashpoint/internal/plugin/sdk"
+	"github.com/dusthoff/hashpoint/plugin/sdk"
 	hplugin "github.com/hashicorp/go-plugin"
 )
 

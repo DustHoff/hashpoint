@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dusthoff/hashpoint/internal/plugin/sdk"
+	"github.com/dusthoff/hashpoint/plugin/sdk"
 )
 
 // fakeSettings is an in-memory SettingsStore for tests. Only the

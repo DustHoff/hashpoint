@@ -5,7 +5,7 @@
 // the relevant capability.
 //
 // The plugin author-facing types (Plugin interface, Metadata, HostAPI, …)
-// live in internal/plugin/sdk so they can also be imported by plugin
+// live in plugin/sdk so they can also be imported by plugin
 // binaries without dragging in host-only dependencies.
 package plugin
 
@@ -17,7 +17,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/dusthoff/hashpoint/internal/plugin/sdk"
+	"github.com/dusthoff/hashpoint/plugin/sdk"
 )
 
 // Manifest is the contents of <plugin-dir>/manifest.toml. The file
