@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // TagRepo is a SQL-backed TagRepository.
@@ -111,6 +112,101 @@ func (r *TagRepo) List(ctx context.Context) ([]Tag, error) {
 		out = append(out, *t)
 	}
 	return out, rows.Err()
+}
+
+// EnsureByPath resolves a slash-separated tag-hierarchy path, creating
+// any missing nodes along the way. See TagRepository.EnsureByPath for
+// the contract. The walk runs in a single transaction so that two
+// concurrent callers cannot race and double-create the same node.
+func (r *TagRepo) EnsureByPath(ctx context.Context, path string) (*Tag, error) {
+	segments, err := normalizeTagPath(path)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const findChild = `SELECT ` + tagColumns + ` FROM tags
+		WHERE name = ? COLLATE NOCASE
+		  AND ((? IS NULL AND parent_id IS NULL) OR parent_id = ?)`
+	const insertChild = `INSERT INTO tags (parent_id, name) VALUES (?, ?)`
+	const fetchByID = `SELECT ` + tagColumns + ` FROM tags WHERE id = ?`
+
+	var current *Tag
+	for _, seg := range segments {
+		var parentArg interface{}
+		if current != nil {
+			parentArg = current.ID
+		}
+		row := tx.QueryRowContext(ctx, findChild, seg, parentArg, parentArg)
+		t, err := scanTag(row)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("lookup segment %q: %w", seg, err)
+		}
+		if t != nil {
+			current = t
+			continue
+		}
+
+		var parentInsert interface{}
+		if current != nil {
+			parentInsert = current.ID
+		}
+		res, err := tx.ExecContext(ctx, insertChild, parentInsert, seg)
+		if err != nil {
+			return nil, fmt.Errorf("insert segment %q: %w", seg, err)
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			return nil, fmt.Errorf("inserted id: %w", err)
+		}
+		created, err := scanTag(tx.QueryRowContext(ctx, fetchByID, id))
+		if err != nil {
+			return nil, fmt.Errorf("read created tag %d: %w", id, err)
+		}
+		current = created
+	}
+	if current == nil {
+		return nil, ErrInvalidTagPath
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return current, nil
+}
+
+// normalizeTagPath splits path on "/" and reduces each segment to the
+// form the tags.name CHECK constraint accepts: strip a leading "#",
+// drop any non-alphanumeric character, then prefix "#". Empty segments
+// (after normalisation) are dropped. Returns ErrInvalidTagPath when no
+// usable segments remain.
+func normalizeTagPath(path string) ([]string, error) {
+	raw := strings.Split(path, "/")
+	out := make([]string, 0, len(raw))
+	for _, seg := range raw {
+		s := strings.TrimSpace(seg)
+		s = strings.TrimPrefix(s, "#")
+		var sb strings.Builder
+		for _, r := range s {
+			switch {
+			case r >= 'A' && r <= 'Z',
+				r >= 'a' && r <= 'z',
+				r >= '0' && r <= '9':
+				sb.WriteRune(r)
+			}
+		}
+		if sb.Len() == 0 {
+			continue
+		}
+		out = append(out, "#"+sb.String())
+	}
+	if len(out) == 0 {
+		return nil, ErrInvalidTagPath
+	}
+	return out, nil
 }
 
 // Children returns the direct children of the given tag.

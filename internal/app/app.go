@@ -233,6 +233,16 @@ func New(deps Deps) *App {
 	if deps.Orchestrator != nil {
 		deps.Orchestrator.SetBlockClosedHook(a.onBlockClosedForOnCall)
 	}
+
+	// Wire the orchestrator's plugin auto-tag fallback. Every running
+	// ProcessAutoTagHandler may participate; the adapter materialises
+	// the plugin-supplied tag-name path against the tags table on
+	// demand. Skipped when no plugin host or tag repo is wired — the
+	// orchestrator's Resolve calls then just no-op back to nil.
+	if a.pluginHost != nil && deps.Orchestrator != nil && deps.Tags != nil {
+		adapter := newPluginAutoTagAdapter(a.pluginHost, deps.Tags, a.logger)
+		deps.Orchestrator.SetPluginResolver(adapter)
+	}
 	return a
 }
 

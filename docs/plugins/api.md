@@ -104,6 +104,7 @@ type Capability string
 const (
     CapOnCallDocumentation Capability = "oncall_documentation"
     CapPluginManagement    Capability = "plugin_management"
+    CapProcessAutoTag      Capability = "process_autotag"
 )
 ```
 
@@ -187,6 +188,47 @@ Contract with the host:
 - A source cannot uninstall itself — the host returns
   `ErrSelfUninstallRefused` and never invokes the handler.
 - Errors are surfaced verbatim in the UI; wrap with context.
+
+### `process_autotag`
+
+```go
+type ProcessFocusInfo struct {
+    ProcessName     string // lower-cased basename, e.g. "code.exe"
+    WindowTitle     string // verbatim; may be empty
+    IsCommunication bool   // true ⇒ event came from the comm-track rail
+}
+
+type ProcessAutoTagResult struct {
+    Match       bool   // false ⇒ skip this event
+    TagName     string // slash-separated tag path; created if missing
+    Description string // optional, attached to the resulting block
+}
+
+type ProcessAutoTagHandler interface {
+    ProcessNames(ctx context.Context) ([]string, error)
+    Resolve(ctx context.Context, info ProcessFocusInfo) (ProcessAutoTagResult, error)
+}
+```
+
+`ProcessNames` declares the executable basenames the plugin wants to be
+consulted about. It is called once after every `Configure()`; the host
+caches the result.
+
+`Resolve` is invoked only when the focused (or comm-track) window's
+process matches `ProcessNames` AND no user rule already matches the
+focused window — user rules always win. The plugin can still opt out
+for a particular `(processName, windowTitle)` pair by returning
+`Match: false`.
+
+`TagName` is a slash-separated hierarchy path; the host materialises
+it against the tags table (case-insensitive), creating any missing
+intermediate nodes. See
+[capability-process-autotag.md](./capability-process-autotag.md) for
+normalisation rules, conflict semantics, and the comm-rail behaviour.
+
+Resolve runs on the orchestrator's hot path. The host applies a tight
+per-call timeout (default 500 ms); slow plugins are dropped for that
+event without aborting other plugins.
 
 ## HostAPI
 

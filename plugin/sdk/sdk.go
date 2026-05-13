@@ -83,9 +83,10 @@ var Handshake = hplugin.HandshakeConfig{
 // adding a new capability adds a new key here AND a new entry in
 // PluginMap / HostSidePluginMap.
 const (
-	pluginKeyCore   = "plugin"
-	pluginKeyOnCall = "oncall_documentation"
-	pluginKeyMgmt   = "plugin_management"
+	pluginKeyCore           = "plugin"
+	pluginKeyOnCall         = "oncall_documentation"
+	pluginKeyMgmt           = "plugin_management"
+	pluginKeyProcessAutoTag = "process_autotag"
 )
 
 // Capability is the string each plugin advertises in Metadata.Capabilities
@@ -107,6 +108,15 @@ const (
 	// DB cleanup around Uninstall — the handler is responsible only
 	// for the bytes-on-disk side of things.
 	CapPluginManagement Capability = "plugin_management"
+
+	// CapProcessAutoTag is advertised by plugins that implement
+	// ProcessAutoTagHandler. The host asks such plugins, once per focus
+	// change (or comm-window change) on a process they have declared, to
+	// supply a tag for an auto-tag-block. The plugin acts as a fallback
+	// behind the user's hand-maintained rules: when no enabled rule
+	// matches, the host consults every plugin that has declared the
+	// focused process basename.
+	CapProcessAutoTag Capability = "process_autotag"
 )
 
 // FieldType identifies the input element AND the persistence strategy
@@ -330,6 +340,70 @@ type PluginManagementHandler interface {
 	Uninstall(ctx context.Context, name string) error
 }
 
+// ProcessFocusInfo is the per-event payload the host hands to a
+// ProcessAutoTagHandler. ProcessName is the lower-cased executable
+// basename ("teams.exe"); WindowTitle is whatever the OS reports. The
+// host pre-filters by the plugin's declared ProcessNames, so the
+// handler is only ever asked about a process it has opted into.
+type ProcessFocusInfo struct {
+	// ProcessName is the lower-cased executable basename.
+	ProcessName string
+	// WindowTitle is the verbatim window title at the time of the event.
+	// May be empty.
+	WindowTitle string
+	// IsCommunication is true when this event came from the comm-track
+	// rail (Teams, Zoom, …) rather than the focused-window rail.
+	IsCommunication bool
+}
+
+// ProcessAutoTagResult is the plugin's response to Resolve. Match=false
+// means "skip this event" (the host falls back to no-tag, same as if
+// the plugin had not been consulted). Match=true with an empty TagName
+// is rejected — the host treats that as an opt-out.
+type ProcessAutoTagResult struct {
+	// Match must be true for the host to act on this result. Set false
+	// to opt out for a particular (process, title) pair without removing
+	// the process from ProcessNames.
+	Match bool
+	// TagName is a slash-separated tag-hierarchy path, e.g. "coding" or
+	// "productivity/coding". The host resolves the path against the
+	// existing tags table, creating any missing intermediate nodes
+	// (matching by name, case-insensitive). An empty TagName is treated
+	// as Match=false.
+	TagName string
+	// Description is optional free-form text attached to the resulting
+	// tag-block. Empty ⇒ no description.
+	Description string
+}
+
+// ProcessAutoTagHandler is implemented by plugins advertising
+// CapProcessAutoTag. The host calls ProcessNames() once at Configure
+// time to learn which executable basenames the plugin wants to be
+// consulted about, then calls Resolve only for events whose process
+// matches.
+//
+// The handler acts as a fallback behind the user's hand-maintained
+// rules: when an enabled rule matches the focused window, the rule
+// wins and the plugin is not consulted. This keeps plugins from
+// surprising the user.
+//
+// Resolve runs on the orchestrator's hot path (every focus change to a
+// claimed process). Plugins SHOULD return quickly — the host applies
+// a per-call timeout and drops the result on expiry.
+type ProcessAutoTagHandler interface {
+	// ProcessNames lists the executable basenames (case-insensitive)
+	// the plugin wants to be consulted about. Called once after every
+	// Configure(). Returning nil or an empty slice puts the handler in
+	// a dormant state — it will not be consulted on any event.
+	ProcessNames(ctx context.Context) ([]string, error)
+
+	// Resolve is invoked when the focused (or comm-track) window's
+	// process matches one of ProcessNames. The handler returns the tag
+	// (and optional description) to use for the auto-tag-block, or
+	// Match=false to opt out for this particular (process, title) pair.
+	Resolve(ctx context.Context, info ProcessFocusInfo) (ProcessAutoTagResult, error)
+}
+
 // Sentinel errors plugins may return. Wrap them with fmt.Errorf("%w: detail", ...)
 // to attach context.
 var (
@@ -380,6 +454,9 @@ func PluginMap(impl Plugin) hplugin.PluginSet {
 	if h, ok := impl.(PluginManagementHandler); ok {
 		set[pluginKeyMgmt] = &mgmtPluginAdapter{impl: h}
 	}
+	if h, ok := impl.(ProcessAutoTagHandler); ok {
+		set[pluginKeyProcessAutoTag] = &processAutoTagPluginAdapter{impl: h}
+	}
 	return set
 }
 
@@ -388,16 +465,18 @@ func PluginMap(impl Plugin) hplugin.PluginSet {
 // clients.
 func HostSidePluginMap() hplugin.PluginSet {
 	return hplugin.PluginSet{
-		pluginKeyCore:   &corePluginAdapter{},
-		pluginKeyOnCall: &oncallPluginAdapter{},
-		pluginKeyMgmt:   &mgmtPluginAdapter{},
+		pluginKeyCore:           &corePluginAdapter{},
+		pluginKeyOnCall:         &oncallPluginAdapter{},
+		pluginKeyMgmt:           &mgmtPluginAdapter{},
+		pluginKeyProcessAutoTag: &processAutoTagPluginAdapter{},
 	}
 }
 
-// CoreKey, OnCallKey, and MgmtKey export the plugin-set keys so the
-// host can Dispense() the right service.
+// CoreKey, OnCallKey, MgmtKey, and ProcessAutoTagKey export the
+// plugin-set keys so the host can Dispense() the right service.
 const (
-	CoreKey   = pluginKeyCore
-	OnCallKey = pluginKeyOnCall
-	MgmtKey   = pluginKeyMgmt
+	CoreKey           = pluginKeyCore
+	OnCallKey         = pluginKeyOnCall
+	MgmtKey           = pluginKeyMgmt
+	ProcessAutoTagKey = pluginKeyProcessAutoTag
 )

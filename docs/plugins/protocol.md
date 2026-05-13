@@ -40,6 +40,7 @@ register the same keys:
 | `plugin`                | Core lifecycle: `Init`, `Metadata`, `Configure`              |
 | `oncall_documentation`  | `Submit(OnCallDocument) → SubmissionResult`                  |
 | `plugin_management`     | `ListAvailable`, `Install(name)`, `Update(name)`, `Uninstall(name)` |
+| `process_autotag`       | `ProcessNames() → []string`, `Resolve(ProcessFocusInfo) → ProcessAutoTagResult` |
 
 Within each key, `net/rpc` exposes the methods under the prefix `Plugin.`
 (`Plugin.Init`, `Plugin.Submit`, …). Different keys get separate

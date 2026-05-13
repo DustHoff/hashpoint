@@ -374,6 +374,108 @@ func (c *mgmtClient) callNameOnly(method, name string) error {
 }
 
 // ---------------------------------------------------------------------
+// Process auto-tag capability adapter.
+// ---------------------------------------------------------------------
+
+type processAutoTagPluginAdapter struct {
+	impl ProcessAutoTagHandler // nil on host side
+}
+
+// Server returns the RPC-server stub running inside the plugin process.
+func (p *processAutoTagPluginAdapter) Server(_ *hplugin.MuxBroker) (interface{}, error) {
+	return &processAutoTagServer{impl: p.impl}, nil
+}
+
+// Client returns the RPC-client stub the host wires up to call into the plugin.
+func (p *processAutoTagPluginAdapter) Client(_ *hplugin.MuxBroker, c *rpc.Client) (interface{}, error) {
+	return &processAutoTagClient{client: c}, nil
+}
+
+type processAutoTagServer struct {
+	impl ProcessAutoTagHandler
+}
+
+// ProcessAutoTagNamesArgs is the empty arg type for ProcessNames.
+type ProcessAutoTagNamesArgs struct{}
+
+// ProcessAutoTagNamesReply carries the declared basenames or an error string.
+type ProcessAutoTagNamesReply struct {
+	Names []string
+	Err   string
+}
+
+// ProcessNames is the net/rpc-callable ProcessAutoTagHandler.ProcessNames.
+func (s *processAutoTagServer) ProcessNames(_ ProcessAutoTagNamesArgs, reply *ProcessAutoTagNamesReply) error {
+	names, err := s.impl.ProcessNames(context.Background())
+	if err != nil {
+		reply.Err = err.Error()
+		return nil
+	}
+	reply.Names = names
+	return nil
+}
+
+// ProcessAutoTagResolveArgs ships the focus event the handler should
+// inspect.
+type ProcessAutoTagResolveArgs struct {
+	Info ProcessFocusInfo
+}
+
+// ProcessAutoTagResolveReply carries the handler's verdict or an error
+// string. IsNotConfigured is set when the handler returned
+// ErrNotConfigured so the host can distinguish "plugin not ready" from
+// other failures.
+type ProcessAutoTagResolveReply struct {
+	Result          ProcessAutoTagResult
+	Err             string
+	IsNotConfigured bool
+}
+
+// Resolve is the net/rpc-callable ProcessAutoTagHandler.Resolve.
+func (s *processAutoTagServer) Resolve(args ProcessAutoTagResolveArgs, reply *ProcessAutoTagResolveReply) error {
+	res, err := s.impl.Resolve(context.Background(), args.Info)
+	if err != nil {
+		reply.Err = err.Error()
+		reply.IsNotConfigured = errors.Is(err, ErrNotConfigured)
+		return nil
+	}
+	reply.Result = res
+	return nil
+}
+
+type processAutoTagClient struct {
+	client *rpc.Client
+}
+
+// ProcessNames forwards to the plugin and rehydrates the response.
+func (c *processAutoTagClient) ProcessNames(_ context.Context) ([]string, error) {
+	var reply ProcessAutoTagNamesReply
+	if err := c.client.Call("Plugin.ProcessNames", ProcessAutoTagNamesArgs{}, &reply); err != nil {
+		return nil, err
+	}
+	if reply.Err != "" {
+		return nil, errors.New(reply.Err)
+	}
+	return reply.Names, nil
+}
+
+// Resolve forwards the focus info to the plugin and rehydrates
+// ErrNotConfigured on the host side.
+func (c *processAutoTagClient) Resolve(_ context.Context, info ProcessFocusInfo) (ProcessAutoTagResult, error) {
+	var reply ProcessAutoTagResolveReply
+	if err := c.client.Call("Plugin.Resolve", ProcessAutoTagResolveArgs{Info: info}, &reply); err != nil {
+		return ProcessAutoTagResult{}, err
+	}
+	if reply.Err == "" {
+		return reply.Result, nil
+	}
+	if reply.IsNotConfigured {
+		return ProcessAutoTagResult{}, fmt.Errorf("%w: %s", ErrNotConfigured, reply.Err)
+	}
+	return ProcessAutoTagResult{}, errors.New(reply.Err)
+}
+
+// ---------------------------------------------------------------------
 // HostAPI (reverse RPC: plugin → host).
 // ---------------------------------------------------------------------
 

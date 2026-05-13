@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -68,6 +70,14 @@ type Orchestrator struct {
 	// orchestrator's mu.Lock window. Set once via SetBlockClosedHook.
 	hookMu          sync.RWMutex
 	blockClosedHook BlockClosedHook
+
+	// pluginResolver is the optional plugin-side auto-tag fallback.
+	// Read under resolverMu separately from mu so the orchestrator can
+	// drop the mu lock around a Resolve() call (the App layer's
+	// implementation may touch storage). nil when no plugin host is
+	// wired (or when the user has no autotag plugins installed).
+	resolverMu     sync.RWMutex
+	pluginResolver PluginAutoTagResolver
 }
 
 // BlockClosedHook is invoked once per block-close transition. The blockID
@@ -113,8 +123,74 @@ const (
 
 type autoState struct {
 	blockID int64
-	ruleID  int64
-	tagID   int64
+	// Exactly one of (ruleID > 0) or (pluginName != "") is set: ruleID
+	// for a user-rule-driven auto-tag, pluginName for a plugin-resolver-
+	// driven one. The two paths take the same on/off lifecycle but
+	// surface different log fields and use different equality keys.
+	ruleID     int64
+	pluginName string
+	tagID      int64
+}
+
+// sourceKey is the equality discriminator the advance loop uses to
+// decide whether a fresh match constitutes a no-op (same source) or a
+// switch (different source). Rule and plugin sources never collide
+// because their key prefixes differ.
+func (s autoState) sourceKey() string {
+	if s.pluginName != "" {
+		return "plugin:" + s.pluginName
+	}
+	return "rule:" + strconv.FormatInt(s.ruleID, 10)
+}
+
+// autoMatch carries the resolved auto-tag descriptor through the
+// orchestrator's match → advance → startAuto pipeline. The lifecycle
+// methods key off sourceKey() so a rule-to-plugin (or plugin-to-rule)
+// transition closes the old block and opens a fresh one, while a same-
+// source re-evaluation is a no-op.
+type autoMatch struct {
+	ruleID      int64
+	pluginName  string
+	tagID       int64
+	description string
+}
+
+// sourceKey mirrors autoState.sourceKey so an open autoState can be
+// compared against a candidate autoMatch without constructing a fake
+// state.
+func (m autoMatch) sourceKey() string {
+	if m.pluginName != "" {
+		return "plugin:" + m.pluginName
+	}
+	return "rule:" + strconv.FormatInt(m.ruleID, 10)
+}
+
+// PluginAutoTagMatch is the resolved-and-materialised auto-tag descriptor
+// the App layer hands back from a PluginAutoTagResolver. The TagID has
+// already been resolved (or auto-created) against the tags table so the
+// orchestrator can open a TagBlock without further lookups.
+type PluginAutoTagMatch struct {
+	PluginName  string
+	TagID       int64
+	Description string
+}
+
+// PluginAutoTagResolver is the orchestrator's view of the plugin host:
+// "given a focused (process, title) pair, is there a plugin that wants
+// to claim it for an auto-tag-block?". Implementations live in the App
+// layer because they bridge the plugin host (internal/plugin) and tag
+// storage (internal/storage) — neither of which the tagging package
+// may import per CLAUDE.md §2.
+//
+// The resolver is consulted only as a fallback behind user-maintained
+// rules: when an enabled rule matches the focused window, the rule
+// wins and the resolver is never asked.
+//
+// Resolve runs synchronously on the orchestrator's focus-change path.
+// Implementations should honour the deadline on ctx and return nil
+// quickly when no plugin claims the process.
+type PluginAutoTagResolver interface {
+	Resolve(ctx context.Context, processName, windowTitle string, isCommunication bool) *PluginAutoTagMatch
 }
 
 type manualState struct {
@@ -153,6 +229,24 @@ func (o *Orchestrator) SetBlockClosedHook(h BlockClosedHook) {
 	o.hookMu.Lock()
 	o.blockClosedHook = h
 	o.hookMu.Unlock()
+}
+
+// SetPluginResolver installs the optional plugin-side auto-tag fallback.
+// Pass nil to detach. Safe to call at any time — readers take the lock.
+func (o *Orchestrator) SetPluginResolver(r PluginAutoTagResolver) {
+	o.resolverMu.Lock()
+	o.pluginResolver = r
+	o.resolverMu.Unlock()
+}
+
+// getPluginResolver returns the live resolver (or nil) under
+// resolverMu so the orchestrator can ask the App layer without holding
+// the main mu — Resolve() may touch the database.
+func (o *Orchestrator) getPluginResolver() PluginAutoTagResolver {
+	o.resolverMu.RLock()
+	r := o.pluginResolver
+	o.resolverMu.RUnlock()
+	return r
 }
 
 // SetClock overrides the wall-clock source (for tests).
@@ -260,7 +354,7 @@ func (o *Orchestrator) OnFocusChanged(ctx context.Context, name, title string, a
 		// the auto-tag-block lifecycle.
 		return
 	}
-	o.advance(ctx, at, o.matchRule(ctx, name, title))
+	o.advance(ctx, at, o.matchFocusAuto(ctx, name, title))
 }
 
 // OnFocusCleared is called by the tracker on idle / lock screen / shutdown.
@@ -291,10 +385,10 @@ func (o *Orchestrator) OnCommunicationChanged(ctx context.Context, sessions []tr
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	snap := o.snapFloor(at)
-	bestRule := o.matchBestCommRule(ctx, sessions)
+	best := o.matchBestCommAuto(ctx, sessions)
 
-	// Same rule still active → no transition.
-	if o.openCommAuto != nil && bestRule != nil && bestRule.ID == o.openCommAuto.ruleID {
+	// Same source still active → no transition.
+	if o.openCommAuto != nil && best != nil && best.sourceKey() == o.openCommAuto.sourceKey() {
 		return
 	}
 
@@ -302,13 +396,13 @@ func (o *Orchestrator) OnCommunicationChanged(ctx context.Context, sessions []tr
 	// the focus-driven flow.
 	if o.openCommAuto != nil {
 		reason := reasonCommWindowGone
-		if bestRule != nil {
+		if best != nil {
 			reason = reasonCommRuleSwitched
 		}
 		o.closeCommAuto(ctx, snap, reason)
 	}
 
-	if bestRule != nil {
+	if best != nil {
 		// Override: close any focus-driven auto, pause any open manual,
 		// then open the comm-auto block.
 		if o.openAuto != nil {
@@ -317,41 +411,41 @@ func (o *Orchestrator) OnCommunicationChanged(ctx context.Context, sessions []tr
 		if o.openManual != nil {
 			o.pauseManual(ctx, snap, reasonManualPausedForComm)
 		}
-		o.startCommAuto(ctx, *bestRule, snap)
+		o.startCommAuto(ctx, *best, snap)
 		return
 	}
 
-	// No comm rule active anymore: re-run the focus-driven flow with
+	// No comm match active anymore: re-run the focus-driven flow with
 	// whatever the tracker last reported.
-	var rule *storage.Rule
+	var focus *autoMatch
 	if o.focusActive {
-		rule = o.matchRule(ctx, o.focusedProcess.name, o.focusedProcess.title)
+		focus = o.matchFocusAuto(ctx, o.focusedProcess.name, o.focusedProcess.title)
 	}
-	o.advance(ctx, at, rule)
+	o.advance(ctx, at, focus)
 }
 
-// advance is the core state-machine step. `rule` is the rule that should
-// drive auto-tag state at `at` — nil when no rule applies (or focus is
-// cleared). The method holds o.mu.
-func (o *Orchestrator) advance(ctx context.Context, at time.Time, rule *storage.Rule) {
+// advance is the core state-machine step. `match` is the auto-tag
+// descriptor that should drive state at `at` — nil when no rule and no
+// plugin apply (or focus is cleared). The method holds o.mu.
+func (o *Orchestrator) advance(ctx context.Context, at time.Time, match *autoMatch) {
 	snap := o.snapFloor(at)
 
 	if o.openAuto != nil {
 		reason := reasonAutoFocusLost
-		if rule != nil && rule.ID == o.openAuto.ruleID {
+		if match != nil && match.sourceKey() == o.openAuto.sourceKey() {
 			return
 		}
-		if rule != nil {
+		if match != nil {
 			reason = reasonAutoRuleSwitched
 		}
 		o.closeAuto(ctx, snap, reason)
 	}
 
-	if rule != nil {
+	if match != nil {
 		if o.openManual != nil {
 			o.pauseManual(ctx, snap, reasonManualPausedForAuto)
 		}
-		o.startAuto(ctx, *rule, snap)
+		o.startAuto(ctx, *match, snap)
 		return
 	}
 
@@ -638,7 +732,7 @@ func (o *Orchestrator) closeAuto(ctx context.Context, snappedEnd time.Time, reas
 		if reason == reasonAutoRuleSwitched {
 			zeroReason = reasonAutoRuleSwitchedZero
 		}
-		o.logBlockClosed(*b, snappedEnd, zeroReason, "rule_id", state.ruleID)
+		o.logBlockClosed(*b, snappedEnd, zeroReason, autoSourceLogFields(*state)...)
 		o.openAuto = nil
 		return
 	}
@@ -647,54 +741,78 @@ func (o *Orchestrator) closeAuto(ctx context.Context, snappedEnd time.Time, reas
 		o.openAuto = nil
 		return
 	}
-	o.logBlockClosed(*b, snappedEnd, reason, "rule_id", state.ruleID)
+	o.logBlockClosed(*b, snappedEnd, reason, autoSourceLogFields(*state)...)
 	o.openAuto = nil
 	if o.pausedManual != nil && o.focusActive {
 		o.resumeManual(ctx, snappedEnd)
 	}
 }
 
-func (o *Orchestrator) startAuto(ctx context.Context, rule storage.Rule, snappedStart time.Time) {
-	var dptr *string
-	if rule.Description != nil {
-		if d := strings.TrimSpace(*rule.Description); d != "" {
-			dptr = &d
-		}
+// autoSourceLogFields returns the structured log fields identifying the
+// origin of an auto-tag block. Rule-driven blocks emit "rule_id";
+// plugin-driven ones emit "plugin_name" — exactly one is present so log
+// readers can grep either reliably.
+func autoSourceLogFields(s autoState) []any {
+	if s.pluginName != "" {
+		return []any{"plugin_name", s.pluginName}
 	}
+	return []any{"rule_id", s.ruleID}
+}
+
+func (o *Orchestrator) startAuto(ctx context.Context, match autoMatch, snappedStart time.Time) {
+	dptr := optionalDescription(match.description)
 	block := &storage.TagBlock{
-		TagID:       rule.TagID,
+		TagID:       match.tagID,
 		Description: dptr,
 		StartTime:   snappedStart,
 		IsManual:    false,
 	}
 	if err := o.blocks.Open(ctx, block); err != nil {
-		o.logger.Warn("open auto failed", "rule_id", rule.ID, "err", err)
+		o.logger.Warn("open auto failed",
+			"rule_id", match.ruleID, "plugin_name", match.pluginName, "err", err)
 		return
 	}
-	o.openAuto = &autoState{blockID: block.ID, ruleID: rule.ID, tagID: rule.TagID}
+	o.openAuto = &autoState{
+		blockID:    block.ID,
+		ruleID:     match.ruleID,
+		pluginName: match.pluginName,
+		tagID:      match.tagID,
+	}
 }
 
 // startCommAuto opens a communication-driven auto-tag block. Mirrors
 // startAuto but writes to openCommAuto so the override state machine can
 // distinguish the two.
-func (o *Orchestrator) startCommAuto(ctx context.Context, rule storage.Rule, snappedStart time.Time) {
-	var dptr *string
-	if rule.Description != nil {
-		if d := strings.TrimSpace(*rule.Description); d != "" {
-			dptr = &d
-		}
-	}
+func (o *Orchestrator) startCommAuto(ctx context.Context, match autoMatch, snappedStart time.Time) {
+	dptr := optionalDescription(match.description)
 	block := &storage.TagBlock{
-		TagID:       rule.TagID,
+		TagID:       match.tagID,
 		Description: dptr,
 		StartTime:   snappedStart,
 		IsManual:    false,
 	}
 	if err := o.blocks.Open(ctx, block); err != nil {
-		o.logger.Warn("open comm auto failed", "rule_id", rule.ID, "err", err)
+		o.logger.Warn("open comm auto failed",
+			"rule_id", match.ruleID, "plugin_name", match.pluginName, "err", err)
 		return
 	}
-	o.openCommAuto = &autoState{blockID: block.ID, ruleID: rule.ID, tagID: rule.TagID}
+	o.openCommAuto = &autoState{
+		blockID:    block.ID,
+		ruleID:     match.ruleID,
+		pluginName: match.pluginName,
+		tagID:      match.tagID,
+	}
+}
+
+// optionalDescription returns a pointer to s, or nil when s is empty
+// after whitespace trimming. Centralises the rule/plugin description
+// handling so a stray whitespace-only field never reaches the DB.
+func optionalDescription(s string) *string {
+	d := strings.TrimSpace(s)
+	if d == "" {
+		return nil
+	}
+	return &d
 }
 
 // closeCommAuto finalizes the open communication-driven auto-tag block.
@@ -722,7 +840,7 @@ func (o *Orchestrator) closeCommAuto(ctx context.Context, snappedEnd time.Time, 
 		if reason == reasonCommRuleSwitched {
 			zeroReason = reasonCommRuleSwitchedZero
 		}
-		o.logBlockClosed(*b, snappedEnd, zeroReason, "rule_id", state.ruleID)
+		o.logBlockClosed(*b, snappedEnd, zeroReason, autoSourceLogFields(*state)...)
 		o.openCommAuto = nil
 		return
 	}
@@ -731,18 +849,29 @@ func (o *Orchestrator) closeCommAuto(ctx context.Context, snappedEnd time.Time, 
 		o.openCommAuto = nil
 		return
 	}
-	o.logBlockClosed(*b, snappedEnd, reason, "rule_id", state.ruleID)
+	o.logBlockClosed(*b, snappedEnd, reason, autoSourceLogFields(*state)...)
 	o.openCommAuto = nil
 }
 
-// matchBestCommRule returns the highest-priority enabled rule that matches
-// any of the supplied comm sessions, or nil if none match. Rules are
-// pre-sorted priority DESC, id ASC by ListEnabled, so the first compiled
-// rule that matches any session is the winner.
-func (o *Orchestrator) matchBestCommRule(ctx context.Context, sessions []tracker.CommSession) *storage.Rule {
+// matchBestCommAuto returns the highest-priority auto-tag match for the
+// supplied comm sessions. User rules are evaluated first (priority DESC,
+// id ASC via ListEnabled); when no rule matches any session, the plugin
+// resolver is consulted per session in deterministic order (sorted by
+// process name). Returns nil when neither path produces a match.
+func (o *Orchestrator) matchBestCommAuto(ctx context.Context, sessions []tracker.CommSession) *autoMatch {
 	if len(sessions) == 0 {
 		return nil
 	}
+	if hit := o.firstCommRuleMatch(ctx, sessions); hit != nil {
+		return hit
+	}
+	return o.firstCommPluginMatch(ctx, sessions)
+}
+
+// firstCommRuleMatch evaluates user rules against every comm session and
+// returns an autoMatch for the first rule that hits any session. Rules
+// are pre-sorted by priority DESC, id ASC by ListEnabled.
+func (o *Orchestrator) firstCommRuleMatch(ctx context.Context, sessions []tracker.CommSession) *autoMatch {
 	rules, err := o.rules.ListEnabled(ctx)
 	if err != nil {
 		o.logger.Debug("orchestrator: list rules for comm match failed", "err", err)
@@ -759,12 +888,55 @@ func (o *Orchestrator) matchBestCommRule(ctx context.Context, sessions []tracker
 	for i := range compiled {
 		for _, s := range sessions {
 			if compiled[i].Match(s.ProcessName, s.WindowTitle) {
-				r := compiled[i].Rule
-				return &r
+				return ruleToAutoMatch(compiled[i].Rule)
 			}
 		}
 	}
 	return nil
+}
+
+// firstCommPluginMatch consults the plugin resolver for each comm
+// session in deterministic order (sorted by process name then title)
+// and returns the first non-nil match. Returns nil if no resolver is
+// installed or no session is claimed by any plugin.
+func (o *Orchestrator) firstCommPluginMatch(ctx context.Context, sessions []tracker.CommSession) *autoMatch {
+	r := o.getPluginResolver()
+	if r == nil {
+		return nil
+	}
+	ordered := make([]tracker.CommSession, len(sessions))
+	copy(ordered, sessions)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].ProcessName != ordered[j].ProcessName {
+			return ordered[i].ProcessName < ordered[j].ProcessName
+		}
+		return ordered[i].WindowTitle < ordered[j].WindowTitle
+	})
+	for _, s := range ordered {
+		if m := r.Resolve(ctx, s.ProcessName, s.WindowTitle, true); m != nil {
+			return &autoMatch{
+				pluginName:  m.PluginName,
+				tagID:       m.TagID,
+				description: m.Description,
+			}
+		}
+	}
+	return nil
+}
+
+// ruleToAutoMatch packages a rule into the orchestrator's internal
+// auto-tag descriptor. Descriptions are trimmed and empty strings are
+// dropped to match startAuto's pre-existing behaviour.
+func ruleToAutoMatch(r storage.Rule) *autoMatch {
+	desc := ""
+	if r.Description != nil {
+		desc = strings.TrimSpace(*r.Description)
+	}
+	return &autoMatch{
+		ruleID:      r.ID,
+		tagID:       r.TagID,
+		description: desc,
+	}
 }
 
 func (o *Orchestrator) startManual(ctx context.Context, tagID int64, description string, snappedStart time.Time) error {
@@ -884,7 +1056,29 @@ func (o *Orchestrator) snapCeil(t time.Time) time.Time {
 	return midnight.Add(delta - rem + o.granularity)
 }
 
-func (o *Orchestrator) matchRule(ctx context.Context, name, title string) *storage.Rule {
+// matchFocusAuto returns the auto-tag descriptor for the given focused
+// (process, title) pair. User rules win; the plugin resolver is
+// consulted only when no enabled rule matches. Returns nil when neither
+// produces a hit.
+func (o *Orchestrator) matchFocusAuto(ctx context.Context, name, title string) *autoMatch {
+	if hit := o.firstFocusRuleMatch(ctx, name, title); hit != nil {
+		return hit
+	}
+	if r := o.getPluginResolver(); r != nil {
+		if m := r.Resolve(ctx, name, title, false); m != nil {
+			return &autoMatch{
+				pluginName:  m.PluginName,
+				tagID:       m.TagID,
+				description: m.Description,
+			}
+		}
+	}
+	return nil
+}
+
+// firstFocusRuleMatch is matchFocusAuto's user-rule arm split out for
+// testability.
+func (o *Orchestrator) firstFocusRuleMatch(ctx context.Context, name, title string) *autoMatch {
 	rules, err := o.rules.ListEnabled(ctx)
 	if err != nil {
 		o.logger.Debug("orchestrator: list rules failed", "err", err)
@@ -899,8 +1093,7 @@ func (o *Orchestrator) matchRule(ctx context.Context, name, title string) *stora
 		return nil
 	}
 	if hit := FirstMatch(compiled, name, title); hit != nil {
-		r := hit.Rule
-		return &r
+		return ruleToAutoMatch(hit.Rule)
 	}
 	return nil
 }

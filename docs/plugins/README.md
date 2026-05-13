@@ -4,7 +4,7 @@ Hashpoint plugins are separate executables that the host (Hashpoint itself)
 launches as subprocesses. Communication is over `net/rpc`, multiplexed via
 [hashicorp/go-plugin][hcl], so a plugin crash never crashes the host.
 
-Two capabilities are defined today:
+Three capabilities are defined today:
 
 - **`oncall_documentation`** — receives filled-out off-duty docs from the
   user (solution / impacted application / incident type) and pushes them
@@ -16,6 +16,11 @@ Two capabilities are defined today:
   subprocess stop/start dance around mutating writes and the database
   cleanup on uninstall. The reference implementation for this capability
   is also shipped as a plugin — Hashpoint core only defines the contract.
+- **`process_autotag`** — declares one or more executable basenames the
+  plugin wants to be consulted about. When the user has not configured a
+  matching rule for the focused (or comm-track) process, the host asks
+  the plugin which tag to apply, then opens an auto-tag-block. User
+  rules always win — the plugin sits behind them as a fallback.
 
 Read on for:
 
@@ -23,6 +28,7 @@ Read on for:
 - [The plugin contract (Go API)](api.md)
 - [Wire protocol, handshake, secret model](protocol.md)
 - [On-call documentation capability spec](capability-oncall-documentation.md)
+- [Process auto-tag capability spec](capability-process-autotag.md)
 
 ---
 
@@ -156,9 +162,9 @@ plugin cannot uninstall itself.
 
 ## Future capabilities
 
-`oncall_documentation` and `plugin_management` are the first two
-capabilities. Adding new ones is a small SDK change: a new interface,
-a new wire-protocol service, an entry in the host's plugin set. See
-[`api.md`](api.md) for the pattern.
+`oncall_documentation`, `plugin_management`, and `process_autotag` are
+the capabilities defined today. Adding new ones is a small SDK change:
+a new interface, a new wire-protocol service, an entry in the host's
+plugin set. See [`api.md`](api.md) for the pattern.
 
 [hcl]: https://github.com/hashicorp/go-plugin
