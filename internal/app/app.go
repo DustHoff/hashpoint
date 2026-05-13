@@ -214,6 +214,15 @@ func New(deps Deps) *App {
 			Logger:     a.logger,
 			PluginsDir: deps.PluginsDir,
 			Settings:   deps.PluginSettings,
+			OnDiscovered: func(info pluginhost.Info) {
+				// a.ctx is set in Startup(); the discovery loop only runs
+				// after Start() (which is invoked from Startup), so by
+				// the time this fires the context is guaranteed valid.
+				if a.ctx == nil {
+					return
+				}
+				wailsruntime.EventsEmit(a.ctx, PluginDiscoveredEvent, info)
+			},
 		})
 	}
 

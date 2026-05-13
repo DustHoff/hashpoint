@@ -250,7 +250,7 @@ export type PluginState =
   | "failed"
   | "disabled";
 
-export type PluginCapability = "oncall_documentation";
+export type PluginCapability = "oncall_documentation" | "plugin_management";
 
 // FieldType discriminates input rendering + persistence strategy.
 // `password` values are encrypted at rest and never round-tripped to
@@ -288,4 +288,17 @@ export interface PluginInfo {
 export interface PluginConfigView {
   fields: Record<string, string>;
   secrets_set: Record<string, boolean>;
+}
+
+// AvailablePluginEntry mirrors internal/plugin.AvailablePluginEntry.
+// `installed_version` is the version currently loaded on disk (empty
+// when the plugin is not installed). `source_plugin` is the name of
+// the running plugin_management plugin that surfaced this entry —
+// Install/Update/Uninstall RPCs route back through it.
+export interface AvailablePluginEntry {
+  name: string;
+  version: string;
+  description: string;
+  source_plugin: string;
+  installed_version: string;
 }

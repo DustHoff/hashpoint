@@ -4,12 +4,18 @@ Hashpoint plugins are separate executables that the host (Hashpoint itself)
 launches as subprocesses. Communication is over `net/rpc`, multiplexed via
 [hashicorp/go-plugin][hcl], so a plugin crash never crashes the host.
 
-Today the system supports one capability: **on-call documentation
-("Rufbereitschaft")**. A plugin advertising `oncall_documentation` receives
-filled-out off-duty docs from the user (solution / impacted application /
-incident type) and pushes them into whatever downstream system you choose
-(Jira, OTRS, Confluence, an internal webhook — none of that is shipped by
-default).
+Two capabilities are defined today:
+
+- **`oncall_documentation`** — receives filled-out off-duty docs from the
+  user (solution / impacted application / incident type) and pushes them
+  into whatever downstream system you choose (Jira, OTRS, Confluence,
+  an internal webhook — none of that is shipped by default).
+- **`plugin_management`** — acts as a plugin source. The handler surfaces
+  a catalog of plugins available for install, and on user action writes
+  them into `PluginsDir` (or removes them). The host orchestrates the
+  subprocess stop/start dance around mutating writes and the database
+  cleanup on uninstall. The reference implementation for this capability
+  is also shipped as a plugin — Hashpoint core only defines the contract.
 
 Read on for:
 
@@ -87,7 +93,13 @@ cycle.
 ## Lifecycle
 
 1. **Discovery** — at host startup, Hashpoint scans `PluginsDir` for
-   subdirectories.
+   subdirectories. A background goroutine re-scans every
+   `HostDeps.DiscoveryInterval` (default 30 s) so plugins manually
+   dropped into the directory are picked up without an app restart.
+   Newly discovered plugins are launched immediately (auto-enable;
+   the default `plugin_state.enabled = 1` means no opt-in is needed);
+   the host fires the Wails event `plugins:discovered` so the UI
+   refreshes live.
 2. **Enable check** — for each directory the host reads
    `plugin_state.enabled`; rows with `enabled=0` are recorded as
    `state=disabled` and **skipped** (no subprocess).
@@ -123,10 +135,30 @@ Don't write a plugin for behaviours that touch only Hashpoint's own
 data (timeline rendering, tag rules, sync logic, …) — those belong in
 the main app.
 
+## Plugin sources (`plugin_management`)
+
+A plugin advertising `plugin_management` is itself a *source*: it tells
+the host which plugins are available out there, and on user action it
+installs / updates / uninstalls plugin bundles by writing files under
+`PluginsDir`. See [`api.md`](api.md) for the interface.
+
+The host fans the **Verfügbare Plugins** tab out across every running
+source plugin, merges their catalogs, and stamps each row with its
+source plugin name + the locally installed version so the UI can pick
+between Install, Update (only when versions differ), and Uninstall.
+
+When the user clicks Update, the host stops the target plugin's
+subprocess first (Windows holds an exclusive lock on the running `.exe`)
+and only then calls `handler.Update`. After a successful Uninstall the
+host clears the target's `plugin_state` + `plugin_settings` rows itself
+— the handler is only responsible for the bytes on disk. A source
+plugin cannot uninstall itself.
+
 ## Future capabilities
 
-`oncall_documentation` is the first capability. Adding new ones is a
-small SDK change: a new interface, a new wire-protocol service, an entry
-in the host's plugin set. See [`api.md`](api.md) for the pattern.
+`oncall_documentation` and `plugin_management` are the first two
+capabilities. Adding new ones is a small SDK change: a new interface,
+a new wire-protocol service, an entry in the host's plugin set. See
+[`api.md`](api.md) for the pattern.
 
 [hcl]: https://github.com/hashicorp/go-plugin

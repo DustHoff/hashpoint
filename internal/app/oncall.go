@@ -22,6 +22,12 @@ const (
 	// OnCallDocChangedEvent fires whenever a doc row is persisted
 	// (Save, Submit completion, MarkStale, Dismiss). Payload: doc id.
 	OnCallDocChangedEvent = "oncall:doc-changed"
+	// PluginDiscoveredEvent fires once for each plugin the host's
+	// periodic discovery loop picks up after Startup. Payload:
+	// pluginhost.Info. The frontend uses it to refresh both the
+	// installed-plugins list and the available-plugins tab without
+	// requiring a manual reload.
+	PluginDiscoveredEvent = "plugins:discovered"
 )
 
 // OnCallSubmitResultPayload is the JSON shape of OnCallSubmitResultEvent.
@@ -405,6 +411,45 @@ func (a *App) PluginReload(name string) error {
 		return errors.New("plugin host not configured")
 	}
 	return a.pluginHost.Reload(a.ctx, name)
+}
+
+// PluginListAvailable merges the catalogs of every running plugin that
+// advertises plugin_management, stamps each entry with its source +
+// installed version, and returns the deduplicated list rendered in the
+// "Verfügbare Plugins" tab. Returns nil + nil when no source is running.
+func (a *App) PluginListAvailable() ([]pluginhost.AvailablePluginEntry, error) {
+	if a.pluginHost == nil {
+		return nil, nil
+	}
+	return a.pluginHost.ListAvailablePlugins(a.ctx)
+}
+
+// PluginInstall asks the named source plugin to write the target plugin
+// on disk and then launches it.
+func (a *App) PluginInstall(sourcePlugin, name string) error {
+	if a.pluginHost == nil {
+		return errors.New("plugin host not configured")
+	}
+	return a.pluginHost.InstallPlugin(a.ctx, sourcePlugin, name)
+}
+
+// PluginUpdate stops the target subprocess, asks the named source to
+// refresh the files, and relaunches the target.
+func (a *App) PluginUpdate(sourcePlugin, name string) error {
+	if a.pluginHost == nil {
+		return errors.New("plugin host not configured")
+	}
+	return a.pluginHost.UpdatePlugin(a.ctx, sourcePlugin, name)
+}
+
+// PluginUninstall stops the target subprocess, asks the named source to
+// delete the files, and clears the target's persisted settings + state.
+// Self-uninstall (sourcePlugin == name) is refused by the host.
+func (a *App) PluginUninstall(sourcePlugin, name string) error {
+	if a.pluginHost == nil {
+		return errors.New("plugin host not configured")
+	}
+	return a.pluginHost.UninstallPlugin(a.ctx, sourcePlugin, name)
 }
 
 // --- helpers ------------------------------------------------------------

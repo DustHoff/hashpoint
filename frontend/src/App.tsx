@@ -6,6 +6,7 @@ import TagManager from "./components/TagManager";
 import RuleManager from "./components/RuleManager";
 import Settings from "./components/Settings";
 import Plugins from "./components/Plugins";
+import AvailablePlugins from "./components/AvailablePlugins";
 import About from "./components/About";
 import Help from "./components/Help";
 import PersonioBadge from "./components/PersonioBadge";
@@ -20,6 +21,7 @@ type Tab =
   | "rules"
   | "settings"
   | "plugins"
+  | "available-plugins"
   | "help"
   | "about";
 
@@ -30,6 +32,7 @@ const tabs: { id: Tab; label: string }[] = [
   { id: "rules", label: "Auto-Tagging" },
   { id: "settings", label: "Einstellungen" },
   { id: "plugins", label: "Plugins" },
+  { id: "available-plugins", label: "Verfügbare Plugins" },
   { id: "help", label: "Hilfe" },
   { id: "about", label: "Über" },
 ];
@@ -171,6 +174,7 @@ export default function App() {
         {tab === "rules" && <RuleManager />}
         {tab === "settings" && <Settings />}
         {tab === "plugins" && <Plugins />}
+        {tab === "available-plugins" && <AvailablePlugins />}
         {tab === "help" && <Help />}
         {tab === "about" && <About />}
       </main>

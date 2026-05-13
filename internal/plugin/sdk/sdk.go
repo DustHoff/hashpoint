@@ -85,6 +85,7 @@ var Handshake = hplugin.HandshakeConfig{
 const (
 	pluginKeyCore   = "plugin"
 	pluginKeyOnCall = "oncall_documentation"
+	pluginKeyMgmt   = "plugin_management"
 )
 
 // Capability is the string each plugin advertises in Metadata.Capabilities
@@ -97,6 +98,15 @@ const (
 	// CapOnCallDocumentation is advertised by plugins that implement
 	// OnCallDocumentationHandler.
 	CapOnCallDocumentation Capability = "oncall_documentation"
+	// CapPluginManagement is advertised by plugins that implement
+	// PluginManagementHandler. The host treats such a plugin as a
+	// catalog source: it can list plugins available for install,
+	// install/update them by writing files into PluginsDir, and
+	// uninstall them by removing those files. The host orchestrates
+	// the subprocess stop/start dance around mutating writes and the
+	// DB cleanup around Uninstall — the handler is responsible only
+	// for the bytes-on-disk side of things.
+	CapPluginManagement Capability = "plugin_management"
 )
 
 // FieldType identifies the input element AND the persistence strategy
@@ -276,6 +286,50 @@ type OnCallDocumentationHandler interface {
 	Submit(ctx context.Context, doc OnCallDocument) (SubmissionResult, error)
 }
 
+// AvailablePlugin describes one entry in a plugin source's catalog. The
+// host merges entries from every running PluginManagementHandler and
+// stamps each row with the source plugin's name so Install/Update/
+// Uninstall can be routed back to the originating handler. Name MUST
+// be the value the would-be installed plugin will use for its directory
+// and manifest — the host trusts the handler on this.
+//
+// JSON tags are present so the host can hand the type straight to the
+// Wails layer; plugin authors typically construct values by name and
+// never touch the JSON form.
+type AvailablePlugin struct {
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	Description string `json:"description"`
+}
+
+// PluginManagementHandler is implemented by plugins advertising
+// CapPluginManagement. They act as plugin sources: ListAvailable
+// returns the catalog the user sees in the "Verfügbare Plugins" tab,
+// and Install/Update/Uninstall mutate the bytes under PluginsDir.
+//
+// Contract with the host:
+//
+//   - Install/Update create or replace files under <PluginsDir>/<name>/
+//     (binary + manifest.toml) and return nil on success.
+//   - Update is invoked after the host has stopped the target plugin's
+//     subprocess (Windows holds an exclusive lock on the running .exe),
+//     so the handler can overwrite the binary in place.
+//   - Uninstall removes <PluginsDir>/<name>/ from disk. The host clears
+//     plugin_state + plugin_settings rows for the plugin after Uninstall
+//     returns; the handler must not touch the database.
+//   - All four methods MUST be safe to invoke concurrently with the
+//     handler's own normal lifecycle (Init/Configure may run on the
+//     handler at any time).
+//
+// Errors are surfaced verbatim in the UI; wrap with context so the user
+// can understand what failed.
+type PluginManagementHandler interface {
+	ListAvailable(ctx context.Context) ([]AvailablePlugin, error)
+	Install(ctx context.Context, name string) error
+	Update(ctx context.Context, name string) error
+	Uninstall(ctx context.Context, name string) error
+}
+
 // Sentinel errors plugins may return. Wrap them with fmt.Errorf("%w: detail", ...)
 // to attach context.
 var (
@@ -323,6 +377,9 @@ func PluginMap(impl Plugin) hplugin.PluginSet {
 	if h, ok := impl.(OnCallDocumentationHandler); ok {
 		set[pluginKeyOnCall] = &oncallPluginAdapter{impl: h}
 	}
+	if h, ok := impl.(PluginManagementHandler); ok {
+		set[pluginKeyMgmt] = &mgmtPluginAdapter{impl: h}
+	}
 	return set
 }
 
@@ -333,12 +390,14 @@ func HostSidePluginMap() hplugin.PluginSet {
 	return hplugin.PluginSet{
 		pluginKeyCore:   &corePluginAdapter{},
 		pluginKeyOnCall: &oncallPluginAdapter{},
+		pluginKeyMgmt:   &mgmtPluginAdapter{},
 	}
 }
 
-// CoreKey and OnCallKey export the plugin-set keys so the host can
-// Dispense() the right service.
+// CoreKey, OnCallKey, and MgmtKey export the plugin-set keys so the
+// host can Dispense() the right service.
 const (
 	CoreKey   = pluginKeyCore
 	OnCallKey = pluginKeyOnCall
+	MgmtKey   = pluginKeyMgmt
 )

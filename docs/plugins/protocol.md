@@ -35,10 +35,11 @@ MUST equal `HostAPIVersion`.
 Each plugin advertises a static set of named services. Both sides
 register the same keys:
 
-| Key                     | Service                                         |
-|-------------------------|-------------------------------------------------|
-| `plugin`                | Core lifecycle: `Init`, `Metadata`, `Configure` |
-| `oncall_documentation`  | `Submit(OnCallDocument) → SubmissionResult`     |
+| Key                     | Service                                                      |
+|-------------------------|--------------------------------------------------------------|
+| `plugin`                | Core lifecycle: `Init`, `Metadata`, `Configure`              |
+| `oncall_documentation`  | `Submit(OnCallDocument) → SubmissionResult`                  |
+| `plugin_management`     | `ListAvailable`, `Install(name)`, `Update(name)`, `Uninstall(name)` |
 
 Within each key, `net/rpc` exposes the methods under the prefix `Plugin.`
 (`Plugin.Init`, `Plugin.Submit`, …). Different keys get separate
@@ -165,6 +166,52 @@ followed by a reload, which re-runs the required-field gate.
 overridable via `HostDeps.SubmitTimeout`). A plugin that exceeds the
 deadline gets a context cancellation; its submission row stays in
 `pending` until the next retry.
+
+## Periodic discovery
+
+After the initial scan, the host re-reads `PluginsDir` every
+`HostDeps.DiscoveryInterval` (default 30 s, negative ⇒ disabled).
+Subdirectories absent from the in-memory registry are passed through
+the regular `launch()` path — manifest load, required-field gate,
+handshake — so a plugin dropped into the folder while the app is
+running starts on its own without an app restart. The default
+`plugin_state.enabled = 1` row means freshly-discovered plugins boot
+straight into `StateRunning` (or `needs_config`) without an explicit
+opt-in.
+
+For each plugin the discovery loop picks up, the host invokes
+`HostDeps.OnDiscovered(Info)`. The App layer forwards this to the
+Wails event `plugins:discovered` so both the **Plugins** and the
+**Verfügbare Plugins** tabs refresh live.
+
+Plugins already known to the host — including ones in `failed`,
+`disabled`, or `needs_config` — are left untouched on each tick.
+Manually-deleted plugin directories are intentionally **not** cleaned
+up; their entries stay in the list until the next app restart.
+
+## Install / Update / Uninstall flow
+
+`Host.InstallPlugin(source, name)`, `Host.UpdatePlugin(source, name)`,
+and `Host.UninstallPlugin(source, name)` dispatch to whichever running
+plugin advertises `plugin_management` under `source`. The host wraps
+each call so the handler never has to think about subprocess lifecycle:
+
+- **Install** — the host calls `handler.Install(name)`, then launches
+  the freshly-written plugin via the regular `launch()` path. The
+  install is rejected if `name` is already known to the host (use
+  Update instead).
+- **Update** — the host stops the target subprocess via
+  `stopAndForget(name)` (kill client, revoke `SecretHandle`s, drop
+  the in-memory entry), then calls `handler.Update(name)`, then
+  relaunches. If `handler.Update` fails the host attempts a relaunch
+  anyway so the target's state is still visible in the UI.
+- **Uninstall** — the host refuses self-uninstall
+  (`ErrSelfUninstallRefused`), stops the target, calls
+  `handler.Uninstall(name)`, then calls `SettingsStore.Clear(name)`
+  which deletes the `plugin_state` row and every `plugin_settings`
+  row for the plugin in a single transaction. The plugin is fully
+  gone from the host's view — a future Install starts from manifest
+  defaults.
 
 ## Crash isolation
 

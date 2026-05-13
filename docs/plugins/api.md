@@ -104,6 +104,7 @@ type Capability string
 
 const (
     CapOnCallDocumentation Capability = "oncall_documentation"
+    CapPluginManagement    Capability = "plugin_management"
 )
 ```
 
@@ -150,6 +151,43 @@ Return `sdk.ErrTransient` (wrap with `fmt.Errorf("%w: …", sdk.ErrTransient, �
 when the failure looks retryable (HTTP 5xx, network blip). The host
 keeps the per-plugin submission in `failed` state; the user can click
 Retry. Non-transient errors are surfaced verbatim in the inbox.
+
+### `plugin_management`
+
+```go
+type AvailablePlugin struct {
+    Name        string  // becomes the plugin's directory + manifest name
+    Version     string  // semver, shown in the catalog
+    Description string  // one-line, shown in the catalog
+}
+
+type PluginManagementHandler interface {
+    ListAvailable(ctx context.Context) ([]AvailablePlugin, error)
+    Install(ctx context.Context, name string) error
+    Update(ctx context.Context, name string) error
+    Uninstall(ctx context.Context, name string) error
+}
+```
+
+A plugin advertising `plugin_management` is a *plugin source*. Its
+catalog is merged with every other source's catalog in the
+**Verfügbare Plugins** tab — each row carries the source plugin's name
+so Install / Update / Uninstall route back to the originating handler.
+
+Contract with the host:
+
+- `Install` and `Update` create or replace files under
+  `<PluginsDir>/<name>/` (binary + `manifest.toml`). The host launches
+  the freshly-written plugin after a successful `Install`.
+- The host stops the target plugin's subprocess **before** calling
+  `Update` — on Windows the running `.exe` is file-locked and the
+  handler could not overwrite it otherwise.
+- `Uninstall` removes `<PluginsDir>/<name>/` from disk. The host
+  clears the target's `plugin_state` + `plugin_settings` rows after
+  `Uninstall` returns; the handler must not touch the database.
+- A source cannot uninstall itself — the host returns
+  `ErrSelfUninstallRefused` and never invokes the handler.
+- Errors are surfaced verbatim in the UI; wrap with context.
 
 ## HostAPI
 

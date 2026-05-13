@@ -75,6 +75,9 @@ type SettingsStore interface {
 	SetField(ctx context.Context, name, key, value string) error
 	SetSecretField(ctx context.Context, name, key, value string) error
 	DeleteField(ctx context.Context, name, key string) error
+	// Clear removes every row (settings + state) for the plugin. Used
+	// by UninstallPlugin after the source handler has wiped the files.
+	Clear(ctx context.Context, name string) error
 }
 
 // HostDeps wires the Host to its surrounding environment.
@@ -85,6 +88,17 @@ type HostDeps struct {
 	// SubmitTimeout caps each per-plugin Submit() call during
 	// SubmitOnCallDoc fan-out. Zero ⇒ defaultSubmitTimeout.
 	SubmitTimeout time.Duration
+	// DiscoveryInterval is how often the host re-scans PluginsDir for
+	// freshly-installed plugin directories. Zero ⇒ defaultDiscoveryInterval
+	// (30 s). Negative ⇒ disabled (useful in tests so the discovery loop
+	// does not interfere with deterministic launch/uninstall scripting).
+	DiscoveryInterval time.Duration
+	// OnDiscovered is invoked once per plugin newly picked up by the
+	// discovery loop, after launch() returns. The host calls it from a
+	// background goroutine; the App layer typically forwards it to the
+	// Wails "plugins:discovered" event so the frontend can refresh
+	// without a manual reload. Nil ⇒ no notification.
+	OnDiscovered func(Info)
 }
 
 const defaultSubmitTimeout = 30 * time.Second
@@ -99,6 +113,10 @@ type Host struct {
 	plugins map[string]*pluginInstance
 
 	handles *handleRegistry
+
+	// discoveryCancel stops the periodic discovery goroutine. Set by
+	// Start() when DiscoveryInterval >= 0; called by Stop().
+	discoveryCancel context.CancelFunc
 }
 
 // pluginInstance is the host's internal view of one discovered plugin.
@@ -118,6 +136,7 @@ type pluginInstance struct {
 	core      sdk.Plugin
 	meta      sdk.Metadata
 	onCall    sdk.OnCallDocumentationHandler
+	mgmt      sdk.PluginManagementHandler
 }
 
 // ErrNoOnCallPlugin is returned by SubmitOnCallDoc when no running plugin
@@ -181,12 +200,26 @@ func (h *Host) Start(ctx context.Context) error {
 				"name", name, "err", err)
 		}
 	}
+
+	interval := h.deps.DiscoveryInterval
+	if interval == 0 {
+		interval = defaultDiscoveryInterval
+	}
+	if interval > 0 {
+		discoveryCtx, cancel := context.WithCancel(context.Background())
+		h.discoveryCancel = cancel
+		h.startDiscoveryLoop(discoveryCtx, interval)
+	}
 	return nil
 }
 
 // Stop kills every running plugin subprocess. Idempotent. Used at app
 // shutdown — after Stop the host is unusable.
 func (h *Host) Stop(_ context.Context) error {
+	if h.discoveryCancel != nil {
+		h.discoveryCancel()
+		h.discoveryCancel = nil
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for name, p := range h.plugins {
@@ -198,6 +231,7 @@ func (h *Host) Stop(_ context.Context) error {
 		p.rpcClient = nil
 		p.core = nil
 		p.onCall = nil
+		p.mgmt = nil
 	}
 	return nil
 }
@@ -368,6 +402,17 @@ func (h *Host) DeleteSecret(ctx context.Context, name, key string) error {
 // --- launch path --------------------------------------------------------
 
 func (h *Host) launch(ctx context.Context, name string) error {
+	// Skip launch when the plugin is already known to the host. Callers
+	// that want a fresh launch (Reload / Update) explicitly drop the
+	// entry from h.plugins first; everything else (discovery loop,
+	// post-install launch) is happy with the current state.
+	h.mu.RLock()
+	_, exists := h.plugins[name]
+	h.mu.RUnlock()
+	if exists {
+		return nil
+	}
+
 	dir := filepath.Join(h.deps.PluginsDir, name)
 	man, err := LoadManifest(dir)
 	if err != nil {
@@ -492,6 +537,20 @@ func (h *Host) launch(ctx context.Context, name string) error {
 				continue
 			}
 			inst.onCall = handler
+		case sdk.CapPluginManagement:
+			raw, err := rpcClient.Dispense(sdk.MgmtKey)
+			if err != nil {
+				h.log.Warn("dispense plugin_management handler failed — capability disabled",
+					"plugin", name, "err", err)
+				continue
+			}
+			handler, ok := raw.(sdk.PluginManagementHandler)
+			if !ok {
+				h.log.Warn("plugin_management handler: unexpected type",
+					"plugin", name, "type", fmt.Sprintf("%T", raw))
+				continue
+			}
+			inst.mgmt = handler
 		default:
 			h.log.Debug("plugin advertised unknown capability — ignoring",
 				"plugin", name, "capability", c)
@@ -527,6 +586,7 @@ func (h *Host) recordFailure(name string, man *Manifest, cause error) {
 	inst.rpcClient = nil
 	inst.core = nil
 	inst.onCall = nil
+	inst.mgmt = nil
 }
 
 // recordNeedsConfig parks a plugin in StateNeedsConfig with the list of
@@ -547,6 +607,7 @@ func (h *Host) recordNeedsConfig(name string, man *Manifest, missing []string) {
 	inst.rpcClient = nil
 	inst.core = nil
 	inst.onCall = nil
+	inst.mgmt = nil
 }
 
 // recordDisabled records a plugin in StateDisabled. The manifest is
@@ -574,6 +635,7 @@ func (h *Host) recordDisabled(name string) {
 	inst.rpcClient = nil
 	inst.core = nil
 	inst.onCall = nil
+	inst.mgmt = nil
 }
 
 // buildConfig assembles the PluginConfig delivered to Plugin.Configure

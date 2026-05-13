@@ -3,6 +3,7 @@
 
 import type {
   AppConfig,
+  AvailablePluginEntry,
   EntraStatus,
   ImportResult,
   OnCallDocDraft,
@@ -183,6 +184,14 @@ export const api = {
     bridge().PluginSetEnabled(name, enabled) as Promise<void>,
   pluginReload: (name: string) =>
     bridge().PluginReload(name) as Promise<void>,
+  pluginListAvailable: () =>
+    bridge().PluginListAvailable() as Promise<AvailablePluginEntry[] | null>,
+  pluginInstall: (sourcePlugin: string, name: string) =>
+    bridge().PluginInstall(sourcePlugin, name) as Promise<void>,
+  pluginUpdate: (sourcePlugin: string, name: string) =>
+    bridge().PluginUpdate(sourcePlugin, name) as Promise<void>,
+  pluginUninstall: (sourcePlugin: string, name: string) =>
+    bridge().PluginUninstall(sourcePlugin, name) as Promise<void>,
 
   // Log forwarding ------------------------------------------------------
   logFrontend: (

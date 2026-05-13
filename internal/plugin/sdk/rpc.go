@@ -251,6 +251,129 @@ func (c *oncallClient) Submit(_ context.Context, doc OnCallDocument) (Submission
 }
 
 // ---------------------------------------------------------------------
+// Plugin management capability adapter.
+// ---------------------------------------------------------------------
+
+type mgmtPluginAdapter struct {
+	impl PluginManagementHandler // nil on host side
+}
+
+// Server returns the RPC-server stub running inside the plugin process.
+func (p *mgmtPluginAdapter) Server(_ *hplugin.MuxBroker) (interface{}, error) {
+	return &mgmtServer{impl: p.impl}, nil
+}
+
+// Client returns the RPC-client stub the host wires up to call into the plugin.
+func (p *mgmtPluginAdapter) Client(_ *hplugin.MuxBroker, c *rpc.Client) (interface{}, error) {
+	return &mgmtClient{client: c}, nil
+}
+
+type mgmtServer struct {
+	impl PluginManagementHandler
+}
+
+// MgmtListAvailableArgs is the empty arg type for ListAvailable.
+type MgmtListAvailableArgs struct{}
+
+// MgmtListAvailableReply carries the catalog or an error string.
+type MgmtListAvailableReply struct {
+	Available []AvailablePlugin
+	Err       string
+}
+
+// ListAvailable is the net/rpc-callable PluginManagementHandler.ListAvailable.
+func (s *mgmtServer) ListAvailable(_ MgmtListAvailableArgs, reply *MgmtListAvailableReply) error {
+	out, err := s.impl.ListAvailable(context.Background())
+	if err != nil {
+		reply.Err = err.Error()
+		return nil
+	}
+	reply.Available = out
+	return nil
+}
+
+// MgmtNameArgs is the shared arg type for Install/Update/Uninstall — all
+// three are keyed off the AvailablePlugin.Name. Keeping a single struct
+// here means adding e.g. an "force" flag later is a single edit.
+type MgmtNameArgs struct {
+	Name string
+}
+
+// MgmtErrReply carries only an error string. Used by Install/Update/Uninstall.
+type MgmtErrReply struct {
+	Err string
+}
+
+// Install is the net/rpc-callable PluginManagementHandler.Install.
+func (s *mgmtServer) Install(args MgmtNameArgs, reply *MgmtErrReply) error {
+	if err := s.impl.Install(context.Background(), args.Name); err != nil {
+		reply.Err = err.Error()
+	}
+	return nil
+}
+
+// Update is the net/rpc-callable PluginManagementHandler.Update.
+func (s *mgmtServer) Update(args MgmtNameArgs, reply *MgmtErrReply) error {
+	if err := s.impl.Update(context.Background(), args.Name); err != nil {
+		reply.Err = err.Error()
+	}
+	return nil
+}
+
+// Uninstall is the net/rpc-callable PluginManagementHandler.Uninstall.
+func (s *mgmtServer) Uninstall(args MgmtNameArgs, reply *MgmtErrReply) error {
+	if err := s.impl.Uninstall(context.Background(), args.Name); err != nil {
+		reply.Err = err.Error()
+	}
+	return nil
+}
+
+type mgmtClient struct {
+	client *rpc.Client
+}
+
+// ListAvailable forwards to the plugin and returns the merged catalog
+// the host then decorates with InstalledVersion / SourcePlugin.
+func (c *mgmtClient) ListAvailable(_ context.Context) ([]AvailablePlugin, error) {
+	var reply MgmtListAvailableReply
+	if err := c.client.Call("Plugin.ListAvailable", MgmtListAvailableArgs{}, &reply); err != nil {
+		return nil, err
+	}
+	if reply.Err != "" {
+		return nil, errors.New(reply.Err)
+	}
+	return reply.Available, nil
+}
+
+// Install asks the plugin to materialise <PluginsDir>/<name>/ on disk.
+func (c *mgmtClient) Install(_ context.Context, name string) error {
+	return c.callNameOnly("Plugin.Install", name)
+}
+
+// Update asks the plugin to refresh <PluginsDir>/<name>/. The host has
+// already stopped the target subprocess before calling.
+func (c *mgmtClient) Update(_ context.Context, name string) error {
+	return c.callNameOnly("Plugin.Update", name)
+}
+
+// Uninstall asks the plugin to remove <PluginsDir>/<name>/ from disk.
+// The host clears DB rows after this returns.
+func (c *mgmtClient) Uninstall(_ context.Context, name string) error {
+	return c.callNameOnly("Plugin.Uninstall", name)
+}
+
+func (c *mgmtClient) callNameOnly(method, name string) error {
+	var reply MgmtErrReply
+	if err := c.client.Call(method, MgmtNameArgs{Name: name}, &reply); err != nil {
+		return err
+	}
+	if reply.Err != "" {
+		return errors.New(reply.Err)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------
 // HostAPI (reverse RPC: plugin → host).
 // ---------------------------------------------------------------------
 

@@ -52,6 +52,13 @@ export default function Plugins() {
 
   useEffect(() => {
     refresh();
+    // The host emits plugins:discovered when its periodic scan picks
+    // up a new plugin directory. We refresh the installed list so the
+    // newcomer shows up without forcing the user to press ↻.
+    const off = api.onEvent("plugins:discovered", () => {
+      void refresh();
+    });
+    return off;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
