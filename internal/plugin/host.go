@@ -16,9 +16,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dusthoff/hashpoint/internal/plugin/sdk"
 	hclog "github.com/hashicorp/go-hclog"
 	hplugin "github.com/hashicorp/go-plugin"
-	"github.com/dusthoff/hashpoint/internal/plugin/sdk"
 )
 
 // State mirrors the lifecycle of a discovered plugin from the
