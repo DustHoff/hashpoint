@@ -3,7 +3,7 @@
 // "oncall:doc-changed" + "oncall:submit-result" events from the host to
 // refresh after the user (or a plugin) makes a change.
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type {
   OnCallDocChangedPayload,
@@ -55,7 +55,7 @@ export default function OnCall() {
   const [error, setError] = useState<string | null>(null);
   const [includeStale, setIncludeStale] = useState(true);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     try {
       const list = await api.onCallDocList({ include_stale: includeStale });
       setDocs(list ?? []);
@@ -63,11 +63,11 @@ export default function OnCall() {
     } catch (e) {
       setError(String(e));
     }
-  }
+  }, [includeStale]);
 
   useEffect(() => {
     refresh();
-  }, [includeStale]);
+  }, [refresh]);
 
   // Auto-refresh on host events: doc edits + plugin responses both come
   // through "oncall:doc-changed"; per-plugin progress arrives via
@@ -85,7 +85,7 @@ export default function OnCall() {
       offChanged();
       offResult();
     };
-  }, []);
+  }, [refresh]);
 
   const selected = useMemo(
     () => docs.find((d) => d.id === selectedID) ?? null,
@@ -202,11 +202,15 @@ function DocForm({
   const [solution, setSolution] = useState(doc.solution);
   const [busy, setBusy] = useState<"save" | "submit" | "dismiss" | null>(null);
 
-  // Reload form state when the user selects a different doc.
+  // Reload form state ONLY when the user selects a different doc — we
+  // deliberately ignore in-flight edits to doc.{application,incident_type,
+  // solution} so concurrent host refreshes (e.g. plugin submit-result)
+  // don't blow away whatever the user is currently typing.
   useEffect(() => {
     setApplication(doc.application);
     setIncidentType(doc.incident_type);
     setSolution(doc.solution);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.id]);
 
   async function save() {
