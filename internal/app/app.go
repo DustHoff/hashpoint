@@ -52,6 +52,9 @@ const (
 // startupSyncEvent channel.
 type StartupSyncStatus string
 
+// Startup-sync status values. The trailing comment on each line is the
+// authoritative description; revive's exported rule requires a comment
+// at the block level so the const group is annotated here as well.
 const (
 	StartupSyncSkipped StartupSyncStatus = "skipped" // nothing to sync (no unsynced day)
 	StartupSyncOK      StartupSyncStatus = "ok"      // sync ran, no day-level errors
@@ -251,7 +254,7 @@ func (a *App) Startup(ctx context.Context) {
 	// Launch installed plugins in a detached goroutine. Each plugin
 	// starts its own subprocess + handshake, which can take a noticeable
 	// fraction of a second; we deliberately don't block the main window
-	// behind it. Failures are recorded on the PluginInfo for the
+	// behind it. Failures are recorded on the pluginhost.Info for the
 	// settings UI but never propagate up.
 	if a.pluginHost != nil {
 		go func() {
@@ -1063,7 +1066,9 @@ func (a *App) EntraStatus() EntraStatusResponse {
 func (a *App) EntraLogin() error {
 	mgr := a.currentEntra()
 	if mgr == nil || !mgr.Configured() {
-		return errors.New("Entra ID ist nicht konfiguriert — bitte Client- und Tenant-ID eintragen")
+		// User-facing German message surfaced directly via Wails binding;
+		// "Entra ID" is the Microsoft product name and stays capitalised.
+		return errors.New("Entra ID ist nicht konfiguriert — bitte Client- und Tenant-ID eintragen") //nolint:staticcheck // ST1005: deliberate, proper-noun start
 	}
 	a.logger.Info("app: EntraLogin started")
 	if err := mgr.Login(a.ctx, nil); err != nil {

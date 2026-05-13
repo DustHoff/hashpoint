@@ -50,17 +50,23 @@ type Clock interface {
 
 type realClock struct{}
 
+// Now implements Clock.Now — returns UTC wall time.
 func (realClock) Now() time.Time { return time.Now().UTC() }
 
 // realFocusSource delegates to package winapi.
 type realFocusSource struct{}
 
+// Foreground returns the currently-focused window via winapi.Foreground.
 func (realFocusSource) Foreground() (winapi.FocusInfo, error) { return winapi.Foreground() }
-func (realFocusSource) IdleDuration() (time.Duration, error)  { return winapi.IdleDuration() }
+
+// IdleDuration reports user inactivity time via winapi.IdleDuration.
+func (realFocusSource) IdleDuration() (time.Duration, error) { return winapi.IdleDuration() }
 
 // realCommSource delegates to package winapi.
 type realCommSource struct{}
 
+// EnumVisibleWindows lists visible top-level windows owned by any of the
+// given process names — used by the comm-tracking parallel rail.
 func (realCommSource) EnumVisibleWindows(names []string) ([]winapi.WindowInfo, error) {
 	return winapi.EnumVisibleWindowsForProcesses(names)
 }
@@ -380,12 +386,13 @@ func (t *Tracker) tick(ctx context.Context) {
 		t.handleIdle(ctx)
 	} else {
 		info, err := t.source.Foreground()
-		if err != nil && !errors.Is(err, winapi.ErrUnsupported) {
+		switch {
+		case err != nil && !errors.Is(err, winapi.ErrUnsupported):
 			t.logger.Debug("foreground query failed", "err", err)
-		} else if info.IsZero() {
+		case info.IsZero():
 			// E.g. lock screen — close any open focused track.
 			t.closeCurrent(ctx)
-		} else {
+		default:
 			t.handleFocus(ctx, info)
 		}
 	}

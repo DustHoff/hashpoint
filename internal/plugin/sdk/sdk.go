@@ -223,6 +223,9 @@ type Plugin interface {
 // IncidentType discriminates the two flavours the off-duty form supports.
 type IncidentType string
 
+// IncidentType values: planned maintenance versus unplanned service
+// disruption. The host renders different form copy depending on which
+// the user selects.
 const (
 	IncidentPlannedMaintenance IncidentType = "planned_maintenance"
 	IncidentServiceDisruption  IncidentType = "service_disruption"

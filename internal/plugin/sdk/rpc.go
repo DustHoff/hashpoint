@@ -184,10 +184,14 @@ type oncallPluginAdapter struct {
 	impl OnCallDocumentationHandler // nil on host side
 }
 
+// Server implements hashicorp/go-plugin's Plugin interface: it returns
+// the RPC-server stub the host registers when a plugin process starts.
 func (p *oncallPluginAdapter) Server(_ *hplugin.MuxBroker) (interface{}, error) {
 	return &oncallServer{impl: p.impl}, nil
 }
 
+// Client implements hashicorp/go-plugin's Plugin interface: it returns
+// the RPC-client stub the host wires up to call into the plugin.
 func (p *oncallPluginAdapter) Client(_ *hplugin.MuxBroker, c *rpc.Client) (interface{}, error) {
 	return &oncallClient{client: c}, nil
 }

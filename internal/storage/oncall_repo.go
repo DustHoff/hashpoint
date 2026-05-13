@@ -166,6 +166,9 @@ func (r *OnCallRepo) List(ctx context.Context, filter OnCallFilter) ([]OnCallDoc
 		conds = append(conds, "od.stale = 0")
 	}
 
+	// #nosec G202 -- the concatenated fragments are static column lists and
+	// hard-coded WHERE-clause skeletons assembled from `conds`; all user
+	// input is bound via `args...` placeholders below.
 	q := `SELECT ` + prefixColumns("od", oncallDocColumns) + `
 		FROM oncall_documentations od
 		JOIN tag_blocks tb ON tb.id = od.block_id`
@@ -420,6 +423,9 @@ func (r *OnCallRepo) loadSubmissionsForDocs(ctx context.Context, docs []OnCallDo
 		placeholders[i] = "?"
 		args[i] = d.ID
 	}
+	// #nosec G202 -- placeholders is a slice of literal "?" strings, joined
+	// to form an IN-clause skeleton; the doc IDs themselves are bound via
+	// args.
 	q := `SELECT ` + oncallSubmissionColumns + `
 		FROM oncall_submissions
 		WHERE doc_id IN (` + strings.Join(placeholders, ",") + `)

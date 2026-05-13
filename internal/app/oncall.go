@@ -330,7 +330,7 @@ func (a *App) OnCallDocDismiss(id int64) error {
 }
 
 // PluginList returns the read-model the settings UI consumes.
-func (a *App) PluginList() ([]pluginhost.PluginInfo, error) {
+func (a *App) PluginList() ([]pluginhost.Info, error) {
 	if a.pluginHost == nil {
 		return nil, nil
 	}

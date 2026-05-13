@@ -436,6 +436,9 @@ func Save(path string, cfg *Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
+	// #nosec G304 -- path is computed from %APPDATA%\TimeTracker\config.toml
+	// (or an explicit caller-supplied path in tests); never derived from
+	// untrusted input.
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("open config: %w", err)

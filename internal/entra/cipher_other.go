@@ -11,10 +11,13 @@ type stubCipher struct{}
 
 func newDPAPICipher() cipher { return stubCipher{} }
 
+// Encrypt always fails on non-Windows: DPAPI is a Windows API and we
+// refuse to silently degrade the at-rest cache encryption.
 func (stubCipher) Encrypt(_ []byte) ([]byte, error) {
 	return nil, errors.New("entra: DPAPI cipher is Windows-only")
 }
 
+// Decrypt always fails on non-Windows — see Encrypt.
 func (stubCipher) Decrypt(_ []byte) ([]byte, error) {
 	return nil, errors.New("entra: DPAPI cipher is Windows-only")
 }

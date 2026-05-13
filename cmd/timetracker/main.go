@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -207,7 +208,7 @@ func run() error {
 
 	// Tracker goroutine.
 	go func() {
-		if err := trk.Run(ctx); err != nil && err != context.Canceled {
+		if err := trk.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("tracker run failed", "err", err)
 		}
 	}()

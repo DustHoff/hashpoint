@@ -21,39 +21,39 @@ import (
 	"github.com/onesi/hashpoint/internal/plugin/sdk"
 )
 
-// PluginState mirrors the lifecycle of a discovered plugin from the
+// State mirrors the lifecycle of a discovered plugin from the
 // host's perspective. The settings UI renders one row per plugin keyed
 // off State + LastError.
-type PluginState string
+type State string
 
 const (
 	// StateRunning means the plugin process is alive and Configure
 	// succeeded — it can serve any capability it advertises.
-	StateRunning PluginState = "running"
+	StateRunning State = "running"
 	// StateNeedsConfig means the plugin's manifest declares one or more
 	// required fields that the user has not yet filled in. The subprocess
 	// is never started in this state; capability fan-outs skip the
 	// plugin. Filling the missing fields + saving triggers a Reload
 	// which can promote the plugin to StateRunning.
-	StateNeedsConfig PluginState = "needs_config"
+	StateNeedsConfig State = "needs_config"
 	// StateFailed means we tried to launch / init / configure the plugin
 	// and something went wrong. LastError carries the cause.
-	StateFailed PluginState = "failed"
+	StateFailed State = "failed"
 	// StateDisabled means the user toggled the plugin off via the
 	// settings UI. The subprocess is not running and capability fan-outs
 	// skip it. The enable flag is persisted in plugin_state and survives
 	// an app restart.
-	StateDisabled PluginState = "disabled"
+	StateDisabled State = "disabled"
 )
 
-// PluginInfo is the read-model the settings UI sees. Returned from
+// Info is the read-model the settings UI sees. Returned from
 // Host.List(); never holds RPC handles.
-type PluginInfo struct {
+type Info struct {
 	Name          string               `json:"name"`
 	Version       string               `json:"version"`
 	Description   string               `json:"description"`
 	Capabilities  []sdk.Capability     `json:"capabilities"`
-	State         PluginState          `json:"state"`
+	State         State          `json:"state"`
 	LastError     string               `json:"last_error,omitempty"`
 	Enabled       bool                 `json:"enabled"`
 	MissingFields []string             `json:"missing_fields,omitempty"`
@@ -108,7 +108,7 @@ type pluginInstance struct {
 	name     string
 	manifest *Manifest
 
-	state   PluginState
+	state   State
 	lastErr string
 	missing []string // populated only when state == StateNeedsConfig
 
@@ -230,10 +230,10 @@ func (h *Host) Reload(ctx context.Context, name string) error {
 
 // List returns the read-model the settings UI consumes. Sorted by Name
 // for stable display.
-func (h *Host) List() []PluginInfo {
+func (h *Host) List() []Info {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	out := make([]PluginInfo, 0, len(h.plugins))
+	out := make([]Info, 0, len(h.plugins))
 	for _, p := range h.plugins {
 		out = append(out, p.info())
 	}
@@ -242,12 +242,12 @@ func (h *Host) List() []PluginInfo {
 }
 
 // Get returns one plugin's read-model.
-func (h *Host) Get(name string) (PluginInfo, bool) {
+func (h *Host) Get(name string) (Info, bool) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	p, ok := h.plugins[name]
 	if !ok {
-		return PluginInfo{}, false
+		return Info{}, false
 	}
 	return p.info(), true
 }
@@ -636,8 +636,8 @@ func (h *Host) buildConfig(ctx context.Context, name string, man *Manifest) (sdk
 }
 
 // info is the read-model projection of pluginInstance.
-func (p *pluginInstance) info() PluginInfo {
-	out := PluginInfo{
+func (p *pluginInstance) info() Info {
+	out := Info{
 		Name:          p.name,
 		State:         p.state,
 		LastError:     p.lastErr,
@@ -686,11 +686,16 @@ func newHclogAdapter(log *slog.Logger) hclog.Logger {
 	return &hclogAdapter{log: log}
 }
 
+// hclogAdapter satisfies hashicorp/go-plugin's hclog.Logger surface by
+// forwarding to a slog.Logger. Most methods are trivial level-mappings;
+// SetLevel/StandardLogger are stubs because we never expose those knobs
+// to plugins.
 type hclogAdapter struct {
 	log  *slog.Logger
 	name string
 }
 
+// Log routes a leveled hclog message to the matching slog level.
 func (a *hclogAdapter) Log(level hclog.Level, msg string, args ...interface{}) {
 	switch level {
 	case hclog.Debug, hclog.Trace, hclog.NoLevel:
@@ -706,34 +711,74 @@ func (a *hclogAdapter) Log(level hclog.Level, msg string, args ...interface{}) {
 	}
 }
 
+// Trace logs at slog.Debug — hclog's Trace level has no slog analogue.
 func (a *hclogAdapter) Trace(msg string, args ...interface{}) { a.log.Debug(msg, args...) }
+
+// Debug logs at slog.Debug.
 func (a *hclogAdapter) Debug(msg string, args ...interface{}) { a.log.Debug(msg, args...) }
-func (a *hclogAdapter) Info(msg string, args ...interface{})  { a.log.Info(msg, args...) }
-func (a *hclogAdapter) Warn(msg string, args ...interface{})  { a.log.Warn(msg, args...) }
+
+// Info logs at slog.Info.
+func (a *hclogAdapter) Info(msg string, args ...interface{}) { a.log.Info(msg, args...) }
+
+// Warn logs at slog.Warn.
+func (a *hclogAdapter) Warn(msg string, args ...interface{}) { a.log.Warn(msg, args...) }
+
+// Error logs at slog.Error.
 func (a *hclogAdapter) Error(msg string, args ...interface{}) { a.log.Error(msg, args...) }
 
+// IsTrace reports whether Trace messages are emitted. We mute trace.
 func (a *hclogAdapter) IsTrace() bool { return false }
+
+// IsDebug reports whether Debug messages are emitted.
 func (a *hclogAdapter) IsDebug() bool { return true }
-func (a *hclogAdapter) IsInfo() bool  { return true }
-func (a *hclogAdapter) IsWarn() bool  { return true }
+
+// IsInfo reports whether Info messages are emitted.
+func (a *hclogAdapter) IsInfo() bool { return true }
+
+// IsWarn reports whether Warn messages are emitted.
+func (a *hclogAdapter) IsWarn() bool { return true }
+
+// IsError reports whether Error messages are emitted.
 func (a *hclogAdapter) IsError() bool { return true }
 
+// ImpliedArgs returns the structured args carried by With (none here —
+// hclog uses this for log enrichment, slog carries them on the Logger).
 func (a *hclogAdapter) ImpliedArgs() []interface{} { return nil }
+
+// With returns a child logger that prepends the given key/value pairs
+// to every record, mirroring slog.Logger.With's contract.
 func (a *hclogAdapter) With(args ...interface{}) hclog.Logger {
-	// Carry the args onto the embedded slog so hclog-style structured
-	// logging shows up correctly.
 	return &hclogAdapter{log: a.log.With(args...), name: a.name}
 }
-func (a *hclogAdapter) Name() string                   { return a.name }
-func (a *hclogAdapter) Named(name string) hclog.Logger { return &hclogAdapter{log: a.log, name: name} }
+
+// Name returns the logger's component name (set via Named/ResetNamed).
+func (a *hclogAdapter) Name() string { return a.name }
+
+// Named returns a logger tagged with name; hclog uses this to scope
+// plugin output (e.g. "plugin.oncall-bridge"). We do not nest names
+// because slog carries the same info as a structured attribute.
+func (a *hclogAdapter) Named(name string) hclog.Logger {
+	return &hclogAdapter{log: a.log, name: name}
+}
+
+// ResetNamed replaces the component name (vs. Named which appends).
 func (a *hclogAdapter) ResetNamed(name string) hclog.Logger {
 	return &hclogAdapter{log: a.log, name: name}
 }
+
+// SetLevel is a stub — log levels are fixed by the host slog handler.
 func (a *hclogAdapter) SetLevel(_ hclog.Level) {}
-func (a *hclogAdapter) GetLevel() hclog.Level  { return hclog.Debug }
+
+// GetLevel returns hclog.Debug — see SetLevel.
+func (a *hclogAdapter) GetLevel() hclog.Level { return hclog.Debug }
+
+// StandardLogger returns a discarding stdlib *log.Logger; go-plugin only
+// uses this for opaque, unstructured chatter we don't want to surface.
 func (a *hclogAdapter) StandardLogger(_ *hclog.StandardLoggerOptions) *stdlog.Logger {
 	return stdlog.New(io.Discard, "", 0)
 }
+
+// StandardWriter returns io.Discard — companion to StandardLogger.
 func (a *hclogAdapter) StandardWriter(_ *hclog.StandardLoggerOptions) io.Writer {
 	return io.Discard
 }

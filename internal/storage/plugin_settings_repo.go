@@ -35,6 +35,9 @@ const (
 		FROM plugin_settings WHERE plugin_name = ?
 		ORDER BY key ASC`
 
+	// #nosec G101 -- this is a SQL query that *reads* an encrypted secret
+	// field, not a hard-coded credential. The "Secret" in the identifier
+	// trips gosec's keyword heuristic.
 	selectPluginSecretValue = `SELECT value FROM plugin_settings
 		WHERE plugin_name = ? AND key = ? AND is_secret = 1`
 

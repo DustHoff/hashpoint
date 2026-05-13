@@ -24,7 +24,6 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/public"
@@ -113,8 +112,6 @@ type manager struct {
 	cache       *fileCache
 	logger      *slog.Logger
 	redirectURI string
-
-	mu sync.Mutex
 }
 
 // NewManager builds a Manager wired against the configured tenant, with
@@ -153,8 +150,10 @@ func NewManager(opts Options) (Manager, error) {
 	}, nil
 }
 
+// Configured implements Manager.Configured.
 func (m *manager) Configured() bool { return true }
 
+// Status implements Manager.Status.
 func (m *manager) Status(ctx context.Context) Status {
 	base := Status{ClientID: m.opts.ClientID, TenantID: m.opts.TenantID}
 	accs, err := m.client.Accounts(ctx)
@@ -168,6 +167,7 @@ func (m *manager) Status(ctx context.Context) Status {
 	return base
 }
 
+// Login implements Manager.Login.
 func (m *manager) Login(ctx context.Context, scopes []string) error {
 	if len(scopes) == 0 {
 		scopes = DefaultLoginScopes
@@ -189,6 +189,7 @@ func (m *manager) Login(ctx context.Context, scopes []string) error {
 	return nil
 }
 
+// Logout implements Manager.Logout.
 func (m *manager) Logout(ctx context.Context) error {
 	accs, err := m.client.Accounts(ctx)
 	if err != nil {
@@ -206,6 +207,7 @@ func (m *manager) Logout(ctx context.Context) error {
 	return nil
 }
 
+// AcquireToken implements Manager.AcquireToken.
 func (m *manager) AcquireToken(ctx context.Context, scopes []string, allowInteractive bool) (string, error) {
 	if len(scopes) == 0 {
 		return "", errors.New("entra: scopes required")
@@ -235,7 +237,7 @@ func (m *manager) AcquireToken(ctx context.Context, scopes []string, allowIntera
 	if !allowInteractive {
 		m.logger.Info("entra: silent acquisition failed — caller did not allow interactive",
 			"err", err)
-		return "", fmt.Errorf("%w: %v", ErrInteractiveRequired, err)
+		return "", fmt.Errorf("%w: %w", ErrInteractiveRequired, err)
 	}
 	m.logger.Info("entra: silent acquisition failed — falling back to interactive",
 		"err", err)
