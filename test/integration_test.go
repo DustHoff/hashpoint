@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onesi/hashpoint/internal/storage"
+	"github.com/dusthoff/hashpoint/internal/storage"
 )
 
 // TestEndToEnd_FocusBlockLifecycle exercises the full storage layer with a

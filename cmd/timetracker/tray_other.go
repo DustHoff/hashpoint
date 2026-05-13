@@ -5,8 +5,8 @@ package main
 import (
 	"context"
 
-	"github.com/onesi/hashpoint/internal/app"
-	"github.com/onesi/hashpoint/internal/personio"
+	"github.com/dusthoff/hashpoint/internal/app"
+	"github.com/dusthoff/hashpoint/internal/personio"
 )
 
 func defaultSessionStore() personio.SessionStore {

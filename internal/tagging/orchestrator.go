@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/onesi/hashpoint/internal/storage"
-	"github.com/onesi/hashpoint/internal/tracker"
+	"github.com/dusthoff/hashpoint/internal/storage"
+	"github.com/dusthoff/hashpoint/internal/tracker"
 )
 
 // Orchestrator owns the tag_blocks table. It listens to focus-change events

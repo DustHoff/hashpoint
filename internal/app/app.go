@@ -12,13 +12,13 @@ import (
 	"sync"
 	"time"
 
-	hashpoint "github.com/onesi/hashpoint"
-	"github.com/onesi/hashpoint/internal/config"
-	"github.com/onesi/hashpoint/internal/personio"
-	"github.com/onesi/hashpoint/internal/storage"
-	"github.com/onesi/hashpoint/internal/tagging"
-	"github.com/onesi/hashpoint/internal/tracker"
-	"github.com/onesi/hashpoint/internal/winapi"
+	hashpoint "github.com/dusthoff/hashpoint"
+	"github.com/dusthoff/hashpoint/internal/config"
+	"github.com/dusthoff/hashpoint/internal/personio"
+	"github.com/dusthoff/hashpoint/internal/storage"
+	"github.com/dusthoff/hashpoint/internal/tagging"
+	"github.com/dusthoff/hashpoint/internal/tracker"
+	"github.com/dusthoff/hashpoint/internal/winapi"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 

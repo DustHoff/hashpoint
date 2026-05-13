@@ -10,7 +10,7 @@
   - Lokal installierter **Google Chrome**, da die Anmeldung über das
     Chrome DevTools Protocol (CDP) läuft. Edge oder die Wails-WebView
     werden nicht unterstützt.
-  - Tenant-Subdomain (z. B. `onesi` für `https://onesi.personio.de`).
+  - Tenant-Subdomain (z. B. `acme` für `https://acme.personio.de`).
 
 ## Installationswege
 

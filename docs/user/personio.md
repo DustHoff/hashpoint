@@ -30,7 +30,7 @@ im Windows Credential Manager hinterlegt.
 ## Personio konfigurieren
 
 1. Im Hauptfenster auf den Tab **Einstellungen** wechseln.
-2. Im Bereich **Personio** den Tenant eintragen (z. B. `onesi`).
+2. Im Bereich **Personio** den Tenant eintragen (z. B. `acme`).
 3. Auf **Einstellungen speichern** klicken.
 
 ## Anmelden

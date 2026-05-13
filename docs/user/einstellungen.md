@@ -114,7 +114,7 @@ Drag-to-Tag manuell zuordnen.
 
 | Feld | Bedeutung |
 | --- | --- |
-| **Tenant (Subdomain)** | Subdomain Ihrer Personio-Instanz. Beispiel: `onesi` → `https://onesi.personio.de`. Erlaubt sind Kleinbuchstaben, Ziffern und Bindestriche. |
+| **Tenant (Subdomain)** | Subdomain Ihrer Personio-Instanz. Beispiel: `acme` → `https://acme.personio.de`. Erlaubt sind Kleinbuchstaben, Ziffern und Bindestriche. |
 
 Im Personio-Abschnitt sehen Sie zusätzlich den aktuellen Login-Status und
 können die Anmeldung anstoßen oder zurücksetzen:
@@ -147,7 +147,7 @@ tag_block_granularity_min  = 0      # 0 = aus; 15 = Tag-Blöcke (manuell+auto) a
                                     # 15-min-Slots snappen. Process-Tracks bleiben roh.
 
 [personio]
-tenant = "onesi"
+tenant = "acme"
 
 [quick_tag]
 enabled = true

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onesi/hashpoint/internal/storage"
+	"github.com/dusthoff/hashpoint/internal/storage"
 )
 
 // importTestEnv wires a Syncer with an in-memory SQLite DB and a stubbed

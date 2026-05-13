@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/onesi/hashpoint/internal/storage"
+	"github.com/dusthoff/hashpoint/internal/storage"
 )
 
 // CompiledRule is a rule with a precompiled regex (for MatchRegex) ready for

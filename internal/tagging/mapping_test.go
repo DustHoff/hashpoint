@@ -3,7 +3,7 @@ package tagging
 import (
 	"testing"
 
-	"github.com/onesi/hashpoint/internal/storage"
+	"github.com/dusthoff/hashpoint/internal/storage"
 )
 
 func ptr[T any](v T) *T { return &v }

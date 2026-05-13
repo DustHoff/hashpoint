@@ -409,7 +409,7 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
 **Hintergrund:** Personios *öffentliche* Attendance-API (`POST /v1/company/attendances`) erlaubt nur **firmenweite** OAuth-Credentials, keine pro-Mitarbeiter-Auth. Da der TimeTracker für die Endanwender-Hand gedacht ist, wird stattdessen die **interne UI-API** angesprochen, die auch die Personio-Web-Oberfläche selbst verwendet. Der Auth-Flow ahmt einen normalen Browser-Login nach.
 
 #### 2.5.1 Auth-Flow (CDP-getriebenes Login)
-1. User trägt im **Einstellungen-Tab** seine **Tenant-Subdomain** ein (z. B. `onesi`).
+1. User trägt im **Einstellungen-Tab** seine **Tenant-Subdomain** ein (z. B. `acme`).
 2. Klick auf „Bei Personio anmelden" startet eine **eigene Chrome-Instanz** (über `chromedp`/Chrome DevTools Protocol) auf `https://<tenant>.personio.de/login/index`.
 3. Der User loggt sich interaktiv ein (E-Mail, Passwort, ggf. MFA, ggf. SSO-Redirect).
 4. Der TimeTracker pollt die `Page.frameNavigated`-Events: sobald die URL nicht mehr unter `/login` liegt und auf `<tenant>.personio.de` verbleibt, gilt der Login als erfolgreich.
@@ -843,7 +843,7 @@ tag_block_granularity_min  = 0      # 0 = aus; 15 = Tag-Blöcke (manuell + auto)
                                     # Process-Tracks bleiben immer roh.
 
 [personio]
-tenant = "onesi"            # Subdomain, der Login läuft via CDP — keine API-Tokens
+tenant = "acme"             # Subdomain, der Login läuft via CDP — keine API-Tokens
 
 [communication]
 process_names         = ["teams.exe"]   # parallel zum Fokus erfasst, sobald ein
@@ -912,7 +912,7 @@ Tag-Bump und damit den Build.
   1. `MainExecutable` — schreibt `hashpoint.exe` nach `INSTALLDIR`
      (Win64, KeyPath, Checksum).
   2. `StartMenuShortcut` — Eintrag „Hashpoint TimeTracker" im
-     Startmenü; KeyPath ist ein HKCU-Marker (`Software\onesi\Hashpoint`),
+     Startmenü; KeyPath ist ein HKCU-Marker (`Software\dusthoff\Hashpoint`),
      damit die Komponente per-User installierbar bleibt.
   3. `AutostartHKCU` — schreibt `HKCU\Software\Microsoft\Windows\
      CurrentVersion\Run\HashpointTimeTracker = "<install-pfad>\hashpoint.exe"`

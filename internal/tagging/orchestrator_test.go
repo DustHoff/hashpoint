@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onesi/hashpoint/internal/storage"
-	"github.com/onesi/hashpoint/internal/tracker"
+	"github.com/dusthoff/hashpoint/internal/storage"
+	"github.com/dusthoff/hashpoint/internal/tracker"
 )
 
 // orchTestEnv wires an Orchestrator on top of an in-memory SQLite DB
