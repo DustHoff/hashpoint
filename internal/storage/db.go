@@ -179,3 +179,9 @@ var ErrNotFound = errors.New("storage: not found")
 // with another tag block. Personio rejects overlapping work periods, so we
 // refuse to persist them in the first place.
 var ErrOverlap = errors.New("storage: tag block overlaps existing block")
+
+// ErrInvalidTagPath is returned by TagRepository.EnsureByPath when the
+// supplied path is empty or has no usable segments after normalisation
+// (segments contain only the leading "#", whitespace, or characters
+// rejected by the tags.name CHECK constraint).
+var ErrInvalidTagPath = errors.New("storage: invalid tag path")

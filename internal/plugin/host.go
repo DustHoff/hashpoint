@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,6 +89,11 @@ type HostDeps struct {
 	// SubmitTimeout caps each per-plugin Submit() call during
 	// SubmitOnCallDoc fan-out. Zero ⇒ defaultSubmitTimeout.
 	SubmitTimeout time.Duration
+	// AutoTagResolveTimeout caps each per-plugin Resolve() call during
+	// ResolveProcessAutoTag. The resolver runs on the orchestrator's
+	// hot path (every focus change to a plugin-claimed process), so the
+	// default is tight. Zero ⇒ defaultAutoTagResolveTimeout (500 ms).
+	AutoTagResolveTimeout time.Duration
 	// DiscoveryInterval is how often the host re-scans PluginsDir for
 	// freshly-installed plugin directories. Zero ⇒ defaultDiscoveryInterval
 	// (30 s). Negative ⇒ disabled (useful in tests so the discovery loop
@@ -101,7 +107,10 @@ type HostDeps struct {
 	OnDiscovered func(Info)
 }
 
-const defaultSubmitTimeout = 30 * time.Second
+const (
+	defaultSubmitTimeout         = 30 * time.Second
+	defaultAutoTagResolveTimeout = 500 * time.Millisecond
+)
 
 // Host owns the lifecycle of every installed plugin. Methods on *Host are
 // safe to call concurrently.
@@ -131,12 +140,19 @@ type pluginInstance struct {
 	missing []string // populated only when state == StateNeedsConfig
 
 	// running-only fields (nil when state != StateRunning)
-	client    *hplugin.Client
-	rpcClient hplugin.ClientProtocol
-	core      sdk.Plugin
-	meta      sdk.Metadata
-	onCall    sdk.OnCallDocumentationHandler
-	mgmt      sdk.PluginManagementHandler
+	client         *hplugin.Client
+	rpcClient      hplugin.ClientProtocol
+	core           sdk.Plugin
+	meta           sdk.Metadata
+	onCall         sdk.OnCallDocumentationHandler
+	mgmt           sdk.PluginManagementHandler
+	processAutoTag sdk.ProcessAutoTagHandler
+	// autoTagNames is the lower-cased set of executable basenames the
+	// processAutoTag handler has declared interest in. Populated at
+	// launch (and cleared on Stop/Reload); a nil/empty set keeps the
+	// resolver from RPC-calling a plugin whose ProcessNames() returned
+	// nothing useful.
+	autoTagNames map[string]struct{}
 }
 
 // ErrNoOnCallPlugin is returned by SubmitOnCallDoc when no running plugin
@@ -154,6 +170,9 @@ func NewHost(deps HostDeps) *Host {
 	}
 	if deps.SubmitTimeout == 0 {
 		deps.SubmitTimeout = defaultSubmitTimeout
+	}
+	if deps.AutoTagResolveTimeout == 0 {
+		deps.AutoTagResolveTimeout = defaultAutoTagResolveTimeout
 	}
 	return &Host{
 		deps:    deps,
@@ -232,6 +251,8 @@ func (h *Host) Stop(_ context.Context) error {
 		p.core = nil
 		p.onCall = nil
 		p.mgmt = nil
+		p.processAutoTag = nil
+		p.autoTagNames = nil
 	}
 	return nil
 }
@@ -335,6 +356,101 @@ func (h *Host) SubmitOnCallDoc(ctx context.Context, doc sdk.OnCallDocument, sink
 	}
 	wg.Wait()
 	return nil
+}
+
+// ProcessAutoTagResolution is the resolved verdict from
+// ResolveProcessAutoTag: PluginName identifies the plugin that
+// produced the match (for logging and equality checks), TagName is the
+// slash-separated path the host must resolve via TagRepository.
+// EnsureByPath, Description is optional free-form text.
+type ProcessAutoTagResolution struct {
+	PluginName  string
+	TagName     string
+	Description string
+}
+
+// ResolveProcessAutoTag asks every running plugin that has declared
+// processName in its ProcessNames() set for a tag. Returns the first
+// non-nil Match=true result, picked in lexicographic plugin-name order
+// so the outcome is deterministic across runs.
+//
+// nil → no plugin claimed the process, or every claimant returned
+// Match=false / an error / timed out. The caller (orchestrator
+// fallback) treats nil as "no auto-tag, business as usual".
+func (h *Host) ResolveProcessAutoTag(ctx context.Context, processName, windowTitle string, isComm bool) *ProcessAutoTagResolution {
+	nameLower := strings.ToLower(strings.TrimSpace(processName))
+	if nameLower == "" {
+		return nil
+	}
+
+	type candidate struct {
+		name    string
+		handler sdk.ProcessAutoTagHandler
+	}
+	var cands []candidate
+
+	h.mu.RLock()
+	for name, p := range h.plugins {
+		if p.state != StateRunning || p.processAutoTag == nil {
+			continue
+		}
+		if _, ok := p.autoTagNames[nameLower]; !ok {
+			continue
+		}
+		cands = append(cands, candidate{name: name, handler: p.processAutoTag})
+	}
+	h.mu.RUnlock()
+
+	if len(cands) == 0 {
+		return nil
+	}
+	sort.Slice(cands, func(i, j int) bool { return cands[i].name < cands[j].name })
+
+	info := sdk.ProcessFocusInfo{
+		ProcessName:     nameLower,
+		WindowTitle:     windowTitle,
+		IsCommunication: isComm,
+	}
+	for _, c := range cands {
+		callCtx, cancel := context.WithTimeout(ctx, h.deps.AutoTagResolveTimeout)
+		res, err := c.handler.Resolve(callCtx, info)
+		cancel()
+		if err != nil {
+			h.log.Debug("process autotag resolve failed",
+				"plugin", c.name, "process", nameLower, "err", err)
+			continue
+		}
+		if !res.Match || strings.TrimSpace(res.TagName) == "" {
+			continue
+		}
+		return &ProcessAutoTagResolution{
+			PluginName:  c.name,
+			TagName:     res.TagName,
+			Description: res.Description,
+		}
+	}
+	return nil
+}
+
+// normalizeAutoTagNames builds the lookup set the resolver hot path
+// consults. Each entry is trimmed and lower-cased; empties are dropped.
+// Duplicate entries collapse silently.
+func normalizeAutoTagNames(in []string) map[string]struct{} {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(in))
+	for _, n := range in {
+		n = strings.ToLower(strings.TrimSpace(n))
+		if n == "" {
+			continue
+		}
+		out[n] = struct{}{}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // SetEnabled persists the user-controlled enable flag and immediately
@@ -551,6 +667,32 @@ func (h *Host) launch(ctx context.Context, name string) error {
 				continue
 			}
 			inst.mgmt = handler
+		case sdk.CapProcessAutoTag:
+			raw, err := rpcClient.Dispense(sdk.ProcessAutoTagKey)
+			if err != nil {
+				h.log.Warn("dispense process_autotag handler failed — capability disabled",
+					"plugin", name, "err", err)
+				continue
+			}
+			handler, ok := raw.(sdk.ProcessAutoTagHandler)
+			if !ok {
+				h.log.Warn("process_autotag handler: unexpected type",
+					"plugin", name, "type", fmt.Sprintf("%T", raw))
+				continue
+			}
+			inst.processAutoTag = handler
+			// Eagerly fetch the declared process basenames so the
+			// resolver hot path can skip plugins whose claim set is
+			// empty without an RPC round-trip. A failure here leaves
+			// the handler dispensed but dormant (empty name set) — the
+			// plugin's other capabilities remain functional.
+			names, err := handler.ProcessNames(ctx)
+			if err != nil {
+				h.log.Warn("process_autotag ProcessNames failed at launch — capability dormant",
+					"plugin", name, "err", err)
+				continue
+			}
+			inst.autoTagNames = normalizeAutoTagNames(names)
 		default:
 			h.log.Debug("plugin advertised unknown capability — ignoring",
 				"plugin", name, "capability", c)
@@ -587,6 +729,8 @@ func (h *Host) recordFailure(name string, man *Manifest, cause error) {
 	inst.core = nil
 	inst.onCall = nil
 	inst.mgmt = nil
+	inst.processAutoTag = nil
+	inst.autoTagNames = nil
 }
 
 // recordNeedsConfig parks a plugin in StateNeedsConfig with the list of
@@ -608,6 +752,8 @@ func (h *Host) recordNeedsConfig(name string, man *Manifest, missing []string) {
 	inst.core = nil
 	inst.onCall = nil
 	inst.mgmt = nil
+	inst.processAutoTag = nil
+	inst.autoTagNames = nil
 }
 
 // recordDisabled records a plugin in StateDisabled. The manifest is
@@ -636,6 +782,8 @@ func (h *Host) recordDisabled(name string) {
 	inst.core = nil
 	inst.onCall = nil
 	inst.mgmt = nil
+	inst.processAutoTag = nil
+	inst.autoTagNames = nil
 }
 
 // buildConfig assembles the PluginConfig delivered to Plugin.Configure

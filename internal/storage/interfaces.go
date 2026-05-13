@@ -105,6 +105,15 @@ type TagRepository interface {
 	Get(ctx context.Context, id int64) (*Tag, error)
 	List(ctx context.Context) ([]Tag, error)
 	Children(ctx context.Context, parentID int64) ([]Tag, error)
+	// EnsureByPath resolves a slash-separated tag path ("parent/child"),
+	// creating any missing nodes along the way. Segments are normalised
+	// to satisfy the tags.name CHECK constraint: any leading "#" is
+	// stripped, non-alphanumeric characters are dropped, and a "#"
+	// prefix is re-added. Matching against existing rows is case-
+	// insensitive on the normalised form. Returns ErrInvalidTagPath
+	// when no segment survives normalisation. The walk runs in a single
+	// transaction so concurrent callers cannot double-create.
+	EnsureByPath(ctx context.Context, path string) (*Tag, error)
 }
 
 // RuleRepository persists auto-tagging rules.
