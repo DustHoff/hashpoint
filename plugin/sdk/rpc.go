@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/rpc"
+	"time"
 
 	hplugin "github.com/hashicorp/go-plugin"
 )
@@ -445,6 +446,35 @@ func (s *hostAPIServer) Log(args HostLogArgs, reply *HostLogReply) error {
 	return nil
 }
 
+// HostRequestEntraTokenArgs carries the scopes the plugin wants a token
+// for. Scopes are passed straight through to MSAL on the host side.
+type HostRequestEntraTokenArgs struct {
+	Scopes []string
+}
+
+// HostRequestEntraTokenReply carries the access token and its UTC
+// expiry, or a typed error. IsNotAvailable rehydrates
+// ErrEntraNotAvailable on the plugin side.
+type HostRequestEntraTokenReply struct {
+	Token          string
+	ExpiresAt      time.Time
+	Err            string
+	IsNotAvailable bool
+}
+
+// RequestEntraToken is the net/rpc-callable HostAPI.RequestEntraToken.
+func (s *hostAPIServer) RequestEntraToken(args HostRequestEntraTokenArgs, reply *HostRequestEntraTokenReply) error {
+	token, expiresAt, err := s.impl.RequestEntraToken(context.Background(), args.Scopes)
+	if err != nil {
+		reply.Err = err.Error()
+		reply.IsNotAvailable = errors.Is(err, ErrEntraNotAvailable)
+		return nil
+	}
+	reply.Token = token
+	reply.ExpiresAt = expiresAt
+	return nil
+}
+
 // hostAPIClient is what the plugin sees as sdk.HostAPI.
 type hostAPIClient struct {
 	client *rpc.Client
@@ -475,4 +505,22 @@ func (c *hostAPIClient) Log(_ context.Context, level, message string, fields map
 		return errors.New(reply.Err)
 	}
 	return nil
+}
+
+// RequestEntraToken asks the host for a Bearer-suitable Entra ID
+// access token for the given scopes, plus its UTC expiry.
+// ErrEntraNotAvailable is rehydrated on the plugin side so callers can
+// `errors.Is` against it.
+func (c *hostAPIClient) RequestEntraToken(_ context.Context, scopes []string) (string, time.Time, error) {
+	var reply HostRequestEntraTokenReply
+	if err := c.client.Call("HostAPI.RequestEntraToken", HostRequestEntraTokenArgs{Scopes: scopes}, &reply); err != nil {
+		return "", time.Time{}, err
+	}
+	if reply.Err == "" {
+		return reply.Token, reply.ExpiresAt, nil
+	}
+	if reply.IsNotAvailable {
+		return "", time.Time{}, fmt.Errorf("%w: %s", ErrEntraNotAvailable, reply.Err)
+	}
+	return "", time.Time{}, errors.New(reply.Err)
 }

@@ -98,12 +98,13 @@ type Manager interface {
 	// Logout removes every cached account and deletes the on-disk cache
 	// file. The OS session is unaffected.
 	Logout(ctx context.Context) error
-	// AcquireToken returns a Bearer-suitable access token for the given
-	// scopes. Tries the cache first; falls back to interactive only when
-	// allowInteractive is set AND the silent path failed. Mixing scopes
-	// across resources (e.g. Graph + custom API) in one call is rejected
-	// by Entra ID — issue one AcquireToken per resource.
-	AcquireToken(ctx context.Context, scopes []string, allowInteractive bool) (string, error)
+	// AcquireToken returns a Bearer-suitable access token and its expiry
+	// (UTC) for the given scopes. Tries the cache first; falls back to
+	// interactive only when allowInteractive is set AND the silent path
+	// failed. Mixing scopes across resources (e.g. Graph + custom API)
+	// in one call is rejected by Entra ID — issue one AcquireToken per
+	// resource.
+	AcquireToken(ctx context.Context, scopes []string, allowInteractive bool) (string, time.Time, error)
 }
 
 type manager struct {
@@ -208,9 +209,9 @@ func (m *manager) Logout(ctx context.Context) error {
 }
 
 // AcquireToken implements Manager.AcquireToken.
-func (m *manager) AcquireToken(ctx context.Context, scopes []string, allowInteractive bool) (string, error) {
+func (m *manager) AcquireToken(ctx context.Context, scopes []string, allowInteractive bool) (string, time.Time, error) {
 	if len(scopes) == 0 {
-		return "", errors.New("entra: scopes required")
+		return "", time.Time{}, errors.New("entra: scopes required")
 	}
 
 	silentCtx, silentCancel := context.WithTimeout(ctx, silentTokenTimeout)
@@ -218,11 +219,11 @@ func (m *manager) AcquireToken(ctx context.Context, scopes []string, allowIntera
 
 	accs, err := m.client.Accounts(silentCtx)
 	if err != nil {
-		return "", fmt.Errorf("list accounts: %w", err)
+		return "", time.Time{}, fmt.Errorf("list accounts: %w", err)
 	}
 	if len(accs) == 0 {
 		if !allowInteractive {
-			return "", ErrSignedOut
+			return "", time.Time{}, ErrSignedOut
 		}
 		return m.acquireInteractive(ctx, scopes)
 	}
@@ -231,27 +232,27 @@ func (m *manager) AcquireToken(ctx context.Context, scopes []string, allowIntera
 		public.WithSilentAccount(accs[0]),
 	)
 	if err == nil {
-		return res.AccessToken, nil
+		return res.AccessToken, res.ExpiresOn.UTC(), nil
 	}
 
 	if !allowInteractive {
 		m.logger.Info("entra: silent acquisition failed — caller did not allow interactive",
 			"err", err)
-		return "", fmt.Errorf("%w: %w", ErrInteractiveRequired, err)
+		return "", time.Time{}, fmt.Errorf("%w: %w", ErrInteractiveRequired, err)
 	}
 	m.logger.Info("entra: silent acquisition failed — falling back to interactive",
 		"err", err)
 	return m.acquireInteractive(ctx, scopes)
 }
 
-func (m *manager) acquireInteractive(ctx context.Context, scopes []string) (string, error) {
+func (m *manager) acquireInteractive(ctx context.Context, scopes []string) (string, time.Time, error) {
 	interCtx, cancel := context.WithTimeout(ctx, interactiveLoginTimeout)
 	defer cancel()
 	res, err := m.client.AcquireTokenInteractive(interCtx, scopes,
 		public.WithRedirectURI(m.redirectURI),
 	)
 	if err != nil {
-		return "", fmt.Errorf("interactive token: %w", err)
+		return "", time.Time{}, fmt.Errorf("interactive token: %w", err)
 	}
-	return res.AccessToken, nil
+	return res.AccessToken, res.ExpiresOn.UTC(), nil
 }

@@ -4,9 +4,19 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/dusthoff/hashpoint/plugin/sdk"
 )
+
+// EntraTokenSource is the narrow surface boundHostAPI needs to serve
+// sdk.HostAPI.RequestEntraToken. Declared locally so internal/plugin
+// stays free of an internal/entra import (and tests can stub the source
+// without spinning up MSAL). entra.Manager satisfies this interface
+// directly via duck typing.
+type EntraTokenSource interface {
+	AcquireToken(ctx context.Context, scopes []string, allowInteractive bool) (string, time.Time, error)
+}
 
 // boundHostAPI is the host-side sdk.HostAPI implementation handed to a
 // single plugin via Plugin.Init. It is "bound" to the plugin's name so
@@ -18,6 +28,11 @@ type boundHostAPI struct {
 	log        *slog.Logger
 	handles    *handleRegistry
 	settings   SettingsStore
+	// entraSource returns the current Entra ID manager, or nil when
+	// the feature is not configured. Invoked on every
+	// RequestEntraToken call so a freshly-configured manager takes
+	// effect for running plugins without a reload.
+	entraSource func() EntraTokenSource
 }
 
 // RedeemSecret resolves the handle to (plugin, key), confirms the plugin
@@ -46,6 +61,41 @@ func (a *boundHostAPI) RedeemSecret(ctx context.Context, h sdk.SecretHandle) (st
 		return "", fmt.Errorf("%w: secret no longer present", sdk.ErrUnknownSecretHandle)
 	}
 	return v, nil
+}
+
+// RequestEntraToken serves the plugin a Bearer-suitable Entra ID
+// access token + expiry, scoped to the slice the plugin supplied. The
+// host always runs MSAL silently (allowInteractive=false); plugins
+// cannot pop a browser window mid-session. Any failure — feature
+// dormant, signed out, refresh-token expired, scopes need consent —
+// collapses to sdk.ErrEntraNotAvailable so the plugin can branch on a
+// single sentinel.
+//
+// The refresh token never leaves the host's MSAL cache (DPAPI-encrypted
+// at rest, CurrentUser scope), by design: a compromised plugin can mint
+// only access tokens for the duration of the host process.
+func (a *boundHostAPI) RequestEntraToken(ctx context.Context, scopes []string) (string, time.Time, error) {
+	if a.entraSource == nil {
+		return "", time.Time{}, fmt.Errorf("%w: plugin host not wired for entra", sdk.ErrEntraNotAvailable)
+	}
+	mgr := a.entraSource()
+	if mgr == nil {
+		return "", time.Time{}, fmt.Errorf("%w: entra not configured", sdk.ErrEntraNotAvailable)
+	}
+	if len(scopes) == 0 {
+		return "", time.Time{}, fmt.Errorf("%w: scopes required", sdk.ErrEntraNotAvailable)
+	}
+	token, expiresAt, err := mgr.AcquireToken(ctx, scopes, false)
+	if err != nil {
+		// Log the underlying cause at Debug — this runs on the
+		// plugin's cadence and could be noisy. Tokens / scopes are
+		// not in the error string by MSAL convention, but be careful
+		// not to widen the log surface here.
+		a.log.Debug("plugin entra token: acquisition failed",
+			"plugin", a.pluginName, "err", err)
+		return "", time.Time{}, fmt.Errorf("%w: %w", sdk.ErrEntraNotAvailable, err)
+	}
+	return token, expiresAt, nil
 }
 
 // Log forwards a structured log line to the host's slog with an attached

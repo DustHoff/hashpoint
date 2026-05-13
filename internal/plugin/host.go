@@ -99,6 +99,13 @@ type HostDeps struct {
 	// Wails "plugins:discovered" event so the frontend can refresh
 	// without a manual reload. Nil ⇒ no notification.
 	OnDiscovered func(Info)
+	// EntraSource returns the current Entra ID manager (or nil when
+	// the feature is not configured) so HostAPI.RequestEntraToken can
+	// reach a live MSAL client. The bound API invokes this on every
+	// call, picking up a freshly-configured manager without requiring
+	// running plugins to reload. Nil ⇒ HostAPI.RequestEntraToken
+	// always returns sdk.ErrEntraNotAvailable.
+	EntraSource func() EntraTokenSource
 }
 
 const defaultSubmitTimeout = 30 * time.Second
@@ -476,10 +483,11 @@ func (h *Host) launch(ctx context.Context, name string) error {
 	}
 
 	api := &boundHostAPI{
-		pluginName: name,
-		log:        h.log.With("plugin", name),
-		handles:    h.handles,
-		settings:   h.deps.Settings,
+		pluginName:  name,
+		log:         h.log.With("plugin", name),
+		handles:     h.handles,
+		settings:    h.deps.Settings,
+		entraSource: h.deps.EntraSource,
 	}
 	if err := core.Init(ctx, api); err != nil {
 		client.Kill()

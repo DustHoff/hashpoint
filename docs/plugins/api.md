@@ -196,6 +196,7 @@ The reverse-RPC surface plugins use to talk back to the host:
 type HostAPI interface {
     RedeemSecret(ctx context.Context, h SecretHandle) (string, error)
     Log(ctx context.Context, level, message string, fields map[string]string) error
+    RequestEntraToken(ctx context.Context, scopes []string) (token string, expiresAt time.Time, err error)
 }
 ```
 
@@ -223,6 +224,60 @@ Forwards a structured log line to the host's `slog` handler with the
 plugin's name prepended. Levels: `debug`, `info`, `warn`, `error`
 (unknown levels degrade to `info`). The host strips any `plugin` field
 the caller tries to set, to keep the attribution truthful.
+
+### `RequestEntraToken`
+
+Returns a Bearer-suitable Microsoft Entra ID access token for the
+given scopes plus its UTC expiry. Used by plugins that call Microsoft
+Graph endpoints or Entra-protected custom APIs on the signed-in
+user's behalf.
+
+```go
+token, expiresAt, err := host.RequestEntraToken(ctx, []string{
+    "https://graph.microsoft.com/User.Read",
+})
+if errors.Is(err, sdk.ErrEntraNotAvailable) {
+    // Entra is off, user signed out, or the scope needs consent.
+    // Fall back to a no-Entra code path — do not retry tightly.
+    return nil
+}
+if err != nil {
+    return err
+}
+// Use `token` as the Authorization: Bearer header value, then discard.
+_ = expiresAt // useful for skipping a re-request right before expiry.
+```
+
+The host serves the call **silently** via MSAL — refreshing the access
+token from the persisted refresh token transparently when the cache
+copy is stale. The refresh token itself never crosses the
+host↔plugin boundary, by design: a compromised plugin can mint only
+access tokens for the duration of the host process.
+
+Return values:
+
+- `(token, expiresAt, nil)` on success. The plaintext is in-memory
+  only — never log or persist it. Plugins SHOULD discard the value
+  once the outbound HTTP call completes and re-request on the next
+  cadence rather than caching long-lived state.
+- `ErrEntraNotAvailable` (wrapped) when Entra is not configured, no
+  user is signed in, the refresh token expired, or the requested
+  scopes need fresh interactive consent. The plugin MUST treat this
+  as a recoverable, capability-specific limitation — not a fatal
+  error — and either skip its feature or surface a `Log("warn", …)`
+  hint.
+
+Scope model: plugins request whatever scopes they need at runtime
+(typically Graph URIs, e.g. `https://graph.microsoft.com/Mail.Read`).
+The host does **not** enforce a per-plugin allowlist; it forwards the
+scopes straight to MSAL. Consent is the user's normal Entra flow —
+out-of-band of the plugin RPC.
+
+The host never escalates to an interactive flow on a plugin's behalf:
+mid-session browser pop-ups initiated by background plugins would be
+hostile. If the silent path fails, the plugin gets
+`ErrEntraNotAvailable` and the user must re-sign-in via Hashpoint's
+own UI.
 
 ## Configuration model
 
