@@ -22,10 +22,13 @@ linters:
       check-type-assertions: true
       # Idiomatic close-on-read-path: the iteration error surfaces via
       # rows.Err() and the body has nothing actionable to recover. Per-call
-      # `_ = X.Close()` adds noise without buying safety.
+      # `_ = X.Close()` adds noise without buying safety. We match by the
+      # resolved interface (io.Closer / io.ReadCloser) so chained accesses
+      # like `resp.Body.Close()` are covered too.
       exclude-functions:
-        - (*net/http.Response).Body.Close
-        - (database/sql.Rows).Close
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (*database/sql.Rows).Close
     revive:
       rules:
         - name: exported

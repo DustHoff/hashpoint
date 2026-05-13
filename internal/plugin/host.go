@@ -53,7 +53,7 @@ type Info struct {
 	Version       string               `json:"version"`
 	Description   string               `json:"description"`
 	Capabilities  []sdk.Capability     `json:"capabilities"`
-	State         State          `json:"state"`
+	State         State                `json:"state"`
 	LastError     string               `json:"last_error,omitempty"`
 	Enabled       bool                 `json:"enabled"`
 	MissingFields []string             `json:"missing_fields,omitempty"`
