@@ -8,11 +8,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 )
 
-// SeedIfMissing copies each subdirectory of seedDir into pluginsDir, but
-// only when the target subdirectory does not already exist. Existing
-// targets are left strictly untouched.
+// Seed copies each subdirectory of seedDir into pluginsDir when the target
+// is missing or the bundled manifest's Version is strictly newer than the
+// installed one. Identical or older bundles leave the user's installation
+// strictly untouched.
 //
 // Motivation: a per-machine MSI installer cannot reliably write to the
 // interactive user's %APPDATA% — it runs as admin (or SYSTEM under SCCM)
@@ -21,25 +24,27 @@ import (
 // and the app — which always runs as the interactive user — seeds them
 // into the per-user PluginsDir on launch.
 //
-// Re-seeding policy: a plugin is seeded only when its target directory
-// does not exist. That preserves user-side updates installed via the
-// plugin-management UI across MSI reinstalls (the bundled version becomes
-// the floor, never the cap).
+// Re-seeding policy:
+//   - Target directory missing  → copy the bundle in.
+//   - Target exists, bundle newer (semver) → overwrite atomically.
+//   - Target exists, bundle older or equal → keep the user's install.
+//   - Manifest unreadable on either side   → conservative skip.
+//
+// That way an MSI upgrade carrying a newer plugin-manager replaces the
+// old one, but a user who installed an even newer version through the
+// in-app Plugins UI is never silently rolled back.
 //
 // Behaviour:
 //   - seedDir does not exist (e.g. developer build without an MSI): no-op,
 //     nil error.
 //   - pluginsDir does not exist: created with 0o700.
-//   - For each subdirectory in seedDir: if the target exists, skip;
-//     otherwise copy the tree into <pluginsDir>\<name>.tmp and rename it
-//     atomically to <pluginsDir>\<name>.
-//   - Per-plugin copy failures are logged at Warn and processing continues
-//     with the next plugin. The function returns a non-nil error only when
-//     it cannot read seedDir at all or cannot ensure pluginsDir.
+//   - Per-plugin failures are logged at Warn and processing continues
+//     with the next plugin. The function returns a non-nil error only
+//     when it cannot read seedDir at all or cannot ensure pluginsDir.
 //
 // Non-directory entries in seedDir are ignored — bundles must always be
-// directories that match the plugin's manifest name.
-func SeedIfMissing(seedDir, pluginsDir string, logger *slog.Logger) error {
+// directories whose name matches the plugin's manifest name.
+func Seed(seedDir, pluginsDir string, logger *slog.Logger) error {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -61,27 +66,169 @@ func SeedIfMissing(seedDir, pluginsDir string, logger *slog.Logger) error {
 		name := e.Name()
 		src := filepath.Join(seedDir, name)
 		dst := filepath.Join(pluginsDir, name)
-		if _, err := os.Stat(dst); err == nil {
-			logger.Debug("plugin seed: target exists — skipping", "plugin", name)
+		action, srcVer, dstVer := decideSeedAction(src, dst, logger, name)
+		switch action {
+		case seedActionSkip:
 			continue
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			logger.Warn("plugin seed: stat target failed",
-				"plugin", name, "err", err)
-			continue
+		case seedActionFresh:
+			if err := seedOne(src, dst); err != nil {
+				logger.Warn("plugin seed: copy failed",
+					"plugin", name, "err", err)
+				continue
+			}
+			logger.Info("plugin seed: copied", "plugin", name, "version", srcVer)
+		case seedActionUpgrade:
+			if err := seedOne(src, dst); err != nil {
+				logger.Warn("plugin seed: upgrade failed",
+					"plugin", name, "err", err)
+				continue
+			}
+			logger.Info("plugin seed: upgraded",
+				"plugin", name, "from_version", dstVer, "to_version", srcVer)
 		}
-		if err := seedOne(src, dst); err != nil {
-			logger.Warn("plugin seed: copy failed",
-				"plugin", name, "err", err)
-			continue
-		}
-		logger.Info("plugin seed: copied", "plugin", name)
 	}
 	return nil
 }
 
-// seedOne copies src to a sibling temp directory of dst and renames it
-// into place, so a partial copy never becomes visible as a real plugin
-// directory to the discovery loop.
+type seedAction int
+
+const (
+	seedActionSkip seedAction = iota
+	seedActionFresh
+	seedActionUpgrade
+)
+
+// decideSeedAction inspects the source and target directories and returns
+// the action to take plus the seed/installed version strings (best-effort,
+// used for logging — may be empty on the skip path). The function never
+// writes; the caller performs the actual copy.
+func decideSeedAction(src, dst string, logger *slog.Logger, name string) (seedAction, string, string) {
+	dstInfo, dstErr := os.Stat(dst)
+	if dstErr != nil {
+		if errors.Is(dstErr, fs.ErrNotExist) {
+			srcVer := manifestVersion(src)
+			return seedActionFresh, srcVer, ""
+		}
+		logger.Warn("plugin seed: stat target failed",
+			"plugin", name, "err", dstErr)
+		return seedActionSkip, "", ""
+	}
+	if !dstInfo.IsDir() {
+		logger.Warn("plugin seed: target exists but is not a directory — skipping",
+			"plugin", name)
+		return seedActionSkip, "", ""
+	}
+	srcMf, srcErr := LoadManifest(src)
+	if srcErr != nil {
+		logger.Warn("plugin seed: cannot read bundled manifest — skipping",
+			"plugin", name, "err", srcErr)
+		return seedActionSkip, "", ""
+	}
+	dstMf, dstMfErr := LoadManifest(dst)
+	if dstMfErr != nil {
+		logger.Warn("plugin seed: cannot read installed manifest — leaving as-is",
+			"plugin", name, "err", dstMfErr)
+		return seedActionSkip, srcMf.Version, ""
+	}
+	if versionIsNewer(srcMf.Version, dstMf.Version) {
+		return seedActionUpgrade, srcMf.Version, dstMf.Version
+	}
+	logger.Debug("plugin seed: installed version is at least as new — skipping",
+		"plugin", name, "installed_version", dstMf.Version, "seed_version", srcMf.Version)
+	return seedActionSkip, srcMf.Version, dstMf.Version
+}
+
+// manifestVersion returns the Version field of <dir>/manifest.toml or the
+// empty string if the manifest cannot be loaded. Best-effort, used for
+// logging the "freshly seeded" version.
+func manifestVersion(dir string) string {
+	m, err := LoadManifest(dir)
+	if err != nil {
+		return ""
+	}
+	return m.Version
+}
+
+// versionIsNewer reports whether seedVer is strictly newer than
+// installedVer. Both arguments are parsed as semver-ish dotted-numeric
+// strings with an optional 'v' prefix and an optional pre-release suffix
+// (e.g. "1.2.3-beta"). Numeric base parts compare as integers; missing
+// trailing parts default to 0 so "1.0" equals "1.0.0". A version WITHOUT
+// a pre-release ranks above the same version WITH a pre-release.
+//
+// If either side is unparseable, the function returns false — the caller
+// then takes the safe path and leaves the installed plugin alone.
+func versionIsNewer(seedVer, installedVer string) bool {
+	a, aOk := parseVersion(seedVer)
+	b, bOk := parseVersion(installedVer)
+	if !aOk || !bOk {
+		return false
+	}
+	n := len(a.base)
+	if len(b.base) > n {
+		n = len(b.base)
+	}
+	for i := 0; i < n; i++ {
+		ai, bi := 0, 0
+		if i < len(a.base) {
+			ai = a.base[i]
+		}
+		if i < len(b.base) {
+			bi = b.base[i]
+		}
+		if ai != bi {
+			return ai > bi
+		}
+	}
+	switch {
+	case a.pre == b.pre:
+		return false
+	case a.pre == "":
+		return true
+	case b.pre == "":
+		return false
+	default:
+		return a.pre > b.pre
+	}
+}
+
+type parsedVersion struct {
+	base []int
+	pre  string
+}
+
+func parseVersion(v string) (parsedVersion, bool) {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "v")
+	if v == "" {
+		return parsedVersion{}, false
+	}
+	var pre string
+	if i := strings.Index(v, "-"); i >= 0 {
+		pre = v[i+1:]
+		v = v[:i]
+	}
+	parts := strings.Split(v, ".")
+	base := make([]int, 0, len(parts))
+	for _, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return parsedVersion{}, false
+		}
+		base = append(base, n)
+	}
+	if len(base) == 0 {
+		return parsedVersion{}, false
+	}
+	return parsedVersion{base: base, pre: pre}, true
+}
+
+// seedOne copies src into dst via a sibling .tmp directory. When dst
+// already exists (upgrade path), the old contents are removed between
+// the copy and the rename so the swap works on Windows too. A failure
+// in the copy leaves the original dst intact; a failure after the
+// remove leaves the target missing and the next launch re-seeds from
+// scratch — self-healing.
 func seedOne(src, dst string) error {
 	tmp := dst + ".tmp"
 	if err := os.RemoveAll(tmp); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -90,6 +237,10 @@ func seedOne(src, dst string) error {
 	if err := copyTree(src, tmp); err != nil {
 		_ = os.RemoveAll(tmp)
 		return err
+	}
+	if err := os.RemoveAll(dst); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		_ = os.RemoveAll(tmp)
+		return fmt.Errorf("remove old %q: %w", dst, err)
 	}
 	if err := os.Rename(tmp, dst); err != nil {
 		_ = os.RemoveAll(tmp)

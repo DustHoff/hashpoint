@@ -150,12 +150,20 @@ laid down under `%ProgramFiles%\Hashpoint\plugins-seed\plugin-manager\`
 during installation and copied into the per-user `PluginsDir` the first
 time hashpoint runs (see [`internal/plugin/seed.go`](../../internal/plugin/seed.go)).
 
-The seed copy is only performed when the target directory does not yet
-exist. That makes user-side updates installed via the in-app Plugins
-UI immune to MSI reinstalls — once you bump `plugin-manager` to a newer
-version through the UI, no MSI upgrade will roll it back. Deleting the
-plugin directory manually triggers a re-seed on the next launch, which
-is the recovery path if the user-side install ever ends up corrupt.
+Seeding compares the bundled manifest's `version` against the installed
+one and acts as follows:
+
+- target directory missing → copy the bundle in;
+- bundle is strictly newer than installed → overwrite atomically;
+- bundle is older or equal → leave the user's install untouched.
+
+That makes the bundled version a *floor*, never a *cap*: an MSI upgrade
+that ships a newer `plugin-manager` will upgrade an outdated user-side
+install, but a user who installed an even newer version through the
+in-app Plugins UI is never silently rolled back. If either manifest is
+unreadable, the seeder skips the plugin defensively rather than risk
+overwriting unknown state. Deleting the plugin directory manually is
+the recovery path for a corrupt install — the next launch re-seeds it.
 
 The bundled version is pinned to whatever `plugin-manager_*_windows_amd64.zip`
 was the latest release in `DustHoff/hashpoint-plugin-manager` at the

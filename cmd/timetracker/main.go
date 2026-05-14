@@ -89,7 +89,7 @@ func run() error {
 	// Seeding is best-effort — a failure must not block startup.
 	if exe, err := os.Executable(); err == nil {
 		seedDir := filepath.Join(filepath.Dir(exe), "plugins-seed")
-		if err := pluginhost.SeedIfMissing(seedDir, paths.PluginsDir, slog.Default()); err != nil {
+		if err := pluginhost.Seed(seedDir, paths.PluginsDir, slog.Default()); err != nil {
 			slog.Warn("plugin seed failed — continuing without seeded plugins", "err", err)
 		}
 	} else {
