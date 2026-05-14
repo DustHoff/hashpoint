@@ -105,6 +105,13 @@ type HostDeps struct {
 	// Wails "plugins:discovered" event so the frontend can refresh
 	// without a manual reload. Nil ⇒ no notification.
 	OnDiscovered func(Info)
+	// OnStateChanged fires when a plugin transitions state in the
+	// background (today: a running plugin's subprocess exits unexpectedly
+	// and the watcher demotes it to StateFailed). User-initiated
+	// transitions (Reload, SetEnabled) are NOT routed through this hook
+	// — those callers can refresh the UI synchronously from the action's
+	// return path. Nil ⇒ no notification.
+	OnStateChanged func(Info)
 	// EntraSource returns the current Entra ID manager (or nil when
 	// the feature is not configured) so HostAPI.RequestEntraToken can
 	// reach a live MSAL client. The bound API invokes this on every
@@ -117,7 +124,24 @@ type HostDeps struct {
 const (
 	defaultSubmitTimeout         = 30 * time.Second
 	defaultAutoTagResolveTimeout = 500 * time.Millisecond
+	// defaultExitPollInterval governs how quickly the host notices a
+	// crashed plugin subprocess. 2s is the trade-off between snappy UI
+	// feedback ("my plugin died, mark it red") and per-plugin CPU spent
+	// on a syscall that returns false the overwhelming majority of the
+	// time. Tests override this on the Host struct directly to drive
+	// the watcher synchronously.
+	defaultExitPollInterval = 2 * time.Second
 )
+
+// clientHandle is the slice of *hplugin.Client behaviour the host needs
+// after launch. Factoring it out lets the exit watcher accept a fake in
+// tests without spinning up a real subprocess.
+type clientHandle interface {
+	// Kill terminates the plugin subprocess (idempotent).
+	Kill()
+	// Exited reports whether the subprocess has died for any reason.
+	Exited() bool
+}
 
 // Host owns the lifecycle of every installed plugin. Methods on *Host are
 // safe to call concurrently.
@@ -129,6 +153,17 @@ type Host struct {
 	plugins map[string]*pluginInstance
 
 	handles *handleRegistry
+
+	// bgCtx is the background context for host-owned goroutines (per-
+	// plugin exit watchers). Stop() cancels it so watchers exit promptly
+	// at shutdown without waiting out their next poll tick.
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+
+	// exitPollInterval is the cadence at which the per-plugin exit
+	// watcher checks client.Exited(). Default defaultExitPollInterval;
+	// tests can override directly on the struct.
+	exitPollInterval time.Duration
 
 	// discoveryCancel stops the periodic discovery goroutine. Set by
 	// Start() when DiscoveryInterval >= 0; called by Stop().
@@ -147,7 +182,7 @@ type pluginInstance struct {
 	missing []string // populated only when state == StateNeedsConfig
 
 	// running-only fields (nil when state != StateRunning)
-	client         *hplugin.Client
+	client         clientHandle
 	rpcClient      hplugin.ClientProtocol
 	core           sdk.Plugin
 	meta           sdk.Metadata
@@ -181,11 +216,15 @@ func NewHost(deps HostDeps) *Host {
 	if deps.AutoTagResolveTimeout == 0 {
 		deps.AutoTagResolveTimeout = defaultAutoTagResolveTimeout
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Host{
-		deps:    deps,
-		log:     deps.Logger.With("subsystem", "plugin"),
-		plugins: map[string]*pluginInstance{},
-		handles: newHandleRegistry(),
+		deps:             deps,
+		log:              deps.Logger.With("subsystem", "plugin"),
+		plugins:          map[string]*pluginInstance{},
+		handles:          newHandleRegistry(),
+		bgCtx:            ctx,
+		bgCancel:         cancel,
+		exitPollInterval: defaultExitPollInterval,
 	}
 }
 
@@ -246,6 +285,9 @@ func (h *Host) Stop(_ context.Context) error {
 		h.discoveryCancel()
 		h.discoveryCancel = nil
 	}
+	// Cancel host-wide background context so all exit watchers return
+	// without waiting out their next poll tick.
+	h.bgCancel()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for name, p := range h.plugins {
@@ -711,11 +753,71 @@ func (h *Host) launch(ctx context.Context, name string) error {
 	h.plugins[name] = inst
 	h.mu.Unlock()
 
+	// One watcher per launched subprocess: polls Exited() and demotes
+	// the plugin to StateFailed when the process dies without a host-
+	// initiated Stop/Reload. The captured client identity protects
+	// against stale watchers firing on Reload-replaced instances.
+	go h.watchExit(name, client)
+
 	h.log.Info("plugin loaded",
 		"name", name,
 		"version", meta.Version,
 		"capabilities", meta.Capabilities)
 	return nil
+}
+
+// watchExit polls the subprocess's Exited() flag and transitions the
+// plugin to StateFailed when the host did not initiate the exit. The
+// watcher exits silently in any of:
+//
+//   - Host.bgCtx cancelled (shutdown): the host owns teardown.
+//   - The plugin entry was removed from h.plugins (uninstall): no state
+//     to update.
+//   - p.client no longer points at the client this watcher was spawned
+//     for: Reload installed a fresh instance, which has its own
+//     watcher — the new instance's lifecycle is not ours to mutate.
+//
+// When the watcher does transition state, OnStateChanged fires outside
+// the host lock with the freshly-computed Info, so callers (the Wails
+// event emitter) can do arbitrary work without contending with the
+// host mutex.
+func (h *Host) watchExit(name string, cli clientHandle) {
+	ticker := time.NewTicker(h.exitPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-h.bgCtx.Done():
+			return
+		case <-ticker.C:
+			if !cli.Exited() {
+				continue
+			}
+			h.mu.Lock()
+			p, ok := h.plugins[name]
+			if !ok || p.client != cli {
+				h.mu.Unlock()
+				return
+			}
+			p.state = StateFailed
+			p.lastErr = "Plugin-Prozess wurde unerwartet beendet"
+			p.client = nil
+			p.rpcClient = nil
+			p.core = nil
+			p.onCall = nil
+			p.mgmt = nil
+			p.processAutoTag = nil
+			p.autoTagNames = nil
+			info := p.info()
+			h.mu.Unlock()
+			h.handles.revokeFor(name)
+			h.log.Warn("plugin process exited unexpectedly — marking failed",
+				"name", name)
+			if h.deps.OnStateChanged != nil {
+				h.deps.OnStateChanged(info)
+			}
+			return
+		}
+	}
 }
 
 // recordFailure persists a plugin in StateFailed without keeping any RPC
