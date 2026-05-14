@@ -171,7 +171,11 @@ func (a *App) recheckOnCall(ctx context.Context, block storage.TagBlock) {
 		return
 	}
 	ancestry := oncall.TagRepoAncestry{Tags: a.deps.Tags}
-	if err := oncall.Recheck(ctx, block, cfg.WorkSchedule, cfg.OnCall.TagIDs, ancestry, a.deps.OnCall); err != nil {
+	var src oncall.OffHoursSource
+	if a.pluginHost != nil {
+		src = a.pluginHost
+	}
+	if err := oncall.Recheck(ctx, block, cfg.WorkSchedule, cfg.OnCall.TagIDs, ancestry, a.deps.OnCall, src); err != nil {
 		a.logger.Warn("oncall recheck failed",
 			"block_id", block.ID, "err", err)
 	}
