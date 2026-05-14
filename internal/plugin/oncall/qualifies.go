@@ -36,22 +36,30 @@ type TagAncestry interface {
 //  1. The block is closed (EndTime != nil). Open blocks may still grow
 //     or shrink, so we wait for closure before committing to a doc.
 //
-//  2. Some part of [StartTime, EndTime) falls outside the configured
-//     working-hours window — either on a non-working weekday OR outside
-//     [StartHour, EndHour) on a working weekday.
+//  2. The block's tag (or any ancestor) is in onCallTagIDs.
 //
-//  3. The block's tag (or any ancestor) is in onCallTagIDs.
+//  3. Some part of [StartTime, EndTime) falls into the effective
+//     off-hours timeline. The baseline is WorkScheduleConfig (non-working
+//     weekdays + the [StartHour, EndHour) clock window); the optional
+//     OffHoursSource lets plugins expand the timeline (Add) or carve
+//     working-hour ranges out of it (Remove). Remove wins globally —
+//     including against the WorkScheduleConfig baseline.
 //
 // onCallTagIDs being empty short-circuits to false: the on-call feature
 // is dormant when the user hasn't configured any on-call tags.
-func Qualifies(ctx context.Context, b storage.TagBlock, ws config.WorkScheduleConfig, onCallTagIDs []int64, tags TagAncestry) (bool, error) {
+//
+// The cheap predicates (closed, tag set, ancestor walk) run first so the
+// plugin RPC inside src is only paid for blocks that actually match the
+// on-call tag set.
+func Qualifies(ctx context.Context, b storage.TagBlock, ws config.WorkScheduleConfig, onCallTagIDs []int64, tags TagAncestry, src OffHoursSource) (bool, error) {
 	if b.EndTime == nil {
 		return false, nil
 	}
 	if len(onCallTagIDs) == 0 {
 		return false, nil
 	}
-	if !overlapsOffHours(b.StartTime, *b.EndTime, ws) {
+	end := *b.EndTime
+	if !end.After(b.StartTime) {
 		return false, nil
 	}
 	if tags == nil {
@@ -65,60 +73,50 @@ func Qualifies(ctx context.Context, b storage.TagBlock, ws config.WorkScheduleCo
 	for _, id := range onCallTagIDs {
 		onCallSet[id] = struct{}{}
 	}
+	matched := false
 	for _, id := range ancestors {
 		if _, ok := onCallSet[id]; ok {
-			return true, nil
+			matched = true
+			break
 		}
 	}
-	return false, nil
+	if !matched {
+		return false, nil
+	}
+
+	return effectiveTimelineNonEmpty(ctx, b.StartTime, end, ws, src)
 }
 
-// overlapsOffHours scans the interval [start, end) one local-day at a time
-// and returns true the moment any minute falls outside the working window
-// (either weekday excluded or hour-of-day excluded). The scan is bounded
-// by the block's duration; in practice on-call blocks span a few hours,
-// so the loop runs at most twice (cross-midnight case).
-//
-// Both start and end are converted to time.Local for the weekday and
-// hour-of-day comparison — WorkScheduleConfig is documented as
-// local-timezone semantics in §164–183 of config.go.
-func overlapsOffHours(start, end time.Time, ws config.WorkScheduleConfig) bool {
-	if !end.After(start) {
-		return false
+// effectiveTimelineNonEmpty composes the off-hours timeline for the
+// block window and reports whether it has any minute left after the
+// remove pass. Splitting it out keeps Qualifies linear and lets tests
+// poke at the timeline computation in isolation.
+func effectiveTimelineNonEmpty(ctx context.Context, start, end time.Time, ws config.WorkScheduleConfig, src OffHoursSource) (bool, error) {
+	adds := wsOffHoursIntervals(start, end, ws)
+	var removes []interval
+
+	if src != nil {
+		contribs, err := src.OffHours(ctx, start, end)
+		if err != nil {
+			return false, err
+		}
+		for _, iv := range contribs {
+			s := clipMax(iv.Start, start)
+			e := clipMin(iv.End, end)
+			if !e.After(s) {
+				continue
+			}
+			if iv.Kind == OffHoursRemove {
+				removes = append(removes, interval{start: s, end: e})
+			} else {
+				adds = append(adds, interval{start: s, end: e})
+			}
+		}
 	}
-	local := start.In(time.Local)
-	endLocal := end.In(time.Local)
 
-	for {
-		// Examine the current local-day chunk: [local, min(endLocal, nextMidnight)).
-		dayStart := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.Local)
-		nextMidnight := dayStart.Add(24 * time.Hour)
-		chunkEnd := endLocal
-		if nextMidnight.Before(chunkEnd) {
-			chunkEnd = nextMidnight
-		}
-
-		if !ws.IsWorkDay(local) {
-			// Whole chunk is on a non-working weekday — anything here is off-hours.
-			return true
-		}
-		// On a working weekday, off-hours means the chunk has any minute
-		// outside [StartHour, EndHour). Compute the chunk's clock window
-		// in [chunkStartHour, chunkEndHour) and intersect.
-		chunkStartHourFloat := float64(local.Hour()) + float64(local.Minute())/60 + float64(local.Second())/3600
-		// chunkEnd may be exactly nextMidnight ⇒ treat as 24.0 not 0.0.
-		chunkEndHourFloat := 24.0
-		if !chunkEnd.Equal(nextMidnight) {
-			chunkEndHourFloat = float64(chunkEnd.Hour()) + float64(chunkEnd.Minute())/60 + float64(chunkEnd.Second())/3600
-		}
-		if chunkStartHourFloat < float64(ws.StartHour) || chunkEndHourFloat > float64(ws.EndHour) {
-			return true
-		}
-
-		// Advance to the next day chunk.
-		if !chunkEnd.Before(endLocal) {
-			return false
-		}
-		local = nextMidnight
+	timeline := mergeIntervals(adds)
+	for _, sub := range removes {
+		timeline = subtractInterval(timeline, sub)
 	}
+	return len(timeline) > 0, nil
 }

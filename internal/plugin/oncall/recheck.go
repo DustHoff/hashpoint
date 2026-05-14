@@ -24,10 +24,14 @@ import (
 //     ticket still exists even if Hashpoint's
 //     view drifts)
 //
+// src is the optional OffHoursSource Qualifies consults for plugin-
+// supplied off-hours ranges; nil is legal and degrades to the
+// WorkScheduleConfig-only baseline.
+//
 // Returns nil on success, including the "nothing to do" cases. The caller
 // is expected to log failures but not abort the surrounding operation.
-func Recheck(ctx context.Context, block storage.TagBlock, ws config.WorkScheduleConfig, onCallTagIDs []int64, tags TagAncestry, repo storage.OnCallRepository) error {
-	qualifies, err := Qualifies(ctx, block, ws, onCallTagIDs, tags)
+func Recheck(ctx context.Context, block storage.TagBlock, ws config.WorkScheduleConfig, onCallTagIDs []int64, tags TagAncestry, repo storage.OnCallRepository, src OffHoursSource) error {
+	qualifies, err := Qualifies(ctx, block, ws, onCallTagIDs, tags, src)
 	if err != nil {
 		return fmt.Errorf("oncall recheck qualify: %w", err)
 	}
