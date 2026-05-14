@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/dusthoff/hashpoint/internal/entra"
 	"github.com/dusthoff/hashpoint/internal/logging"
 	"github.com/dusthoff/hashpoint/internal/personio"
+	pluginhost "github.com/dusthoff/hashpoint/internal/plugin"
 	"github.com/dusthoff/hashpoint/internal/storage"
 	"github.com/dusthoff/hashpoint/internal/tagging"
 	"github.com/dusthoff/hashpoint/internal/tracker"
@@ -79,6 +81,20 @@ func run() error {
 			_ = logCloser.Close()
 		}
 	}()
+
+	// Seed bundled plugins from the install directory into the per-user
+	// PluginsDir. The MSI drops plugin bundles under
+	// <install-dir>\plugins-seed\<name>\; hashpoint runs as the interactive
+	// user and can therefore reach the correct %APPDATA% to copy them in.
+	// Seeding is best-effort — a failure must not block startup.
+	if exe, err := os.Executable(); err == nil {
+		seedDir := filepath.Join(filepath.Dir(exe), "plugins-seed")
+		if err := pluginhost.Seed(seedDir, paths.PluginsDir, slog.Default()); err != nil {
+			slog.Warn("plugin seed failed — continuing without seeded plugins", "err", err)
+		}
+	} else {
+		slog.Warn("os.Executable failed — skipping plugin seed", "err", err)
+	}
 
 	cfg, err := config.Load(paths.ConfigFile)
 	if err != nil {

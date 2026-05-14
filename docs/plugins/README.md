@@ -141,6 +141,35 @@ Don't write a plugin for behaviours that touch only Hashpoint's own
 data (timeline rendering, tag rules, sync logic, …) — those belong in
 the main app.
 
+## Pre-installed plugins (MSI seed)
+
+The Windows MSI ships with one plugin bundled out of the box —
+[`hashpoint-plugin-manager`](https://github.com/DustHoff/hashpoint-plugin-manager),
+the reference implementation of the `plugin_management` capability. It is
+laid down under `%ProgramFiles%\Hashpoint\plugins-seed\plugin-manager\`
+during installation and copied into the per-user `PluginsDir` the first
+time hashpoint runs (see [`internal/plugin/seed.go`](../../internal/plugin/seed.go)).
+
+Seeding compares the bundled manifest's `version` against the installed
+one and acts as follows:
+
+- target directory missing → copy the bundle in;
+- bundle is strictly newer than installed → overwrite atomically;
+- bundle is older or equal → leave the user's install untouched.
+
+That makes the bundled version a *floor*, never a *cap*: an MSI upgrade
+that ships a newer `plugin-manager` will upgrade an outdated user-side
+install, but a user who installed an even newer version through the
+in-app Plugins UI is never silently rolled back. If either manifest is
+unreadable, the seeder skips the plugin defensively rather than risk
+overwriting unknown state. Deleting the plugin directory manually is
+the recovery path for a corrupt install — the next launch re-seeds it.
+
+The bundled version is pinned to whatever `plugin-manager_*_windows_amd64.zip`
+was the latest release in `DustHoff/hashpoint-plugin-manager` at the
+moment the MSI was built — see `.github/workflows/release.yml` for the
+exact fetch step.
+
 ## Plugin sources (`plugin_management`)
 
 A plugin advertising `plugin_management` is itself a *source*: it tells

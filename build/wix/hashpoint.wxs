@@ -7,18 +7,32 @@
     1. `hashpoint.exe` — the Wails-bundled binary (single-file).
     2. Start-menu shortcut "Hashpoint TimeTracker".
     3. HKCU\...\Run autostart entry for the user running the installer.
+    4. `plugins-seed\plugin-manager\` — bundled hashpoint-plugin-manager
+       plugin. The running app copies this into the per-user PluginsDir on
+       first launch (see internal/plugin/seed.go); the MSI cannot reach
+       %APPDATA% reliably from an elevated context.
+
+  Behavioural bits beyond the regular MSI lifecycle:
+    - WixUtilExtension `CloseApplication` sends WM_CLOSE to any running
+      `hashpoint.exe` before `InstallValidate`, then force-terminates after
+      5 seconds. Required so upgrades do not fail with sharing violations.
+    - `LaunchHashpoint` custom action runs after `InstallFinalize` so the
+      newly installed binary launches without waiting for the next login.
 
   Silent IT roll-out:  msiexec /i hashpoint-<version>.msi /quiet
 
   Stable identifiers (do NOT regenerate — MajorUpgrade depends on the
   UpgradeCode being constant across releases; Component GUIDs must be
   stable so upgrades replace files in place rather than orphaning them):
-    UpgradeCode         8B0A3C7E-7D1F-4B23-9A2C-1F8E5D9C0B42
-    MainExecutable      4D2E9F71-2C3B-4A5E-91F2-7E4D8B1C3A60
-    StartMenuShortcut   6F5C4E81-3B7A-4D9C-B0E2-8A5F2D7C9E31
-    AutostartHKCU       9A1B2C3D-4E5F-46A7-B8C9-D0E1F2A3B4C5
+    UpgradeCode                 8B0A3C7E-7D1F-4B23-9A2C-1F8E5D9C0B42
+    MainExecutable              4D2E9F71-2C3B-4A5E-91F2-7E4D8B1C3A60
+    StartMenuShortcut           6F5C4E81-3B7A-4D9C-B0E2-8A5F2D7C9E31
+    AutostartHKCU               9A1B2C3D-4E5F-46A7-B8C9-D0E1F2A3B4C5
+    SeedPluginManagerExe        B5D7E2A1-3F8C-4D1E-A6B9-0C2E5F8D1A4B
+    SeedPluginManagerManifest   C6E8F3B2-4A9D-4E2F-B7CA-1D3F6A9E2B5C
 -->
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
   <Product Id="*"
            Name="Hashpoint TimeTracker"
            Language="1031"
@@ -43,9 +57,28 @@
     <Property Id="ARPNOREPAIR" Value="1" />
     <Property Id="ARPNOMODIFY" Value="1" />
 
+    <!--
+      Close any running hashpoint.exe before the file-staging phase so an
+      upgrade or repair never aborts with a "file in use" error. Sends
+      WM_CLOSE, waits 5 seconds, then TerminateProcess. RebootPrompt="no"
+      keeps the rollout fully unattended.
+    -->
+    <util:CloseApplication
+        Id="CloseHashpoint"
+        Target="hashpoint.exe"
+        CloseMessage="yes"
+        EndSessionMessage="no"
+        RebootPrompt="no"
+        TerminateProcess="5"
+        Description="Hashpoint TimeTracker wird beendet, damit die Installation fortfahren kann." />
+
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLDIR" Name="Hashpoint" />
+        <Directory Id="INSTALLDIR" Name="Hashpoint">
+          <Directory Id="PluginSeedDir" Name="plugins-seed">
+            <Directory Id="PluginSeedManagerDir" Name="plugin-manager" />
+          </Directory>
+        </Directory>
       </Directory>
       <Directory Id="ProgramMenuFolder" />
     </Directory>
@@ -59,6 +92,41 @@
               Source="$(var.ExeFile)"
               KeyPath="yes"
               Checksum="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!--
+      Bundled hashpoint-plugin-manager plugin. The host copies the contents
+      of this directory into %APPDATA%\TimeTracker\plugins\plugin-manager\
+      on first launch when no such directory exists yet. User-side updates
+      via the in-app Plugins UI are never overwritten by reinstalls — the
+      bundled version is the floor, never the cap.
+
+      RemoveFolder entries on the manifest component clean both the
+      plugin-manager subdir and its plugins-seed parent at uninstall.
+    -->
+    <DirectoryRef Id="PluginSeedManagerDir">
+      <Component Id="SeedPluginManagerExe"
+                 Guid="B5D7E2A1-3F8C-4D1E-A6B9-0C2E5F8D1A4B"
+                 Win64="yes">
+        <File Id="SeedPmExe"
+              Name="plugin-manager.exe"
+              Source="$(var.SeedPluginManagerExe)"
+              KeyPath="yes" />
+      </Component>
+      <Component Id="SeedPluginManagerManifest"
+                 Guid="C6E8F3B2-4A9D-4E2F-B7CA-1D3F6A9E2B5C"
+                 Win64="yes">
+        <File Id="SeedPmManifest"
+              Name="manifest.toml"
+              Source="$(var.SeedPluginManagerManifest)"
+              KeyPath="yes" />
+        <RemoveFolder Id="RemovePluginManagerSeedDir"
+                      Directory="PluginSeedManagerDir"
+                      On="uninstall" />
+        <RemoveFolder Id="RemovePluginSeedDir"
+                      Directory="PluginSeedDir"
+                      On="uninstall" />
       </Component>
     </DirectoryRef>
 
@@ -106,8 +174,34 @@
              AllowAdvertise="no"
              Absent="disallow">
       <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="SeedPluginManagerExe" />
+      <ComponentRef Id="SeedPluginManagerManifest" />
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="AutostartHKCU" />
     </Feature>
+
+    <!--
+      Launch hashpoint.exe after the install transaction commits. Type 18
+      CA with FileKey="HashpointExe" → runs the just-installed binary;
+      asyncNoWait → msiexec returns immediately; Impersonate="yes" → runs
+      as the user that initiated msiexec (not elevated, not SYSTEM).
+      Skipped on uninstall via the NOT REMOVE condition.
+
+      Caveat for IT rollouts: when msiexec runs under the SYSTEM account
+      (SCCM / Intune device targeting), Impersonate still keeps the action
+      in SYSTEM context — hashpoint will then come up in SYSTEM's profile,
+      which is not what an end user expects. If that becomes a problem we
+      can gate the action on UILevel>=3 or skip when LogonUser="SYSTEM".
+    -->
+    <CustomAction Id="LaunchHashpoint"
+                  FileKey="HashpointExe"
+                  ExeCommand=""
+                  Execute="immediate"
+                  Impersonate="yes"
+                  Return="asyncNoWait" />
+
+    <InstallExecuteSequence>
+      <Custom Action="LaunchHashpoint" After="InstallFinalize">NOT REMOVE</Custom>
+    </InstallExecuteSequence>
   </Product>
 </Wix>
