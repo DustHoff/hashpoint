@@ -174,4 +174,3 @@ func (a *App) currentPersonioTenant() string {
 	}
 	return config.NormalizeTenant(a.cfg.Personio.Tenant)
 }
-
