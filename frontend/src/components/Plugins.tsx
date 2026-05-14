@@ -55,10 +55,19 @@ export default function Plugins() {
     // The host emits plugins:discovered when its periodic scan picks
     // up a new plugin directory. We refresh the installed list so the
     // newcomer shows up without forcing the user to press ↻.
-    const off = api.onEvent("plugins:discovered", () => {
+    const offDiscovered = api.onEvent("plugins:discovered", () => {
       void refresh();
     });
-    return off;
+    // plugins:state-changed fires when the host's exit watcher demotes
+    // a previously running plugin (subprocess crash). Refresh so the
+    // badge flips to "Fehler" in real time.
+    const offStateChanged = api.onEvent("plugins:state-changed", () => {
+      void refresh();
+    });
+    return () => {
+      offDiscovered();
+      offStateChanged();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -351,15 +360,20 @@ function PluginDetailInner({ plugin, onSaved, onError }: PluginDetailProps) {
         >
           {saving ? "Speichere…" : "Speichern"}
         </button>
-        <button
-          onClick={() => {
-            void api.pluginReload(plugin.name).then(onSaved).catch((e) => onError(String(e)));
-          }}
+        <RestartButton
+          state={plugin.state}
           disabled={saving}
-          className="text-sm text-slate-400 hover:text-slate-200"
-        >
-          Reload
-        </button>
+          onClick={() => {
+            // host.Reload kills the subprocess (if running) and re-evaluates
+            // the plugin from scratch — exactly what "Neu starten" means
+            // both for a crashed plugin (failed → running) and an
+            // already-running one (refresh of config + subprocess).
+            void api
+              .pluginReload(plugin.name)
+              .then(onSaved)
+              .catch((e) => onError(String(e)));
+          }}
+        />
       </div>
     </div>
   );
@@ -426,5 +440,30 @@ function FieldRow({
         />
       )}
     </label>
+  );
+}
+
+// RestartButton offers "kill subprocess + relaunch" for any non-disabled
+// plugin. When the plugin is in StateFailed (typically: subprocess
+// crashed) the button switches to a rose tint to suggest recovery
+// rather than a routine config-cycle, so a user opening the tab after
+// a crash has an obvious next step.
+function RestartButton({
+  state,
+  disabled,
+  onClick,
+}: {
+  state: PluginState;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const isRecovery = state === "failed";
+  const classes = isRecovery
+    ? "rounded bg-rose-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-600 disabled:bg-slate-700 disabled:text-slate-400"
+    : "rounded border border-slate-600 bg-slate-800 px-3 py-1.5 text-sm font-medium text-slate-100 hover:bg-slate-700 disabled:border-slate-700 disabled:bg-slate-800 disabled:text-slate-500";
+  return (
+    <button onClick={onClick} disabled={disabled} className={classes}>
+      Neu starten
+    </button>
   );
 }
