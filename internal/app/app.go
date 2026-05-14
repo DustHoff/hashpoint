@@ -223,6 +223,16 @@ func New(deps Deps) *App {
 				}
 				wailsruntime.EventsEmit(a.ctx, PluginDiscoveredEvent, info)
 			},
+			OnStateChanged: func(info pluginhost.Info) {
+				// Same a.ctx caveat as OnDiscovered: the watcher only
+				// spawns from a successful launch which can only happen
+				// after Start(), so a.ctx is non-nil by the time this
+				// fires.
+				if a.ctx == nil {
+					return
+				}
+				wailsruntime.EventsEmit(a.ctx, PluginStateChangedEvent, info)
+			},
 			// Hand running plugins access to the current Entra ID
 			// manager via the host's bound HostAPI. Re-evaluated on
 			// every plugin call so SaveConfig swapping a.entraMgr
