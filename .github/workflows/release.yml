@@ -177,6 +177,42 @@ jobs:
           Write-Host "Using WiX bin at $wixBin"
           "$wixBin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
+      - name: Download bundled hashpoint-plugin-manager
+        # Pulls the latest hashpoint-plugin-manager release asset for
+        # windows/amd64 and extracts it into build/bin/plugins-seed/. The
+        # zip already contains a top-level "plugin-manager/" directory
+        # holding plugin-manager.exe + manifest.toml — Expand-Archive lays
+        # those out at the path the WiX -d switches expect.
+        #
+        # Rationale: the MSI cannot write to %APPDATA% reliably (admin /
+        # SYSTEM context), so the plugin is shipped as a seed under
+        # INSTALLDIR\plugins-seed\ and hashpoint copies it into the
+        # per-user PluginsDir on first launch.
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $seedRoot = "build/bin/plugins-seed"
+          New-Item -ItemType Directory -Force $seedRoot | Out-Null
+          $tmpZip = Join-Path $env:RUNNER_TEMP "plugin-manager.zip"
+          gh release download --repo DustHoff/hashpoint-plugin-manager `
+            --pattern "plugin-manager_*_windows_amd64.zip" `
+            --output $tmpZip --clobber
+          Expand-Archive -Path $tmpZip -DestinationPath $seedRoot -Force
+          Remove-Item $tmpZip
+          $exe = "$seedRoot/plugin-manager/plugin-manager.exe"
+          $manifest = "$seedRoot/plugin-manager/manifest.toml"
+          if (-not (Test-Path $exe)) {
+            Write-Error "plugin-manager.exe nicht im Release-Asset gefunden"
+            exit 1
+          }
+          if (-not (Test-Path $manifest)) {
+            Write-Error "manifest.toml nicht im Release-Asset gefunden"
+            exit 1
+          }
+          Write-Host "Plugin-Manager seed bereit:"
+          Get-ChildItem -Recurse $seedRoot | ForEach-Object { Write-Host "  $($_.FullName)" }
+
       - name: Resolve MSI ProductVersion
         # WiX requires a numeric major.minor.build (1-3 numeric parts);
         # github-tag-action produces tags like "v0.4.2" — strip the "v"
@@ -208,6 +244,8 @@ jobs:
             -dProductVersion="$version" `
             -dExeFile="build/bin/hashpoint.exe" `
             -dIconFile="build/windows/icon.ico" `
+            -dSeedPluginManagerExe="build/bin/plugins-seed/plugin-manager/plugin-manager.exe" `
+            -dSeedPluginManagerManifest="build/bin/plugins-seed/plugin-manager/manifest.toml" `
             -out "build/bin/hashpoint.wixobj" `
             "build/wix/hashpoint.wxs"
           # ICE57 warns about HKCU registry inside a per-machine install

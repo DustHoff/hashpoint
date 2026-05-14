@@ -141,6 +141,27 @@ Don't write a plugin for behaviours that touch only Hashpoint's own
 data (timeline rendering, tag rules, sync logic, …) — those belong in
 the main app.
 
+## Pre-installed plugins (MSI seed)
+
+The Windows MSI ships with one plugin bundled out of the box —
+[`hashpoint-plugin-manager`](https://github.com/DustHoff/hashpoint-plugin-manager),
+the reference implementation of the `plugin_management` capability. It is
+laid down under `%ProgramFiles%\Hashpoint\plugins-seed\plugin-manager\`
+during installation and copied into the per-user `PluginsDir` the first
+time hashpoint runs (see [`internal/plugin/seed.go`](../../internal/plugin/seed.go)).
+
+The seed copy is only performed when the target directory does not yet
+exist. That makes user-side updates installed via the in-app Plugins
+UI immune to MSI reinstalls — once you bump `plugin-manager` to a newer
+version through the UI, no MSI upgrade will roll it back. Deleting the
+plugin directory manually triggers a re-seed on the next launch, which
+is the recovery path if the user-side install ever ends up corrupt.
+
+The bundled version is pinned to whatever `plugin-manager_*_windows_amd64.zip`
+was the latest release in `DustHoff/hashpoint-plugin-manager` at the
+moment the MSI was built — see `.github/workflows/release.yml` for the
+exact fetch step.
+
 ## Plugin sources (`plugin_management`)
 
 A plugin advertising `plugin_management` is itself a *source*: it tells
