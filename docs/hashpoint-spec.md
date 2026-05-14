@@ -417,6 +417,7 @@ Entwicklung eines Windows-Zeiterfassungstools in **Go**, das automatisch erfasst
 6. **Validierung:** anonymer GET-Request gegen `https://<tenant>.personio.de/` mit den erfassten Cookies. Folgt Personio mit `30x → /login`, ist die Session ungültig; sonst gültig.
 7. Persistenz: das Session-Blob (`tenant`, `employee_id`, `cookies[]`, `captured_at`) wird verschlüsselt im **Windows Credential Manager** unter `TimeTracker.PersonioSession` abgelegt. Die `config.toml` enthält **keine** Auth-Daten.
 8. Einmalig wird `GET /api/v1/navigation/context` aufgerufen, um die Mitarbeiter-ID des Users in die Session zu schreiben.
+9. **Plugin-Zugriff:** Plugins können dieselbe Session via `HostAPI.RequestPersonioSession` anfordern (siehe §2.7). Bei abgelaufenem Session-Blob triggert der Host transparent denselben CDP-Login wie der „Bei Personio anmelden"-Button; konkurrierende Plugin-Aufrufe werden vom Host serialisiert, sodass nur **ein** Chrome-Fenster gleichzeitig öffnet.
 
 #### 2.5.2 UI-API-Endpunkte (verifiziert per HAR-Capture)
 
@@ -679,6 +680,50 @@ nicht angefasst.
 
 SDK-Vertrag, Wire-Format und Author-Skeleton:
 [`docs/plugins/capability-off-hours-provider.md`](plugins/capability-off-hours-provider.md).
+
+---
+
+## 2.7 Plugin-HostAPI (Auth-Brücke zu Personio & Entra)
+
+Über die Capability-spezifischen Interfaces hinaus reicht der Host
+laufenden Plugins eine **Reverse-RPC-HostAPI** (siehe
+`plugin/sdk/sdk.go` → `HostAPI`). Sie ist die einzige Schnittstelle,
+mit der ein Plugin gegen den Host zurückrufen kann; gehostet wird sie
+in `internal/plugin/hostapi.go` (`boundHostAPI`).
+
+| Methode                                   | Zweck                                                                                                  |
+|-------------------------------------------|--------------------------------------------------------------------------------------------------------|
+| `RedeemSecret(handle)`                    | Plaintext eines `password`-Feldes auf Abruf (DPAPI-entschlüsselt).                                      |
+| `Log(level, msg, fields)`                 | Strukturiertes Logging in den slog-Handler des Hosts (Plugin-Name wird vom Host injiziert).            |
+| `RequestEntraToken(scopes)`               | Silent-Acquisition eines Entra-ID-Access-Tokens via MSAL-Cache. Kein interaktiver Fallback.            |
+| `RequestPersonioSession()`                | Aktuelle Personio-Session (AppHost, CSRF-Token, Cookies). Triggert bei Bedarf den CDP-Reauth (§2.5.1). |
+
+**Sentinel-Errors:** `ErrEntraNotAvailable` / `ErrPersonioNotAvailable`
+markieren „Feature aus / nicht angemeldet". Plugins müssen das als
+„Capability schweigt diese Runde" behandeln, nicht als harten Fehler.
+
+**Sicherheit:** Sowohl Entra-Tokens als auch Personio-Cookies sind
+das volle Session-Geheimnis des Users. Der Host loggt sie nie; das SDK
+verpflichtet Plugin-Autoren in der Doku, sie weder zu loggen noch zu
+persistieren und auf 401/403 mit einem erneuten HostAPI-Aufruf zu
+reagieren statt mit lokalem Caching. Eine Allowlist auf Scope-Ebene
+gibt es **nicht** — die SDK-Surface ist „alles oder nichts".
+
+**Sequenz für Personio (mit Auto-Reauth):**
+
+1. Plugin ruft `RequestPersonioSession(ctx)`.
+2. `boundHostAPI` ruft die App-seitige `PersonioSessionSource` ab
+   (`internal/app/personio_plugin.go`).
+3. Source hält ein internes `sync.Mutex`, das parallele Reauth-Anfragen
+   serialisiert. Liegt eine frische Session (`!Expired`) im Credential
+   Manager, wird sie direkt zurückgegeben.
+4. Andernfalls: `personio.Login` (max. 5 min Timeout) öffnet Chrome,
+   capture-validiert und persistiert die neue Session, dann wird die
+   View zurückgegeben. Bricht der User den Login ab, schlägt die
+   Methode mit `ErrPersonioNotAvailable` fehl.
+
+Vertragsdetails, Beispielcode und die ausführliche Sicherheitsnotiz:
+[`docs/plugins/api.md`](plugins/api.md) → Abschnitt „HostAPI".
 
 ---
 

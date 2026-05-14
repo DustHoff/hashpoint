@@ -645,6 +645,31 @@ func (s *hostAPIServer) RequestEntraToken(args HostRequestEntraTokenArgs, reply 
 	return nil
 }
 
+// HostRequestPersonioSessionArgs is the empty arg type for
+// HostAPI.RequestPersonioSession.
+type HostRequestPersonioSessionArgs struct{}
+
+// HostRequestPersonioSessionReply carries the captured session or a
+// typed error. IsNotAvailable rehydrates ErrPersonioNotAvailable on the
+// plugin side so callers can errors.Is against the sentinel.
+type HostRequestPersonioSessionReply struct {
+	Session        PersonioSession
+	Err            string
+	IsNotAvailable bool
+}
+
+// RequestPersonioSession is the net/rpc-callable HostAPI.RequestPersonioSession.
+func (s *hostAPIServer) RequestPersonioSession(_ HostRequestPersonioSessionArgs, reply *HostRequestPersonioSessionReply) error {
+	sess, err := s.impl.RequestPersonioSession(context.Background())
+	if err != nil {
+		reply.Err = err.Error()
+		reply.IsNotAvailable = errors.Is(err, ErrPersonioNotAvailable)
+		return nil
+	}
+	reply.Session = sess
+	return nil
+}
+
 // hostAPIClient is what the plugin sees as sdk.HostAPI.
 type hostAPIClient struct {
 	client *rpc.Client
@@ -693,4 +718,21 @@ func (c *hostAPIClient) RequestEntraToken(_ context.Context, scopes []string) (s
 		return "", time.Time{}, fmt.Errorf("%w: %s", ErrEntraNotAvailable, reply.Err)
 	}
 	return "", time.Time{}, errors.New(reply.Err)
+}
+
+// RequestPersonioSession asks the host for the current Personio session
+// (AppHost, CSRF token, cookies). ErrPersonioNotAvailable is rehydrated
+// on the plugin side so callers can `errors.Is` against it.
+func (c *hostAPIClient) RequestPersonioSession(_ context.Context) (PersonioSession, error) {
+	var reply HostRequestPersonioSessionReply
+	if err := c.client.Call("HostAPI.RequestPersonioSession", HostRequestPersonioSessionArgs{}, &reply); err != nil {
+		return PersonioSession{}, err
+	}
+	if reply.Err == "" {
+		return reply.Session, nil
+	}
+	if reply.IsNotAvailable {
+		return PersonioSession{}, fmt.Errorf("%w: %s", ErrPersonioNotAvailable, reply.Err)
+	}
+	return PersonioSession{}, errors.New(reply.Err)
 }

@@ -246,6 +246,34 @@ type HostAPI interface {
 	// Plugins SHOULD discard the value once the outbound HTTP call
 	// completes and re-request on the next cadence rather than caching.
 	RequestEntraToken(ctx context.Context, scopes []string) (token string, expiresAt time.Time, err error)
+
+	// RequestPersonioSession returns the host's current Personio session
+	// material — AppHost, XSRF/CSRF token, and the raw session cookies —
+	// so the plugin can issue authenticated requests against the same
+	// internal UI API that Hashpoint itself uses (see
+	// docs/hashpoint-spec.md §2.5). Unlike RequestEntraToken the host
+	// does NOT have a silent refresh path: a captured Personio session
+	// expires after MaxSessionAge and the only way to renew it is to
+	// drive an interactive Chrome window via Chrome DevTools Protocol.
+	// The host triggers that re-authentication automatically when the
+	// stored session is missing or stale, so a plugin call may block
+	// for the duration of the user's login (up to a few minutes); the
+	// host serialises concurrent requests so only one Chrome window
+	// opens at a time.
+	//
+	// Returns ErrPersonioNotAvailable when no Personio tenant is
+	// configured, the host is not wired for Personio, or the user
+	// dismissed/aborted the re-authentication window. The plugin MUST
+	// treat this as a recoverable, capability-specific limitation —
+	// not a fatal error — and either skip its feature or surface a
+	// Log("warn", …) hint.
+	//
+	// Cookies are the full session secret: a plugin that obtains them
+	// can perform any action the signed-in user can. They are in-memory
+	// only — never log or persist them. Plugins SHOULD re-request on
+	// 401/403 from Personio rather than caching the session struct
+	// across long idle periods.
+	RequestPersonioSession(ctx context.Context) (PersonioSession, error)
 }
 
 // Plugin is the base interface every plugin must implement. The host
@@ -487,6 +515,49 @@ type OffHoursProviderHandler interface {
 	OffHours(ctx context.Context, req OffHoursRequest) ([]OffHoursInterval, error)
 }
 
+// PersonioSession is the read-only snapshot HostAPI.RequestPersonioSession
+// returns. It carries the same material Hashpoint itself uses to talk to
+// the internal UI API: AppHost (per-tenant SPA host), the URL-decoded
+// XSRF/CSRF token (sent as the x-athena-xsrf-token header), and the raw
+// cookies the cookie jar must replay. CapturedAt is informational and
+// reflects when the host last captured a fresh login.
+//
+// The host re-validates / re-authenticates before returning, so the
+// session is "usable now" from the plugin's perspective. Plugins are
+// nonetheless encouraged to handle a 401/403 by re-requesting rather
+// than caching the struct: the user may sign out via the settings UI
+// between calls.
+type PersonioSession struct {
+	// AppHost is the tenant-specific app shell, e.g. "acme.app.personio.com".
+	// All UI-API requests run against https://<AppHost>/…
+	AppHost string
+	// CSRFToken is the URL-decoded XSRF cookie value; echo it as the
+	// "x-athena-xsrf-token" header on every state-changing request.
+	CSRFToken string
+	// Cookies are the full set of cookies the host captured for the
+	// .personio.de / .personio.com domains. Replay them via http.CookieJar.
+	Cookies []PersonioCookie
+	// CapturedAt is the UTC timestamp the host last harvested cookies
+	// from Chrome. Useful for logging; the host has already gated
+	// against MaxSessionAge before returning.
+	CapturedAt time.Time
+}
+
+// PersonioCookie is the JSON-shaped subset of an http.Cookie the host
+// passes through. Fields mirror http.Cookie except SameSite which is
+// serialised as the lower-case string "lax" / "strict" / "none" / "" so
+// the wire format stays text-only.
+type PersonioCookie struct {
+	Name     string
+	Value    string
+	Domain   string
+	Path     string
+	Expires  time.Time
+	Secure   bool
+	HTTPOnly bool
+	SameSite string
+}
+
 // Sentinel errors plugins may return. Wrap them with fmt.Errorf("%w: detail", ...)
 // to attach context.
 var (
@@ -515,6 +586,16 @@ var (
 	// and avoid spamming retries beyond the natural cadence of their
 	// outbound call.
 	ErrEntraNotAvailable = errors.New("plugin: entra token not available")
+
+	// ErrPersonioNotAvailable is returned by
+	// HostAPI.RequestPersonioSession when the host cannot serve a usable
+	// session: no tenant configured, the plugin host is not wired for
+	// Personio, an interactive re-authentication was attempted and
+	// aborted by the user, or the renewed session failed validation.
+	// Plugins SHOULD treat this as a "feature off" state and either
+	// skip their Personio-touching code path or surface a
+	// Log("warn", …) hint.
+	ErrPersonioNotAvailable = errors.New("plugin: personio session not available")
 )
 
 // Serve is the entry point a plugin's main() calls. It blocks until the

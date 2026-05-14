@@ -193,9 +193,35 @@ Wer das Cookie selber inspizieren möchte:
 3. Inhalt ist ein JSON-Blob (`tenant`, `employee_id`, `cookies[]`,
    `captured_at`).
 
+## Zugriff durch installierte Plugins
+
+Hashpoint kann durch [Plugins](../plugins/README.md) erweitert werden.
+Plugins laufen als eigene Prozesse und können den Host bitten, ihnen
+die aktuelle Personio-Session weiterzureichen — über dieselben Cookies
+und denselben CSRF-Token, mit denen Hashpoint selbst die Synchronisation
+fährt. Damit kann ein Plugin beliebige Aufrufe gegen die Personio-UI-API
+in Ihrem Namen tätigen (zum Beispiel um Auswertungen zu ziehen oder
+zusätzliche Daten zu pushen).
+
+Wichtig zu wissen:
+
+- Ein Plugin sieht **keine** Anmeldedaten (E-Mail, Passwort, MFA),
+  nur die fertig aufgebauten Session-Cookies.
+- Ist beim Aufruf des Plugins keine gültige Session vorhanden, öffnet
+  Hashpoint automatisch dasselbe Chrome-Login-Fenster wie beim Klick
+  auf **Bei Personio anmelden**. Sie melden sich dort wie gewohnt an
+  und Hashpoint reicht die frisch gewonnenen Cookies an das Plugin
+  weiter. Fragen mehrere Plugins gleichzeitig nach, öffnet Hashpoint
+  trotzdem nur ein einziges Fenster.
+- Sie kontrollieren, welche Plugins überhaupt laufen: In den
+  Einstellungen unter **Plugins** können Sie jedes Plugin deaktivieren
+  oder deinstallieren. Ein deaktiviertes Plugin bekommt keine Session.
+
 ## Datenschutz
 
 - Es wird **nur** mit der konfigurierten Personio-Subdomain kommuniziert.
 - Auth-Header (`X-CSRF-Token`, Cookie) erscheinen niemals im Log.
 - Beim Klick auf **Session löschen** wird der Credential-Manager-Eintrag
   vollständig entfernt.
+- Installierte Plugins können die Personio-Session über die HostAPI
+  anfordern — siehe Abschnitt „Zugriff durch installierte Plugins" oben.

@@ -119,6 +119,14 @@ type HostDeps struct {
 	// running plugins to reload. Nil ⇒ HostAPI.RequestEntraToken
 	// always returns sdk.ErrEntraNotAvailable.
 	EntraSource func() EntraTokenSource
+	// PersonioSource returns the host's Personio session source (or
+	// nil when no tenant is configured / the feature is dormant) so
+	// HostAPI.RequestPersonioSession can reach the stored session and,
+	// when stale, drive an interactive CDP re-authentication. Like
+	// EntraSource the bound API invokes this on every call. Nil ⇒
+	// HostAPI.RequestPersonioSession always returns
+	// sdk.ErrPersonioNotAvailable.
+	PersonioSource func() PersonioSessionSource
 }
 
 const (
@@ -653,11 +661,12 @@ func (h *Host) launch(ctx context.Context, name string) error {
 	}
 
 	api := &boundHostAPI{
-		pluginName:  name,
-		log:         h.log.With("plugin", name),
-		handles:     h.handles,
-		settings:    h.deps.Settings,
-		entraSource: h.deps.EntraSource,
+		pluginName:     name,
+		log:            h.log.With("plugin", name),
+		handles:        h.handles,
+		settings:       h.deps.Settings,
+		entraSource:    h.deps.EntraSource,
+		personioSource: h.deps.PersonioSource,
 	}
 	if err := core.Init(ctx, api); err != nil {
 		client.Kill()
