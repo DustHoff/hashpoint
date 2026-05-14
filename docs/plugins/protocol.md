@@ -55,8 +55,9 @@ Adding a new capability is three edits in `plugin/sdk`:
 
 ## Reverse RPC: HostAPI
 
-The plugin needs to call back into the host for two reasons:
-secret redemption and structured logging. Both go through `HostAPI`.
+The plugin needs to call back into the host for three reasons: secret
+redemption, structured logging, and Microsoft Entra ID access-token
+acquisition. All three go through `HostAPI`.
 
 The mechanism is `hashicorp/go-plugin`'s `MuxBroker`:
 
@@ -95,6 +96,13 @@ type HostRedeemSecretReply struct {
     Value     string
     Err       string
     IsUnknown bool   // ⇒ rehydrate ErrUnknownSecretHandle
+}
+
+type HostRequestEntraTokenReply struct {
+    Token          string
+    ExpiresAt      time.Time
+    Err            string
+    IsNotAvailable bool  // ⇒ rehydrate ErrEntraNotAvailable
 }
 ```
 

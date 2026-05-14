@@ -223,6 +223,13 @@ func New(deps Deps) *App {
 				}
 				wailsruntime.EventsEmit(a.ctx, PluginDiscoveredEvent, info)
 			},
+			// Hand running plugins access to the current Entra ID
+			// manager via the host's bound HostAPI. Re-evaluated on
+			// every plugin call so SaveConfig swapping a.entraMgr
+			// takes effect without a plugin reload. Returns nil while
+			// the feature is dormant — the bound API then surfaces
+			// sdk.ErrEntraNotAvailable to the calling plugin.
+			EntraSource: a.currentEntraTokenSource,
 		})
 	}
 
@@ -1113,6 +1120,22 @@ func (a *App) EntraLogout() error {
 func (a *App) currentEntra() entra.Manager {
 	a.entraMu.Lock()
 	defer a.entraMu.Unlock()
+	return a.entraMgr
+}
+
+// currentEntraTokenSource is the EntraSource lambda the plugin host
+// holds. Returns a pluginhost.EntraTokenSource that the bound HostAPI
+// can invoke on every plugin RequestEntraToken call. Returns nil when
+// no manager is configured (the bound API then surfaces
+// sdk.ErrEntraNotAvailable to plugins). entra.Manager satisfies the
+// narrow EntraTokenSource interface via duck typing, so no wrapper is
+// needed beyond the nil guard.
+func (a *App) currentEntraTokenSource() pluginhost.EntraTokenSource {
+	a.entraMu.Lock()
+	defer a.entraMu.Unlock()
+	if a.entraMgr == nil {
+		return nil
+	}
 	return a.entraMgr
 }
 

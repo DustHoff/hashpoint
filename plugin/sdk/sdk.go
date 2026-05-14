@@ -217,6 +217,25 @@ type HostAPI interface {
 	// not include their own name in the message. Levels: "debug", "info",
 	// "warn", "error" (other strings degrade to info).
 	Log(ctx context.Context, level, message string, fields map[string]string) error
+
+	// RequestEntraToken returns a Bearer-suitable Microsoft Entra ID
+	// access token for the given scopes plus the token's UTC expiry.
+	// The host serves the call silently from its MSAL cache (refreshing
+	// via the persisted refresh token transparently); plugins never see
+	// the refresh token — by design, so a compromised plugin cannot mint
+	// new access tokens after the host shuts down.
+	//
+	// Returns ErrEntraNotAvailable when Entra is not configured, no user
+	// is signed in, or the silent acquisition failed (scopes need
+	// consent the host cannot grant on a plugin's behalf). The plugin
+	// MUST treat this as a recoverable, capability-specific limitation:
+	// retry on the next cadence, fall back to a no-Entra code path, or
+	// surface a Log("warn", …) hint to the user.
+	//
+	// The plaintext token is in-memory only — never log or persist it.
+	// Plugins SHOULD discard the value once the outbound HTTP call
+	// completes and re-request on the next cadence rather than caching.
+	RequestEntraToken(ctx context.Context, scopes []string) (token string, expiresAt time.Time, err error)
 }
 
 // Plugin is the base interface every plugin must implement. The host
@@ -423,6 +442,15 @@ var (
 	// ErrUnknownSecretHandle is returned by HostAPI.RedeemSecret when the
 	// handle is stale (host restart) or never issued.
 	ErrUnknownSecretHandle = errors.New("plugin: unknown secret handle")
+
+	// ErrEntraNotAvailable is returned by HostAPI.RequestEntraToken when
+	// the host cannot serve a token for the requested scopes silently:
+	// Entra is not configured at all, no user is signed in, the
+	// refresh token expired, or the scopes need fresh consent. Plugins
+	// SHOULD treat this as a "feature off" state — not a fatal error —
+	// and avoid spamming retries beyond the natural cadence of their
+	// outbound call.
+	ErrEntraNotAvailable = errors.New("plugin: entra token not available")
 )
 
 // Serve is the entry point a plugin's main() calls. It blocks until the
