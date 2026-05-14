@@ -614,6 +614,74 @@ Sync.
 
 ---
 
+## 2.6 Rufbereitschaft & Off-Hours-Erweiterung (Plugin)
+
+Hashpoint erkennt automatisch Tag-Blöcke, die **außerhalb der
+Arbeitszeit** an einem als „On-Call" markierten Tag liegen, und legt für
+jeden eine Doc-Zeile in der Rufbereitschafts-Inbox an. Der User füllt
+dort ein Formular (Anwendung, Incident-Typ — *planned_maintenance* |
+*service_disruption* —, Lösung) und überträgt die Doc an alle laufenden
+Plugins, die die Capability `oncall_documentation` ausspielen. Hashpoint
+pusht selbst nirgendwohin; die Distribution lebt komplett in Plugins.
+SDK-Vertrag siehe `docs/plugins/`.
+
+### 2.6.1 Qualifikation eines Tag-Blocks
+
+Eine Doc-Zeile entsteht, sobald **alle** drei Bedingungen zutreffen
+(Implementierung: `internal/plugin/oncall/qualifies.go`):
+
+1. Der Block ist geschlossen (`end_time != NULL`).
+2. Sein lokal-zeitliches Intervall `[start_time, end_time)` schneidet die
+   berechnete **Off-Hours-Timeline**.
+3. Sein Tag (oder ein Ancestor in der Tag-Hierarchie) ist in
+   `config.oncall.tag_ids` aufgelistet.
+
+Die Off-Hours-Timeline kommt grundlegend aus `WorkScheduleConfig`
+(`work_days`, `start_hour..end_hour` lokal) und kann von Plugins
+erweitert oder eingeschränkt werden (§2.6.2). Nach jeder Block-Mutation
+(Close, Re-Tag, Resize, Range-Create) läuft `Recheck`: neuer Match ⇒
+neue Doc im Status `draft`; verlorene Qualifikation ⇒ bestehende Doc
+wird `stale` markiert (nie automatisch gelöscht — der User verwirft sie
+aus der Inbox). Bereits eingereichte Docs (`submitted`, `partial`,
+`failed`) sind historisch und werden vom Recheck nicht angefasst.
+
+### 2.6.2 Plugin-Capability `off_hours_provider`
+
+Plugins können der Off-Hours-Timeline beliebige `[start, end)`-Intervalle
+hinzufügen oder vorhandene Intervalle wieder rausnehmen. Use-Cases:
+dynamische Feiertage, regionale Brückentage, Betriebsruhe-Fenster — oder
+die umgekehrte Richtung („geplante Sonderschicht am Samstag ist *kein*
+On-Call").
+
+Jedes vom Plugin gelieferte Intervall trägt ein `Kind`:
+
+| `Kind`   | Wirkung                                                       |
+|----------|---------------------------------------------------------------|
+| `add`    | Range wird zu off-hours (Default, wenn das Feld leer ist).    |
+| `remove` | Range wird zu working-hours (übersteuert `work_schedule`).    |
+
+Berechnung pro Block-Recheck:
+
+1. Basis: Off-Hours aus `WorkScheduleConfig`.
+2. `add`-Intervalle aller laufenden Provider-Plugins werden vereinigt
+   (Union).
+3. `remove`-Intervalle aller Plugins werden anschließend subtrahiert —
+   **`remove` gewinnt global**, auch gegenüber `work_schedule` und gegen
+   `add`s anderer Plugins.
+
+**Aufrufmodell:** Host fragt pull-basiert beim Recheck ab. Antworten
+werden pro Plugin in einem Year-Bucket im Arbeitsspeicher gecached;
+Cache-Invalidierung bei Plugin-Reload, -Stop oder -Crash. **Kein
+DB-Cache, kein Backfill** — gestoppte Plugins liefern keine Off-Hours,
+und ein frisch installiertes/aktiviertes Plugin wirkt nur auf ab jetzt
+mutierte Blöcke. Bestehende Doc-Zeilen werden vom Plugin-Lifecycle
+nicht angefasst.
+
+SDK-Vertrag, Wire-Format und Author-Skeleton:
+[`docs/plugins/capability-off-hours-provider.md`](plugins/capability-off-hours-provider.md).
+
+---
+
 ## 3. Nicht-funktionale Anforderungen
 
 - **Performance:** CPU-Last < 1 % im Leerlauf, RAM < 100 MB.
@@ -858,6 +926,24 @@ title_exclude_phrases = []              # Substrings (case-insensitive). Enthäl
                                         # — weder Comm-Track noch Comm-Auto-
                                         # Tag-Override. Hot-reloadable, in
                                         # jedem Tick neu evaluiert (§2.1a).
+
+[work_schedule]
+start_hour = 8                          # inklusiv, lokale Zeit, [0..23]
+end_hour   = 18                         # exklusiv, lokale Zeit, [1..24]
+work_days  = ["Mon","Tue","Wed","Thu","Fri"]   # Mo–So Kurzformen; bestimmt
+                                               # zusammen mit start/end_hour
+                                               # die Off-Hours-Timeline (§2.6.1).
+                                               # Plugins können die Timeline
+                                               # via off_hours_provider
+                                               # erweitern oder einschränken
+                                               # (§2.6.2).
+
+[oncall]
+tag_ids = []                            # IDs der Tags, die als
+                                        # Rufbereitschafts-Tags gelten. Sub-
+                                        # Tags qualifizieren über die Tag-
+                                        # Hierarchie automatisch mit. Leere
+                                        # Liste ⇒ Feature dormant (§2.6).
 ```
 
 > Auth-Daten (Personio-Cookies, XSRF-Token) liegen **nicht** in `config.toml`,

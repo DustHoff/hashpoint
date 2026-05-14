@@ -195,6 +195,20 @@ title_exclude_phrases = []              # Substrings (case-insensitive). Enthäl
                                         # der Fenstertitel einen davon, zählt
                                         # das Fenster nicht als Comm-Fenster
                                         # sondern als normaler Prozess.
+
+[work_schedule]
+start_hour = 8                          # inklusiv, lokale Zeit
+end_hour   = 18                         # exklusiv, lokale Zeit; 18 = "bis 17:59:59"
+work_days  = ["Mon","Tue","Wed","Thu","Fri"]   # Mo–So; bestimmt zusammen mit
+                                               # start/end_hour die Off-Hours-
+                                               # Definition für die Rufbereitschaft.
+
+[oncall]
+tag_ids = []                            # Hier die IDs der Tags eintragen, die als
+                                        # Rufbereitschafts-Tags zählen sollen.
+                                        # Leer = Rufbereitschaft passiv.
+                                        # Sub-Tags zählen über die Hierarchie
+                                        # automatisch mit.
 ```
 
 Nach manuellen Änderungen ist ein **Neustart** der Anwendung erforderlich,
