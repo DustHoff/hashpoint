@@ -199,8 +199,12 @@ jobs:
         run: |
           $version = "${{ steps.msiversion.outputs.version }}"
           $msiPath = "build/bin/hashpoint-$version.msi"
+          # WixUtilExtension provides <util:CloseApplication> (kills any
+          # running hashpoint.exe before file staging) — both candle and
+          # light need it referenced via -ext.
           candle.exe -nologo `
             -arch x64 `
+            -ext WixUtilExtension `
             -dProductVersion="$version" `
             -dExeFile="build/bin/hashpoint.exe" `
             -dIconFile="build/windows/icon.ico" `
@@ -211,6 +215,7 @@ jobs:
           # convenience of "autostart pre-set for the installing user".
           light.exe -nologo `
             -spdb `
+            -ext WixUtilExtension `
             -sice:ICE57 `
             -out $msiPath `
             "build/bin/hashpoint.wixobj"

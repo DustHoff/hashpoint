@@ -8,6 +8,13 @@
     2. Start-menu shortcut "Hashpoint TimeTracker".
     3. HKCU\...\Run autostart entry for the user running the installer.
 
+  Behavioural bits beyond the regular MSI lifecycle:
+    - WixUtilExtension `CloseApplication` sends WM_CLOSE to any running
+      `hashpoint.exe` before `InstallValidate`, then force-terminates after
+      5 seconds. Required so upgrades do not fail with sharing violations.
+    - `LaunchHashpoint` custom action runs after `InstallFinalize` so the
+      newly installed binary launches without waiting for the next login.
+
   Silent IT roll-out:  msiexec /i hashpoint-<version>.msi /quiet
 
   Stable identifiers (do NOT regenerate — MajorUpgrade depends on the
@@ -18,7 +25,8 @@
     StartMenuShortcut   6F5C4E81-3B7A-4D9C-B0E2-8A5F2D7C9E31
     AutostartHKCU       9A1B2C3D-4E5F-46A7-B8C9-D0E1F2A3B4C5
 -->
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
   <Product Id="*"
            Name="Hashpoint TimeTracker"
            Language="1031"
@@ -42,6 +50,21 @@
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/dusthoff/hashpoint" />
     <Property Id="ARPNOREPAIR" Value="1" />
     <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!--
+      Close any running hashpoint.exe before the file-staging phase so an
+      upgrade or repair never aborts with a "file in use" error. Sends
+      WM_CLOSE, waits 5 seconds, then TerminateProcess. RebootPrompt="no"
+      keeps the rollout fully unattended.
+    -->
+    <util:CloseApplication
+        Id="CloseHashpoint"
+        Target="hashpoint.exe"
+        CloseMessage="yes"
+        EndSessionMessage="no"
+        RebootPrompt="no"
+        TerminateProcess="5"
+        Description="Hashpoint TimeTracker wird beendet, damit die Installation fortfahren kann." />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
@@ -109,5 +132,29 @@
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="AutostartHKCU" />
     </Feature>
+
+    <!--
+      Launch hashpoint.exe after the install transaction commits. Type 18
+      CA with FileKey="HashpointExe" → runs the just-installed binary;
+      asyncNoWait → msiexec returns immediately; Impersonate="yes" → runs
+      as the user that initiated msiexec (not elevated, not SYSTEM).
+      Skipped on uninstall via the NOT REMOVE condition.
+
+      Caveat for IT rollouts: when msiexec runs under the SYSTEM account
+      (SCCM / Intune device targeting), Impersonate still keeps the action
+      in SYSTEM context — hashpoint will then come up in SYSTEM's profile,
+      which is not what an end user expects. If that becomes a problem we
+      can gate the action on UILevel>=3 or skip when LogonUser="SYSTEM".
+    -->
+    <CustomAction Id="LaunchHashpoint"
+                  FileKey="HashpointExe"
+                  ExeCommand=""
+                  Execute="immediate"
+                  Impersonate="yes"
+                  Return="asyncNoWait" />
+
+    <InstallExecuteSequence>
+      <Custom Action="LaunchHashpoint" After="InstallFinalize">NOT REMOVE</Custom>
+    </InstallExecuteSequence>
   </Product>
 </Wix>
