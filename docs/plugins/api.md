@@ -281,6 +281,7 @@ type HostAPI interface {
     RedeemSecret(ctx context.Context, h SecretHandle) (string, error)
     Log(ctx context.Context, level, message string, fields map[string]string) error
     RequestEntraToken(ctx context.Context, scopes []string) (token string, expiresAt time.Time, err error)
+    RequestPersonioSession(ctx context.Context) (PersonioSession, error)
 }
 ```
 
@@ -363,6 +364,100 @@ hostile. If the silent path fails, the plugin gets
 `ErrEntraNotAvailable` and the user must re-sign-in via Hashpoint's
 own UI.
 
+### `RequestPersonioSession`
+
+Returns the host's current Personio session material so the plugin
+can call the same internal UI API Hashpoint itself uses for the sync
+feature (see `docs/hashpoint-spec.md` §2.5). The payload contains the
+per-tenant app host, the URL-decoded CSRF token, and the raw session
+cookies — everything the plugin needs to populate an `http.CookieJar`
+and forge an authenticated request.
+
+```go
+type PersonioSession struct {
+    AppHost    string           // e.g. "acme.app.personio.com"
+    CSRFToken  string           // send as the "x-athena-xsrf-token" header
+    Cookies    []PersonioCookie // replay via http.CookieJar
+    CapturedAt time.Time        // informational; the host has already gated freshness
+}
+
+type PersonioCookie struct {
+    Name, Value, Domain, Path string
+    Expires                   time.Time
+    Secure, HTTPOnly          bool
+    SameSite                  string // "lax" | "strict" | "none" | ""
+}
+```
+
+```go
+sess, err := host.RequestPersonioSession(ctx)
+if errors.Is(err, sdk.ErrPersonioNotAvailable) {
+    // No tenant configured, source not wired, or the user dismissed
+    // the re-authentication window. Skip the feature this round.
+    return nil
+}
+if err != nil {
+    return err
+}
+
+jar, _ := cookiejar.New(nil)
+base, _ := url.Parse("https://" + sess.AppHost + "/")
+httpCookies := make([]*http.Cookie, 0, len(sess.Cookies))
+for _, c := range sess.Cookies {
+    httpCookies = append(httpCookies, &http.Cookie{
+        Name: c.Name, Value: c.Value, Domain: c.Domain, Path: c.Path,
+        Secure: c.Secure, HttpOnly: c.HTTPOnly,
+    })
+}
+jar.SetCookies(base, httpCookies)
+
+client := &http.Client{Jar: jar, Timeout: 15 * time.Second}
+req, _ := http.NewRequestWithContext(ctx, "GET",
+    "https://"+sess.AppHost+"/api/v1/navigation/context", nil)
+req.Header.Set("Accept", "application/json")
+req.Header.Set("x-athena-xsrf-token", sess.CSRFToken)
+
+resp, err := client.Do(req)
+// … 401 / 403 ⇒ re-request via host.RequestPersonioSession(ctx)
+```
+
+The host serves the call by reading the stored session from the
+Windows Credential Manager. When the session is missing or older than
+`MaxSessionAge` (24 h) the host transparently drives an **interactive
+Chrome login** via Chrome DevTools Protocol — exactly the same flow
+the settings UI's "Bei Personio anmelden" button uses. While that
+window is open the call blocks (up to ~5 minutes); concurrent
+`RequestPersonioSession` calls from other plugins are serialised by
+an internal mutex so only one Chrome window opens at a time.
+
+Return values:
+
+- `(PersonioSession, nil)` on success. The session is usable now: the
+  host has either validated the freshness of the stored blob or just
+  captured + validated a brand-new one.
+- `ErrPersonioNotAvailable` (wrapped) when no tenant is configured,
+  the host was not constructed with a session store, the user
+  aborted/closed the Chrome login window, or the renewed session
+  failed `/api/v1/navigation/context` validation. The plugin MUST
+  treat this as a "feature off" state — not a fatal error.
+
+Security notes:
+
+- The cookies in the payload are the **full session secret**. A
+  plugin that obtains them can perform any action the signed-in user
+  can on Personio. Never log them, never persist them, never
+  forward them off the host.
+- Plugins SHOULD **re-request on 401/403** from Personio rather than
+  caching the `PersonioSession` value across long idle periods. The
+  user may sign out (or the server may invalidate the session) at any
+  time, and a fresh `RequestPersonioSession` is the only way to
+  recover.
+- The host does **not** restrict which Personio endpoints a plugin
+  may hit. Stay within the same internal UI API surface Hashpoint
+  documents in `docs/hashpoint-spec.md` §2.5.2; calls that look
+  unlike a normal user session risk getting the cookie set flagged
+  on the Personio side.
+
 ## Configuration model
 
 ```go
@@ -443,10 +538,12 @@ Rules:
 
 ```go
 var (
-    ErrConfigInvalid       = errors.New("plugin: config invalid")
-    ErrNotConfigured       = errors.New("plugin: not configured")
-    ErrTransient           = errors.New("plugin: transient failure")
-    ErrUnknownSecretHandle = errors.New("plugin: unknown secret handle")
+    ErrConfigInvalid        = errors.New("plugin: config invalid")
+    ErrNotConfigured        = errors.New("plugin: not configured")
+    ErrTransient            = errors.New("plugin: transient failure")
+    ErrUnknownSecretHandle  = errors.New("plugin: unknown secret handle")
+    ErrEntraNotAvailable    = errors.New("plugin: entra token not available")
+    ErrPersonioNotAvailable = errors.New("plugin: personio session not available")
 )
 ```
 

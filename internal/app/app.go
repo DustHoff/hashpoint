@@ -164,6 +164,11 @@ type App struct {
 	// deps.PluginsDir is non-empty. nil otherwise so the OnCall* methods
 	// can short-circuit cleanly when the feature is disabled.
 	pluginHost *pluginhost.Host
+	// personioSrc serves HostAPI.RequestPersonioSession for plugins.
+	// Constructed iff a Personio session store is configured; nil
+	// otherwise. The source owns its own mutex — no App-level lock is
+	// taken across the (potentially minute-long) CDP reauth.
+	personioSrc *personioSessionSource
 }
 
 // quickTagWindowState captures the main-window placement before the
@@ -204,6 +209,14 @@ func New(deps Deps) *App {
 		}
 	}
 
+	// Build the Personio session source up-front so the plugin host's
+	// PersonioSource callback can return it on demand. Only meaningful
+	// when a session store is wired; without one the callback always
+	// returns nil and plugins see sdk.ErrPersonioNotAvailable.
+	if deps.Sessions != nil {
+		a.personioSrc = newPersonioSessionSource(deps.Sessions, a.currentPersonioTenant, a.logger)
+	}
+
 	// Construct the plugin host if a plugins directory + settings
 	// repo are provided. The host reads/writes per-plugin config
 	// directly through the repo; the App layer never has to shuttle
@@ -240,6 +253,12 @@ func New(deps Deps) *App {
 			// the feature is dormant — the bound API then surfaces
 			// sdk.ErrEntraNotAvailable to the calling plugin.
 			EntraSource: a.currentEntraTokenSource,
+			// Hand running plugins access to the host's Personio
+			// session (cookies + CSRF) via the bound HostAPI. The
+			// source owns the mutex that serialises concurrent
+			// re-auth flows. Returns nil while no tenant is
+			// configured — plugins then see sdk.ErrPersonioNotAvailable.
+			PersonioSource: a.currentPersonioSessionSource,
 		})
 	}
 

@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -16,6 +17,44 @@ import (
 // directly via duck typing.
 type EntraTokenSource interface {
 	AcquireToken(ctx context.Context, scopes []string, allowInteractive bool) (string, time.Time, error)
+}
+
+// PersonioSessionView is the host-side payload PersonioSessionSource
+// returns. Mirrors sdk.PersonioSession's shape (with a SDK-free cookie
+// type) so the App layer can populate it without importing the SDK.
+type PersonioSessionView struct {
+	AppHost    string
+	CSRFToken  string
+	Cookies    []PersonioCookieView
+	CapturedAt time.Time
+}
+
+// PersonioCookieView mirrors sdk.PersonioCookie one-for-one.
+type PersonioCookieView struct {
+	Name     string
+	Value    string
+	Domain   string
+	Path     string
+	Expires  time.Time
+	Secure   bool
+	HTTPOnly bool
+	SameSite string
+}
+
+// PersonioSessionSource is the narrow surface boundHostAPI needs to
+// serve sdk.HostAPI.RequestPersonioSession. The implementation lives in
+// internal/app and owns the stored session, re-authentication flow
+// (interactive CDP login), and concurrency control — boundHostAPI is
+// just a pass-through. Declared locally so internal/plugin stays free
+// of an internal/personio import and tests can stub the source.
+type PersonioSessionSource interface {
+	// EnsureSession returns a session that is "usable now": the
+	// implementation has already validated freshness and, if necessary,
+	// driven an interactive re-authentication. Returns an error wrapping
+	// sdk.ErrPersonioNotAvailable for a user-abort or any other
+	// unrecoverable situation; boundHostAPI passes the error through
+	// unchanged so plugins can errors.Is against the sentinel.
+	EnsureSession(ctx context.Context) (PersonioSessionView, error)
 }
 
 // boundHostAPI is the host-side sdk.HostAPI implementation handed to a
@@ -33,6 +72,11 @@ type boundHostAPI struct {
 	// RequestEntraToken call so a freshly-configured manager takes
 	// effect for running plugins without a reload.
 	entraSource func() EntraTokenSource
+	// personioSource returns the current Personio session source, or
+	// nil when no tenant is configured / the host is not wired for
+	// Personio. Invoked on every RequestPersonioSession call so a
+	// freshly-configured tenant takes effect without a plugin reload.
+	personioSource func() PersonioSessionSource
 }
 
 // RedeemSecret resolves the handle to (plugin, key), confirms the plugin
@@ -96,6 +140,63 @@ func (a *boundHostAPI) RequestEntraToken(ctx context.Context, scopes []string) (
 		return "", time.Time{}, fmt.Errorf("%w: %w", sdk.ErrEntraNotAvailable, err)
 	}
 	return token, expiresAt, nil
+}
+
+// RequestPersonioSession serves the plugin a usable Personio session:
+// AppHost, URL-decoded CSRF token, and the captured cookies. Unlike
+// Entra there is no silent refresh path — when the stored session is
+// missing / stale the source drives an interactive Chrome login (CDP)
+// which may take minutes; the source owns the mutex that prevents
+// parallel windows when several plugins ask at once. Any failure —
+// no tenant, source not wired, user aborted the login, validation
+// rejected the renewed session — collapses to sdk.ErrPersonioNotAvailable
+// so the plugin can branch on a single sentinel.
+//
+// Cookies are the full session secret: the host MUST NOT log them and
+// trusts that the SDK contract has warned plugin authors not to either.
+func (a *boundHostAPI) RequestPersonioSession(ctx context.Context) (sdk.PersonioSession, error) {
+	if a.personioSource == nil {
+		return sdk.PersonioSession{}, fmt.Errorf("%w: plugin host not wired for personio", sdk.ErrPersonioNotAvailable)
+	}
+	src := a.personioSource()
+	if src == nil {
+		return sdk.PersonioSession{}, fmt.Errorf("%w: personio not configured", sdk.ErrPersonioNotAvailable)
+	}
+	view, err := src.EnsureSession(ctx)
+	if err != nil {
+		// Source returned the wrapped sentinel itself (typical path) or
+		// some other error we still classify as "not available". Log at
+		// Debug to keep the noise floor low; cookies / CSRF must not
+		// appear here — we only echo the source's err which is allowed
+		// to mention reasons ("tenant unset", "user aborted login").
+		a.log.Debug("plugin personio session: ensure failed",
+			"plugin", a.pluginName, "err", err)
+		if errors.Is(err, sdk.ErrPersonioNotAvailable) {
+			return sdk.PersonioSession{}, err
+		}
+		return sdk.PersonioSession{}, fmt.Errorf("%w: %w", sdk.ErrPersonioNotAvailable, err)
+	}
+	out := sdk.PersonioSession{
+		AppHost:    view.AppHost,
+		CSRFToken:  view.CSRFToken,
+		CapturedAt: view.CapturedAt,
+	}
+	if len(view.Cookies) > 0 {
+		out.Cookies = make([]sdk.PersonioCookie, 0, len(view.Cookies))
+		for _, c := range view.Cookies {
+			out.Cookies = append(out.Cookies, sdk.PersonioCookie{
+				Name:     c.Name,
+				Value:    c.Value,
+				Domain:   c.Domain,
+				Path:     c.Path,
+				Expires:  c.Expires,
+				Secure:   c.Secure,
+				HTTPOnly: c.HTTPOnly,
+				SameSite: c.SameSite,
+			})
+		}
+	}
+	return out, nil
 }
 
 // Log forwards a structured log line to the host's slog with an attached

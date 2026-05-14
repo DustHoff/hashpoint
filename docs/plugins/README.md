@@ -27,6 +27,16 @@ Four capabilities are defined today:
   the plugin which tag to apply, then opens an auto-tag-block. User
   rules always win — the plugin sits behind them as a fallback.
 
+Beyond the capability surface, every plugin also gets a small reverse-RPC
+**HostAPI** for talking back into the host: redeeming secret handles,
+structured logging, pulling a silent Microsoft Entra ID access token,
+and pulling the host's current Personio session (cookies + CSRF token)
+when the plugin needs to call the Personio internal UI API itself. The
+host re-authenticates Personio transparently via the same Chrome DevTools
+Protocol flow Hashpoint uses for its own sync — concurrent plugin calls
+are serialised so only one Chrome window can be open at a time. See
+[`api.md`](api.md) → HostAPI for the full contract and a worked example.
+
 Read on for:
 
 - [Where plugins live on disk](#installation-layout)
