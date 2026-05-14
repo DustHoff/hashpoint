@@ -103,6 +103,7 @@ type Capability string
 
 const (
     CapOnCallDocumentation Capability = "oncall_documentation"
+    CapOffHoursProvider    Capability = "off_hours_provider"
     CapPluginManagement    Capability = "plugin_management"
     CapProcessAutoTag      Capability = "process_autotag"
 )
@@ -151,6 +152,47 @@ Return `sdk.ErrTransient` (wrap with `fmt.Errorf("%w: …", sdk.ErrTransient, �
 when the failure looks retryable (HTTP 5xx, network blip). The host
 keeps the per-plugin submission in `failed` state; the user can click
 Retry. Non-transient errors are surfaced verbatim in the inbox.
+
+### `off_hours_provider`
+
+```go
+type OffHoursKind string
+const (
+    OffHoursAdd    OffHoursKind = "add"    // mark range as off-hours
+    OffHoursRemove OffHoursKind = "remove" // mark range as working-hours
+)
+
+type OffHoursRequest struct {
+    From time.Time // UTC, half-open lower bound
+    To   time.Time // UTC, half-open upper bound
+}
+
+type OffHoursInterval struct {
+    Start, End time.Time
+    Kind       OffHoursKind // empty string ≙ "add"
+    Reason     string       // UI tooltip ("Christmas Day", "Planned shift")
+    Source     string       // optional plugin-internal key (e.g. "DE-NW")
+}
+
+type OffHoursProviderHandler interface {
+    OffHours(ctx context.Context, req OffHoursRequest) ([]OffHoursInterval, error)
+}
+```
+
+The handler returns intervals that intersect `[req.From, req.To)`. The
+host calls it pull-based during on-call qualification (after a block is
+closed / re-tagged / resized) and caches results per plugin in a
+year-bucket in memory. Cache entries are dropped when the plugin
+reloads, stops, or crashes — there is no persistence.
+
+Effective off-hours timeline = `WorkScheduleConfig` ∪ (all plugin
+`add`s) − (all plugin `remove`s). **`remove` wins globally**: a
+`remove` interval can carve a working-hour window out of a non-working
+weekday and out of another plugin's `add`.
+
+See [capability-off-hours-provider.md](./capability-off-hours-provider.md)
+for the full semantics, including the "no backfill" rule that applies
+when a provider plugin is freshly installed.
 
 ### `plugin_management`
 

@@ -187,6 +187,7 @@ type pluginInstance struct {
 	core           sdk.Plugin
 	meta           sdk.Metadata
 	onCall         sdk.OnCallDocumentationHandler
+	offHours       sdk.OffHoursProviderHandler
 	mgmt           sdk.PluginManagementHandler
 	processAutoTag sdk.ProcessAutoTagHandler
 	// autoTagNames is the lower-cased set of executable basenames the
@@ -195,6 +196,15 @@ type pluginInstance struct {
 	// resolver from RPC-calling a plugin whose ProcessNames() returned
 	// nothing useful.
 	autoTagNames map[string]struct{}
+	// offHoursCacheMu serialises access to offHoursCache. It lives on
+	// the instance (not on Host) so the host-level mutex can be released
+	// while plugins are RPC-called. Zero value is usable.
+	offHoursCacheMu sync.Mutex
+	// offHoursCache maps local calendar year → the plugin's OffHours
+	// response for that year. Filled lazily; dropped implicitly when
+	// the pluginInstance is replaced (Reload) or explicitly when a
+	// transition out of StateRunning resets the running-only fields.
+	offHoursCache map[int][]sdk.OffHoursInterval
 }
 
 // ErrNoOnCallPlugin is returned by SubmitOnCallDoc when no running plugin
@@ -299,6 +309,8 @@ func (h *Host) Stop(_ context.Context) error {
 		p.rpcClient = nil
 		p.core = nil
 		p.onCall = nil
+		p.offHours = nil
+		p.offHoursCache = nil
 		p.mgmt = nil
 		p.processAutoTag = nil
 		p.autoTagNames = nil
@@ -703,6 +715,20 @@ func (h *Host) launch(ctx context.Context, name string) error {
 				continue
 			}
 			inst.onCall = handler
+		case sdk.CapOffHoursProvider:
+			raw, err := rpcClient.Dispense(sdk.OffHoursKey)
+			if err != nil {
+				h.log.Warn("dispense off_hours handler failed — capability disabled",
+					"plugin", name, "err", err)
+				continue
+			}
+			handler, ok := raw.(sdk.OffHoursProviderHandler)
+			if !ok {
+				h.log.Warn("off_hours handler: unexpected type",
+					"plugin", name, "type", fmt.Sprintf("%T", raw))
+				continue
+			}
+			inst.offHours = handler
 		case sdk.CapPluginManagement:
 			raw, err := rpcClient.Dispense(sdk.MgmtKey)
 			if err != nil {
@@ -804,6 +830,8 @@ func (h *Host) watchExit(name string, cli clientHandle) {
 			p.rpcClient = nil
 			p.core = nil
 			p.onCall = nil
+			p.offHours = nil
+			p.offHoursCache = nil
 			p.mgmt = nil
 			p.processAutoTag = nil
 			p.autoTagNames = nil
@@ -838,6 +866,8 @@ func (h *Host) recordFailure(name string, man *Manifest, cause error) {
 	inst.rpcClient = nil
 	inst.core = nil
 	inst.onCall = nil
+	inst.offHours = nil
+	inst.offHoursCache = nil
 	inst.mgmt = nil
 	inst.processAutoTag = nil
 	inst.autoTagNames = nil
@@ -861,6 +891,8 @@ func (h *Host) recordNeedsConfig(name string, man *Manifest, missing []string) {
 	inst.rpcClient = nil
 	inst.core = nil
 	inst.onCall = nil
+	inst.offHours = nil
+	inst.offHoursCache = nil
 	inst.mgmt = nil
 	inst.processAutoTag = nil
 	inst.autoTagNames = nil
@@ -891,6 +923,8 @@ func (h *Host) recordDisabled(name string) {
 	inst.rpcClient = nil
 	inst.core = nil
 	inst.onCall = nil
+	inst.offHours = nil
+	inst.offHoursCache = nil
 	inst.mgmt = nil
 	inst.processAutoTag = nil
 	inst.autoTagNames = nil

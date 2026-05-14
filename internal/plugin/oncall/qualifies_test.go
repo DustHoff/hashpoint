@@ -121,7 +121,7 @@ func TestQualifies(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := Qualifies(context.Background(), tc.block, ws, tc.tagIDs, ancestry)
+			got, err := Qualifies(context.Background(), tc.block, ws, tc.tagIDs, ancestry, nil)
 			if err != nil {
 				t.Fatalf("Qualifies: %v", err)
 			}

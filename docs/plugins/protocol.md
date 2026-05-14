@@ -39,6 +39,7 @@ register the same keys:
 |-------------------------|--------------------------------------------------------------|
 | `plugin`                | Core lifecycle: `Init`, `Metadata`, `Configure`              |
 | `oncall_documentation`  | `Submit(OnCallDocument) → SubmissionResult`                  |
+| `off_hours_provider`    | `OffHours(OffHoursRequest) → []OffHoursInterval`             |
 | `plugin_management`     | `ListAvailable`, `Install(name)`, `Update(name)`, `Uninstall(name)` |
 | `process_autotag`       | `ProcessNames() → []string`, `Resolve(ProcessFocusInfo) → ProcessAutoTagResult` |
 

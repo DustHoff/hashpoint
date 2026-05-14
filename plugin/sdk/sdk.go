@@ -85,6 +85,7 @@ var Handshake = hplugin.HandshakeConfig{
 const (
 	pluginKeyCore           = "plugin"
 	pluginKeyOnCall         = "oncall_documentation"
+	pluginKeyOffHours       = "off_hours_provider"
 	pluginKeyMgmt           = "plugin_management"
 	pluginKeyProcessAutoTag = "process_autotag"
 )
@@ -117,6 +118,15 @@ const (
 	// matches, the host consults every plugin that has declared the
 	// focused process basename.
 	CapProcessAutoTag Capability = "process_autotag"
+
+	// CapOffHoursProvider is advertised by plugins that implement
+	// OffHoursProviderHandler. The host queries such plugins pull-based
+	// during on-call qualification (after every tag-block mutation) to
+	// learn about additional off-hours ranges (dynamic holidays, bridge
+	// days) or, via Kind=remove intervals, ranges that should be treated
+	// as working-hours even though WorkScheduleConfig would otherwise
+	// classify them as off-hours.
+	CapOffHoursProvider Capability = "off_hours_provider"
 )
 
 // FieldType identifies the input element AND the persistence strategy
@@ -423,6 +433,60 @@ type ProcessAutoTagHandler interface {
 	Resolve(ctx context.Context, info ProcessFocusInfo) (ProcessAutoTagResult, error)
 }
 
+// OffHoursKind discriminates the two flavours of plugin-supplied
+// off-hours intervals. The wire encoding uses these literal strings;
+// the empty string ("" — Go zero value) is treated as Add by the host
+// so plugin authors can leave Kind unset for the common case.
+type OffHoursKind string
+
+// OffHoursKind values.
+const (
+	// OffHoursAdd marks the range as off-hours. Combined into the
+	// effective off-hours timeline via union with WorkScheduleConfig.
+	OffHoursAdd OffHoursKind = "add"
+	// OffHoursRemove marks the range as working-hours even though
+	// WorkScheduleConfig or another plugin's Add would otherwise call
+	// it off-hours. Removes are applied AFTER all Adds in the host's
+	// timeline computation — Remove wins globally.
+	OffHoursRemove OffHoursKind = "remove"
+)
+
+// OffHoursRequest is the time window the host queries for. Both bounds
+// are UTC; the range is half-open ([From, To)). Plugins are free to
+// return intervals that overflow the window — the host clips silently.
+type OffHoursRequest struct {
+	From time.Time
+	To   time.Time
+}
+
+// OffHoursInterval is one entry in a plugin's response. Times are UTC;
+// Start < End is required (zero-length intervals are silently dropped).
+// Reason is shown as a tooltip in the host UI when an off-hours range
+// is rendered; Source is an opaque plugin-internal key (e.g. a region
+// code like "DE-NW") that the host does not interpret.
+type OffHoursInterval struct {
+	Start  time.Time
+	End    time.Time
+	Kind   OffHoursKind
+	Reason string
+	Source string
+}
+
+// OffHoursProviderHandler is implemented by plugins advertising
+// CapOffHoursProvider. The host calls OffHours pull-based during
+// on-call qualification (after every tag-block mutation) and caches
+// the result per plugin in a year-bucket in memory. Cache entries are
+// dropped when the plugin reloads, stops, or crashes; there is no
+// persistence — a stopped plugin contributes nothing to the timeline.
+//
+// OffHours MUST be side-effect-free and deterministic for a given
+// (From, To) window. Returning an error is logged at Debug and the
+// plugin's contribution for that window is treated as empty; failing
+// providers never block qualification of unrelated plugins.
+type OffHoursProviderHandler interface {
+	OffHours(ctx context.Context, req OffHoursRequest) ([]OffHoursInterval, error)
+}
+
 // Sentinel errors plugins may return. Wrap them with fmt.Errorf("%w: detail", ...)
 // to attach context.
 var (
@@ -479,6 +543,9 @@ func PluginMap(impl Plugin) hplugin.PluginSet {
 	if h, ok := impl.(OnCallDocumentationHandler); ok {
 		set[pluginKeyOnCall] = &oncallPluginAdapter{impl: h}
 	}
+	if h, ok := impl.(OffHoursProviderHandler); ok {
+		set[pluginKeyOffHours] = &offHoursPluginAdapter{impl: h}
+	}
 	if h, ok := impl.(PluginManagementHandler); ok {
 		set[pluginKeyMgmt] = &mgmtPluginAdapter{impl: h}
 	}
@@ -495,16 +562,18 @@ func HostSidePluginMap() hplugin.PluginSet {
 	return hplugin.PluginSet{
 		pluginKeyCore:           &corePluginAdapter{},
 		pluginKeyOnCall:         &oncallPluginAdapter{},
+		pluginKeyOffHours:       &offHoursPluginAdapter{},
 		pluginKeyMgmt:           &mgmtPluginAdapter{},
 		pluginKeyProcessAutoTag: &processAutoTagPluginAdapter{},
 	}
 }
 
-// CoreKey, OnCallKey, MgmtKey, and ProcessAutoTagKey export the
-// plugin-set keys so the host can Dispense() the right service.
+// CoreKey, OnCallKey, OffHoursKey, MgmtKey, and ProcessAutoTagKey export
+// the plugin-set keys so the host can Dispense() the right service.
 const (
 	CoreKey           = pluginKeyCore
 	OnCallKey         = pluginKeyOnCall
+	OffHoursKey       = pluginKeyOffHours
 	MgmtKey           = pluginKeyMgmt
 	ProcessAutoTagKey = pluginKeyProcessAutoTag
 )

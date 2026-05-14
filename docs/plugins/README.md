@@ -4,12 +4,17 @@ Hashpoint plugins are separate executables that the host (Hashpoint itself)
 launches as subprocesses. Communication is over `net/rpc`, multiplexed via
 [hashicorp/go-plugin][hcl], so a plugin crash never crashes the host.
 
-Three capabilities are defined today:
+Four capabilities are defined today:
 
 - **`oncall_documentation`** — receives filled-out off-duty docs from the
   user (solution / impacted application / incident type) and pushes them
   into whatever downstream system you choose (Jira, OTRS, Confluence,
   an internal webhook — none of that is shipped by default).
+- **`off_hours_provider`** — supplies extra `[start, end)` intervals
+  that count as off-hours (dynamic holidays, bridge days) or, in the
+  reverse direction, intervals that should be treated as working-hours
+  even though `WorkScheduleConfig` would normally call them off-hours
+  (planned weekend shifts). Feeds straight into on-call qualification.
 - **`plugin_management`** — acts as a plugin source. The handler surfaces
   a catalog of plugins available for install, and on user action writes
   them into `PluginsDir` (or removes them). The host orchestrates the
@@ -28,6 +33,7 @@ Read on for:
 - [The plugin contract (Go API)](api.md)
 - [Wire protocol, handshake, secret model](protocol.md)
 - [On-call documentation capability spec](capability-oncall-documentation.md)
+- [Off-hours provider capability spec](capability-off-hours-provider.md)
 - [Process auto-tag capability spec](capability-process-autotag.md)
 
 ---
@@ -200,9 +206,9 @@ plugin cannot uninstall itself.
 
 ## Future capabilities
 
-`oncall_documentation`, `plugin_management`, and `process_autotag` are
-the capabilities defined today. Adding new ones is a small SDK change:
-a new interface, a new wire-protocol service, an entry in the host's
-plugin set. See [`api.md`](api.md) for the pattern.
+`oncall_documentation`, `off_hours_provider`, `plugin_management`, and
+`process_autotag` are the capabilities defined today. Adding new ones
+is a small SDK change: a new interface, a new wire-protocol service, an
+entry in the host's plugin set. See [`api.md`](api.md) for the pattern.
 
 [hcl]: https://github.com/hashicorp/go-plugin
