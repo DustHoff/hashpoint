@@ -7,7 +7,6 @@ import (
 	"sort"
 
 	"github.com/dusthoff/hashpoint/plugin/sdk"
-	hplugin "github.com/hashicorp/go-plugin"
 )
 
 // AvailablePluginEntry is the read-model rendered in the "Verfügbare
@@ -228,10 +227,7 @@ func (h *Host) stopAndForget(name string) {
 		h.mu.Unlock()
 		return
 	}
-	var client *hplugin.Client
-	if p.client != nil {
-		client = p.client
-	}
+	client := p.client
 	delete(h.plugins, name)
 	h.mu.Unlock()
 	if client != nil {

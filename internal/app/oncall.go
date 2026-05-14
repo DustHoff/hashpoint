@@ -28,6 +28,13 @@ const (
 	// installed-plugins list and the available-plugins tab without
 	// requiring a manual reload.
 	PluginDiscoveredEvent = "plugins:discovered"
+	// PluginStateChangedEvent fires when a plugin transitions state in
+	// the background — today exclusively when the exit watcher demotes
+	// a previously-running plugin to StateFailed after a subprocess
+	// crash. Payload: pluginhost.Info. The frontend listens to refresh
+	// the badge in real time so the user does not have to reopen the
+	// Plugins tab to notice the failure.
+	PluginStateChangedEvent = "plugins:state-changed"
 )
 
 // OnCallSubmitResultPayload is the JSON shape of OnCallSubmitResultEvent.

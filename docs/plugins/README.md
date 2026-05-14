@@ -124,7 +124,16 @@ cycle.
    field values + fresh SecretHandles.
 9. **Use** — capability fan-outs (today: on-call submit) only target
    plugins in `state=running`.
-10. **Shutdown** — `Host.Stop()` kills every subprocess; SecretHandles
+10. **Crash watch** — once a plugin reaches `running` the host spawns
+    a small goroutine that polls the subprocess's `Exited()` every
+    ~2 s. If it sees the process die without a host-initiated
+    Stop/Reload, the plugin is demoted to `state=failed`, all
+    SecretHandles for that plugin are revoked, and the Wails event
+    `plugins:state-changed` fires so the Plugins tab flips the badge
+    from "Aktiv" to "Fehler" in real time. The user recovers via the
+    "Neu starten"-Button in the detail pane — it goes through
+    `Host.Reload()` so the plugin re-handshakes from scratch.
+11. **Shutdown** — `Host.Stop()` kills every subprocess; SecretHandles
     are dropped (a leaked handle dies on host restart).
 
 ## When to write a plugin
