@@ -477,6 +477,74 @@ func (c *processAutoTagClient) Resolve(_ context.Context, info ProcessFocusInfo)
 }
 
 // ---------------------------------------------------------------------
+// Off-hours provider capability adapter.
+// ---------------------------------------------------------------------
+
+type offHoursPluginAdapter struct {
+	impl OffHoursProviderHandler // nil on host side
+}
+
+// Server returns the RPC-server stub running inside the plugin process.
+func (p *offHoursPluginAdapter) Server(_ *hplugin.MuxBroker) (interface{}, error) {
+	return &offHoursServer{impl: p.impl}, nil
+}
+
+// Client returns the RPC-client stub the host wires up to call into the plugin.
+func (p *offHoursPluginAdapter) Client(_ *hplugin.MuxBroker, c *rpc.Client) (interface{}, error) {
+	return &offHoursClient{client: c}, nil
+}
+
+type offHoursServer struct {
+	impl OffHoursProviderHandler
+}
+
+// OffHoursArgs ships the time window the handler should consider.
+type OffHoursArgs struct {
+	Request OffHoursRequest
+}
+
+// OffHoursReply carries the handler's intervals or a typed error.
+// IsNotConfigured rehydrates ErrNotConfigured on the host side so the
+// caller can distinguish "plugin not ready" from other failures.
+type OffHoursReply struct {
+	Intervals       []OffHoursInterval
+	Err             string
+	IsNotConfigured bool
+}
+
+// OffHours is the net/rpc-callable OffHoursProviderHandler.OffHours.
+func (s *offHoursServer) OffHours(args OffHoursArgs, reply *OffHoursReply) error {
+	out, err := s.impl.OffHours(context.Background(), args.Request)
+	if err != nil {
+		reply.Err = err.Error()
+		reply.IsNotConfigured = errors.Is(err, ErrNotConfigured)
+		return nil
+	}
+	reply.Intervals = out
+	return nil
+}
+
+type offHoursClient struct {
+	client *rpc.Client
+}
+
+// OffHours forwards the request to the plugin and rehydrates
+// ErrNotConfigured on the host side.
+func (c *offHoursClient) OffHours(_ context.Context, req OffHoursRequest) ([]OffHoursInterval, error) {
+	var reply OffHoursReply
+	if err := c.client.Call("Plugin.OffHours", OffHoursArgs{Request: req}, &reply); err != nil {
+		return nil, err
+	}
+	if reply.Err == "" {
+		return reply.Intervals, nil
+	}
+	if reply.IsNotConfigured {
+		return nil, fmt.Errorf("%w: %s", ErrNotConfigured, reply.Err)
+	}
+	return nil, errors.New(reply.Err)
+}
+
+// ---------------------------------------------------------------------
 // HostAPI (reverse RPC: plugin → host).
 // ---------------------------------------------------------------------
 

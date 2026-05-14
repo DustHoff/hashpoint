@@ -36,12 +36,20 @@ func (stubProcessAutoTag) Resolve(_ context.Context, _ ProcessFocusInfo) (Proces
 	return ProcessAutoTagResult{}, nil
 }
 
+// stubOffHours adds the off-hours-provider capability.
+type stubOffHours struct{ stubCore }
+
+func (stubOffHours) OffHours(_ context.Context, _ OffHoursRequest) ([]OffHoursInterval, error) {
+	return nil, nil
+}
+
 // stubBoth advertises all current capabilities at once.
 type stubBoth struct {
 	stubCore
 	stubOnCall
 	stubMgmt
 	stubProcessAutoTag
+	stubOffHours
 }
 
 func TestPluginMap_CoreOnly(t *testing.T) {
@@ -49,7 +57,7 @@ func TestPluginMap_CoreOnly(t *testing.T) {
 	if _, ok := set[CoreKey]; !ok {
 		t.Errorf("CoreKey missing")
 	}
-	for _, key := range []string{OnCallKey, MgmtKey, ProcessAutoTagKey} {
+	for _, key := range []string{OnCallKey, OffHoursKey, MgmtKey, ProcessAutoTagKey} {
 		if _, ok := set[key]; ok {
 			t.Errorf("%q unexpectedly present for plugin without capability", key)
 		}
@@ -61,7 +69,7 @@ func TestPluginMap_OnCall(t *testing.T) {
 	if _, ok := set[OnCallKey]; !ok {
 		t.Errorf("OnCallKey missing for OnCallDocumentationHandler")
 	}
-	for _, key := range []string{MgmtKey, ProcessAutoTagKey} {
+	for _, key := range []string{OffHoursKey, MgmtKey, ProcessAutoTagKey} {
 		if _, ok := set[key]; ok {
 			t.Errorf("%q unexpectedly present", key)
 		}
@@ -73,7 +81,7 @@ func TestPluginMap_Mgmt(t *testing.T) {
 	if _, ok := set[MgmtKey]; !ok {
 		t.Errorf("MgmtKey missing for PluginManagementHandler")
 	}
-	for _, key := range []string{OnCallKey, ProcessAutoTagKey} {
+	for _, key := range []string{OnCallKey, OffHoursKey, ProcessAutoTagKey} {
 		if _, ok := set[key]; ok {
 			t.Errorf("%q unexpectedly present", key)
 		}
@@ -85,7 +93,19 @@ func TestPluginMap_ProcessAutoTag(t *testing.T) {
 	if _, ok := set[ProcessAutoTagKey]; !ok {
 		t.Errorf("ProcessAutoTagKey missing for ProcessAutoTagHandler")
 	}
-	for _, key := range []string{OnCallKey, MgmtKey} {
+	for _, key := range []string{OnCallKey, OffHoursKey, MgmtKey} {
+		if _, ok := set[key]; ok {
+			t.Errorf("%q unexpectedly present", key)
+		}
+	}
+}
+
+func TestPluginMap_OffHours(t *testing.T) {
+	set := PluginMap(stubOffHours{})
+	if _, ok := set[OffHoursKey]; !ok {
+		t.Errorf("OffHoursKey missing for OffHoursProviderHandler")
+	}
+	for _, key := range []string{OnCallKey, MgmtKey, ProcessAutoTagKey} {
 		if _, ok := set[key]; ok {
 			t.Errorf("%q unexpectedly present", key)
 		}
@@ -94,7 +114,7 @@ func TestPluginMap_ProcessAutoTag(t *testing.T) {
 
 func TestPluginMap_AllCapabilities(t *testing.T) {
 	set := PluginMap(stubBoth{})
-	for _, key := range []string{CoreKey, OnCallKey, MgmtKey, ProcessAutoTagKey} {
+	for _, key := range []string{CoreKey, OnCallKey, OffHoursKey, MgmtKey, ProcessAutoTagKey} {
 		if _, ok := set[key]; !ok {
 			t.Errorf("expected %q in plugin set, missing", key)
 		}
@@ -103,7 +123,7 @@ func TestPluginMap_AllCapabilities(t *testing.T) {
 
 func TestHostSidePluginMap_IncludesAllKeys(t *testing.T) {
 	set := HostSidePluginMap()
-	for _, key := range []string{CoreKey, OnCallKey, MgmtKey, ProcessAutoTagKey} {
+	for _, key := range []string{CoreKey, OnCallKey, OffHoursKey, MgmtKey, ProcessAutoTagKey} {
 		if _, ok := set[key]; !ok {
 			t.Errorf("HostSidePluginMap missing %q", key)
 		}
