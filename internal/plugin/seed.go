@@ -290,6 +290,8 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return fmt.Errorf("stat %q: %w", src, err)
 	}
+	// #nosec G304 -- dst is pluginsDir/<name>/<…> with name validated by
+	// os.ReadDir of the host-resolved seedDir; not derived from user input.
 	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
 	if err != nil {
 		return fmt.Errorf("create %q: %w", dst, err)
