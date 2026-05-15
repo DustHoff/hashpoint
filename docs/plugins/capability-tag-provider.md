@@ -40,8 +40,15 @@ type ImportedTag struct {
     Color       string // optional hex (e.g. "#7c3aed"); same rule
 }
 
+type Order struct {
+    ID          string // opaque per-plugin de-dupe key
+    Name        string // shown in the Auftrag combobox AND stored on the tag
+    Description string // optional helper text in the dropdown
+}
+
 type TagProviderHandler interface {
     ListTags(ctx context.Context) ([]ImportedTag, error)
+    ListOrders(ctx context.Context) ([]Order, error)
 }
 ```
 
@@ -138,6 +145,31 @@ If you need stricter lifecycle semantics for your use case, model the
 tag hierarchy so plugin-managed tags live under a clearly named root
 (`#jira/...`, `#personio/...`) and instruct users to delete that
 whole subtree if they want a clean slate.
+
+## Orders (`ListOrders`)
+
+`ListOrders` is the second leg of `tag_provider`. Unlike tags, orders
+are **never persisted by the host** — they are live-pulled every time
+the user opens the Tags tab and rendered in the per-tag *Auftrag*
+combobox. Only the chosen order's `Name` is written to `tags.order_name`
+when the user picks one; the user can also type freitext that bypasses
+the catalogue entirely. The host treats the picked value as opaque
+text — `order_name` does not feed into Personio sync or auto-tagging
+today.
+
+Implementation notes for plugin authors:
+
+- The method MUST be implemented even if the plugin has no order
+  catalogue. Return `(nil, nil)` to stay quiet.
+- The host applies a per-plugin timeout from `HostDeps.SubmitTimeout`
+  to each call. A slow plugin must not stall the user's tab-open;
+  exceeding the budget drops *this plugin's* contribution from the
+  result rather than failing the whole query.
+- Return value is **not** cached: every Tags tab open re-pulls. Keep
+  the call cheap or back it with the plugin's own short-lived cache.
+- `ID` is opaque to the host. Use whatever uniquely identifies the
+  upstream entity inside your plugin (a JIRA key, a ClickUp doc id,
+  …); the host only uses it to key the React option list.
 
 ## Conflict examples
 

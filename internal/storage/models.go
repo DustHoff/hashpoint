@@ -75,7 +75,13 @@ type Tag struct {
 	PersonioProjectID  *string   `json:"personio_project_id,omitempty"`
 	PersonioActivityID *string   `json:"personio_activity_id,omitempty"`
 	SyncToPersonio     bool      `json:"sync_to_personio"`
-	CreatedAt          time.Time `json:"created_at"`
+	// OrderName is the user's external-order mapping for this tag —
+	// either a name supplied by a tag_provider plugin's order
+	// catalogue or arbitrary freitext. Optional; nil ⇒ no mapping.
+	// Phase 1 stores and displays the value; it does not feed into
+	// Personio sync or auto-tagging.
+	OrderName *string   `json:"order_name,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // IsSubTag reports whether the tag has a parent.

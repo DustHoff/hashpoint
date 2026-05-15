@@ -20,16 +20,19 @@ func NewTagRepo(db *sql.DB) *TagRepo {
 
 const (
 	tagColumns = `id, parent_id, name, description, color,
-		personio_project_id, personio_activity_id, sync_to_personio, created_at`
+		personio_project_id, personio_activity_id, sync_to_personio,
+		order_name, created_at`
 
 	insertTag = `INSERT INTO tags (
 		parent_id, name, description, color,
-		personio_project_id, personio_activity_id, sync_to_personio
-	) VALUES (?, ?, ?, ?, ?, ?, ?)`
+		personio_project_id, personio_activity_id, sync_to_personio,
+		order_name
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 
 	updateTagSQL = `UPDATE tags SET
 		parent_id = ?, name = ?, description = ?, color = ?,
-		personio_project_id = ?, personio_activity_id = ?, sync_to_personio = ?
+		personio_project_id = ?, personio_activity_id = ?, sync_to_personio = ?,
+		order_name = ?
 		WHERE id = ?`
 
 	deleteTagSQL = `DELETE FROM tags WHERE id = ?`
@@ -49,6 +52,7 @@ func (r *TagRepo) Create(ctx context.Context, t *Tag) error {
 		nullableStringPtr(t.PersonioProjectID),
 		nullableStringPtr(t.PersonioActivityID),
 		boolToInt(t.SyncToPersonio),
+		nullableStringPtr(t.OrderName),
 	)
 	if err != nil {
 		return fmt.Errorf("insert tag: %w", err)
@@ -75,6 +79,7 @@ func (r *TagRepo) Update(ctx context.Context, t *Tag) error {
 		nullableStringPtr(t.PersonioProjectID),
 		nullableStringPtr(t.PersonioActivityID),
 		boolToInt(t.SyncToPersonio),
+		nullableStringPtr(t.OrderName),
 		t.ID,
 	)
 	return err
@@ -278,12 +283,13 @@ func scanTag(row *sql.Row) (*Tag, error) {
 		project  sql.NullString
 		activity sql.NullString
 		sync     int64
+		order    sql.NullString
 	)
-	err := row.Scan(&t.ID, &parent, &t.Name, &desc, &color, &project, &activity, &sync, &t.CreatedAt)
+	err := row.Scan(&t.ID, &parent, &t.Name, &desc, &color, &project, &activity, &sync, &order, &t.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
-	hydrateTag(&t, parent, desc, color, project, activity, sync)
+	hydrateTag(&t, parent, desc, color, project, activity, sync, order)
 	return &t, nil
 }
 
@@ -296,16 +302,17 @@ func scanTagRows(rows *sql.Rows) (*Tag, error) {
 		project  sql.NullString
 		activity sql.NullString
 		sync     int64
+		order    sql.NullString
 	)
-	err := rows.Scan(&t.ID, &parent, &t.Name, &desc, &color, &project, &activity, &sync, &t.CreatedAt)
+	err := rows.Scan(&t.ID, &parent, &t.Name, &desc, &color, &project, &activity, &sync, &order, &t.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
-	hydrateTag(&t, parent, desc, color, project, activity, sync)
+	hydrateTag(&t, parent, desc, color, project, activity, sync, order)
 	return &t, nil
 }
 
-func hydrateTag(t *Tag, parent sql.NullInt64, desc, color, project, activity sql.NullString, sync int64) {
+func hydrateTag(t *Tag, parent sql.NullInt64, desc, color, project, activity sql.NullString, sync int64, order sql.NullString) {
 	if parent.Valid {
 		v := parent.Int64
 		t.ParentID = &v
@@ -315,5 +322,6 @@ func hydrateTag(t *Tag, parent sql.NullInt64, desc, color, project, activity sql
 	t.PersonioProjectID = nsToString(project)
 	t.PersonioActivityID = nsToString(activity)
 	t.SyncToPersonio = sync != 0
+	t.OrderName = nsToString(order)
 	t.CreatedAt = t.CreatedAt.UTC()
 }

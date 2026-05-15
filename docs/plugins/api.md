@@ -281,8 +281,15 @@ type ImportedTag struct {
     Color       string // optional hex (e.g. "#7c3aed"); same rule
 }
 
+type Order struct {
+    ID          string // opaque per-plugin de-dupe key
+    Name        string // shown in the Auftrag combobox AND stored on the tag
+    Description string // optional helper text in the dropdown
+}
+
 type TagProviderHandler interface {
     ListTags(ctx context.Context) ([]ImportedTag, error)
+    ListOrders(ctx context.Context) ([]Order, error)
 }
 ```
 
@@ -290,13 +297,13 @@ The host pulls `ListTags` at plugin launch, on `Configure`, and on the
 user's "Tags neu laden" click in the Plugins tab. A plugin may also
 push imports at any time via `HostAPI.PublishTags`.
 
-Each imported path is run through the same normalisation
-`EnsureByPath` uses (strip `#`, drop non-alphanumerics, re-prefix
-`#`). Existing tags are never modified — **user-tag wins** — so an
-imported `Description` / `Color` only takes effect when the leaf
-node did not previously exist. See
+`ListOrders` powers the per-tag *Auftrag* combobox in the Tag-Manager
+and is queried **live** every time the user opens the Tags tab — the
+host never caches the result. A plugin without an order catalogue
+should return `(nil, nil)`. See
 [capability-tag-provider.md](./capability-tag-provider.md) for the
-full merge contract, lifecycle, and conflict examples.
+full merge contract, lifecycle, conflict examples, and order
+semantics.
 
 ## HostAPI
 

@@ -122,3 +122,15 @@ func (a *App) PluginRefreshTags(name string) (int, error) {
 	}
 	return a.pluginHost.RefreshPluginTags(a.ctx, name)
 }
+
+// ListPluginOrders queries every running tag_provider plugin live and
+// returns the orders grouped by plugin name. The Tag-Manager opens
+// this on render so the Auftrag combobox shows current data; the host
+// applies a per-plugin timeout so one slow plugin cannot stall the
+// tab. A plugin host that is not wired (test path) returns nil.
+func (a *App) ListPluginOrders() []pluginhost.PluginOrders {
+	if a.pluginHost == nil {
+		return nil
+	}
+	return a.pluginHost.ListAllOrders(a.ctx)
+}

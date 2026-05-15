@@ -12,6 +12,7 @@ import type {
   PersonioStatus,
   PluginConfigView,
   PluginInfo,
+  PluginOrderGroup,
   ProcessTrack,
   QuickTagSlot,
   Rule,
@@ -189,6 +190,11 @@ export const api = {
   // (existing paths are no-ops per the user-tag-wins rule).
   pluginRefreshTags: (name: string) =>
     bridge().PluginRefreshTags(name) as Promise<number>,
+  // Live-queries every running tag_provider plugin for its order
+  // catalogue. Used by the Tag-Manager combobox; never cached, so a
+  // newly-installed plugin shows up on the next tab open.
+  listPluginOrders: () =>
+    bridge().ListPluginOrders() as Promise<PluginOrderGroup[] | null>,
   pluginListAvailable: () =>
     bridge().PluginListAvailable() as Promise<AvailablePluginEntry[] | null>,
   pluginInstall: (sourcePlugin: string, name: string) =>

@@ -570,17 +570,41 @@ type HostTag struct {
 	Color    string
 }
 
+// Order is one entry in a tag_provider plugin's order catalogue —
+// typically a ticket / project / job from the external system the
+// plugin wraps (JIRA, ClickUp, Asana, …). The host pulls the list
+// live (no DB cache) whenever the user opens the Tags tab and renders
+// it in the per-tag "Auftrag" combobox so the user can associate a
+// tag with a specific external work item.
+//
+// ID is opaque to the host — only the plugin uses it for de-duping
+// inside its own response. Name is what the host stores on the tag
+// and shows in the dropdown; Description is rendered as a help text
+// next to the option but never persisted.
+type Order struct {
+	ID          string
+	Name        string
+	Description string
+}
+
 // TagProviderHandler is implemented by plugins advertising
 // CapTagProvider. The host calls ListTags pull-based at plugin start,
 // on each Configure(), and from the UI on user request. Plugins may
 // additionally push via HostAPI.PublishTags whenever an external
 // source they wrap has changed.
 //
-// ListTags MUST be idempotent: returning the same path list twice in
-// a row is a no-op on the second pass. Returning an error is logged
-// at Warn and skips the import for that round.
+// ListOrders is consulted live by the host whenever the user opens
+// the Tags tab — the result populates the per-tag "Auftrag" combobox.
+// A plugin that does not expose an order catalogue MUST still
+// implement the method and return (nil, nil); the host treats a nil
+// slice as "no orders contributed" and skips this plugin silently.
+//
+// Both methods MUST be idempotent: returning the same payload twice
+// in a row is a no-op on the second pass. Returning an error is
+// logged at Warn and skips the contribution for that round.
 type TagProviderHandler interface {
 	ListTags(ctx context.Context) ([]ImportedTag, error)
+	ListOrders(ctx context.Context) ([]Order, error)
 }
 
 // PersonioSession is the read-only snapshot HostAPI.RequestPersonioSession

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { Tag } from "../types";
+import OrderCombobox from "./OrderCombobox";
 
 const empty: Partial<Tag> = {
   name: "",
@@ -198,6 +199,20 @@ export default function TagManager() {
           />
           Zu Personio synchronisieren
         </label>
+        <div className="block text-xs text-slate-400">
+          Auftrag
+          <OrderCombobox
+            value={draft.order_name ?? ""}
+            onChange={(v) =>
+              setDraft({ ...draft, order_name: v === "" ? undefined : v })
+            }
+          />
+          <span className="mt-1 block text-[11px] leading-tight text-slate-500">
+            Optional. Wähle einen Auftrag aus einem tag_provider-Plugin oder gib
+            einen beliebigen Text ein. Wird gespeichert, aber nicht zu Personio
+            synchronisiert.
+          </span>
+        </div>
         {error && <div className="text-sm text-red-400">{error}</div>}
         <div className="flex gap-2">
           <button

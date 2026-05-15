@@ -564,6 +564,61 @@ func (h *Host) pullTagsFromHandler(ctx context.Context, name string, handler sdk
 	return created
 }
 
+// PluginOrders is one entry in the result of ListAllOrders: the orders
+// contributed by a single running tag_provider plugin. Empty Orders is
+// preserved so the frontend can still render an empty group header
+// (useful for "this plugin is up but has no orders yet" — distinct from
+// "plugin offline / dropped").
+type PluginOrders struct {
+	PluginName string     `json:"plugin_name"`
+	Orders     []sdk.Order `json:"orders"`
+}
+
+// ListAllOrders queries every running tag_provider plugin live (no
+// cache) and returns the orders grouped by plugin name. Order within
+// each group follows the plugin's own response; group order is
+// lexicographic by plugin name so the UI dropdown is deterministic.
+//
+// Plugin failures (RPC error or per-plugin context timeout) are logged
+// at Debug and the plugin is dropped from the result — the user sees
+// the remaining plugins' orders rather than an opaque error. The host
+// applies SubmitTimeout per plugin to bound a single misbehaving
+// plugin's impact on the user's tab-open latency.
+func (h *Host) ListAllOrders(ctx context.Context) []PluginOrders {
+	type target struct {
+		name    string
+		handler sdk.TagProviderHandler
+	}
+	var targets []target
+
+	h.mu.RLock()
+	for name, p := range h.plugins {
+		if p.state == StateRunning && p.tagProvider != nil {
+			targets = append(targets, target{name: name, handler: p.tagProvider})
+		}
+	}
+	h.mu.RUnlock()
+
+	if len(targets) == 0 {
+		return nil
+	}
+	sort.Slice(targets, func(i, j int) bool { return targets[i].name < targets[j].name })
+
+	out := make([]PluginOrders, 0, len(targets))
+	for _, t := range targets {
+		callCtx, cancel := context.WithTimeout(ctx, h.deps.SubmitTimeout)
+		orders, err := t.handler.ListOrders(callCtx)
+		cancel()
+		if err != nil {
+			h.log.Debug("tag_provider ListOrders failed — dropping from result",
+				"plugin", t.name, "err", err)
+			continue
+		}
+		out = append(out, PluginOrders{PluginName: t.name, Orders: orders})
+	}
+	return out
+}
+
 // RefreshPluginTags re-pulls the named plugin's tag catalogue and
 // merges it into the host store. Returns the number of new tags
 // actually created (existing paths are no-ops). Errors are returned

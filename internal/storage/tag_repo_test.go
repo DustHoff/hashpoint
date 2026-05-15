@@ -282,6 +282,54 @@ func TestTagRepo_EnsureByPathWithMetadata_IntermediateNodesStayBare(t *testing.T
 	}
 }
 
+func TestTagRepo_OrderNameRoundtrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := OpenInMemory(ctx)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	repo := NewTagRepo(db)
+
+	tag := &Tag{Name: "#projekta", SyncToPersonio: true, OrderName: ptr("Auftrag-42")}
+	if err := repo.Create(ctx, tag); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := repo.Get(ctx, tag.ID)
+	if err != nil {
+		t.Fatalf("get after create: %v", err)
+	}
+	if got.OrderName == nil || *got.OrderName != "Auftrag-42" {
+		t.Errorf("order_name after create = %v, want %q", got.OrderName, "Auftrag-42")
+	}
+
+	got.OrderName = ptr("Freitext-Auftrag")
+	if err := repo.Update(ctx, got); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	again, err := repo.Get(ctx, tag.ID)
+	if err != nil {
+		t.Fatalf("get after update: %v", err)
+	}
+	if again.OrderName == nil || *again.OrderName != "Freitext-Auftrag" {
+		t.Errorf("order_name after update = %v, want %q", again.OrderName, "Freitext-Auftrag")
+	}
+
+	again.OrderName = nil
+	if err := repo.Update(ctx, again); err != nil {
+		t.Fatalf("update to nil: %v", err)
+	}
+	cleared, err := repo.Get(ctx, tag.ID)
+	if err != nil {
+		t.Fatalf("get after clear: %v", err)
+	}
+	if cleared.OrderName != nil {
+		t.Errorf("order_name after clear = %v, want nil", cleared.OrderName)
+	}
+}
+
 func TestTagRepo_EnsureByPathWithMetadata_SecondCallIsNoop(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
