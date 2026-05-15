@@ -167,3 +167,92 @@ func TestTriggerAutoRelogin_FastPathWhenSessionFresh(t *testing.T) {
 		t.Fatal("loginFn was called even though a fresh session existed")
 	}
 }
+
+// EnsureSession's fast path must NOT hand back cookies the server has
+// already rejected — even when the local Session.Expired() heuristic
+// still reports false. This regression protects against the production
+// bug PR #12 set out to fix: a plugin asking for a session in the
+// minute between "Personio invalidated" and "next PersonioCheck tick"
+// would otherwise be handed dead cookies.
+func TestEnsureSession_FastPathProbesServer(t *testing.T) {
+	t.Parallel()
+	store := &stubSessionStore{}
+	_ = store.Set(&personio.Session{
+		Tenant:     "example",
+		AppHost:    "example.app.personio.com",
+		CapturedAt: time.Now(), // local Expired() = false
+	})
+	var validateCalls atomic.Int32
+	var loginCalls atomic.Int32
+	src := &personioSessionSource{
+		sessions: store,
+		logger:   slog.Default(),
+		tenant:   func() string { return "example" },
+		loginFn: func(ctx context.Context, _ personio.LoginConfig) (*personio.LoginResult, error) {
+			loginCalls.Add(1)
+			return &personio.LoginResult{Session: &personio.Session{
+				Tenant:     "example",
+				AppHost:    "example.app.personio.com",
+				CapturedAt: time.Now(),
+				Cookies: []personio.SessionCookie{
+					{Name: "XSRF-TOKEN", Value: "fresh", Path: "/"},
+				},
+			}}, nil
+		},
+		validateFn: func(_ context.Context, _ *personio.Session) error {
+			validateCalls.Add(1)
+			// First validateFn call (fast-path probe) reports the cookies as
+			// dead; the post-login validate (slow-path) passes.
+			if validateCalls.Load() == 1 {
+				return personio.ErrSessionExpired
+			}
+			return nil
+		},
+	}
+
+	if _, err := src.EnsureSession(context.Background()); err != nil {
+		t.Fatalf("EnsureSession returned error: %v", err)
+	}
+	if got := loginCalls.Load(); got != 1 {
+		t.Fatalf("expected slow path to run once (loginFn calls = %d, want 1)", got)
+	}
+	if got := validateCalls.Load(); got < 2 {
+		t.Fatalf("expected validateFn to be called for both fast-path probe and post-login probe (got %d, want >=2)", got)
+	}
+}
+
+// A non-expiry probe failure (5xx, network) must NOT trigger a slow
+// path — the cookies might still work, and we don't want a transient
+// server hiccup to open Chrome under the user.
+func TestEnsureSession_FastPathToleratesTransientProbeError(t *testing.T) {
+	t.Parallel()
+	store := &stubSessionStore{}
+	_ = store.Set(&personio.Session{
+		Tenant:     "example",
+		AppHost:    "example.app.personio.com",
+		CapturedAt: time.Now(),
+	})
+	var loginCalls atomic.Int32
+	src := &personioSessionSource{
+		sessions: store,
+		logger:   slog.Default(),
+		tenant:   func() string { return "example" },
+		loginFn: func(ctx context.Context, _ personio.LoginConfig) (*personio.LoginResult, error) {
+			loginCalls.Add(1)
+			return nil, errors.New("should not be called for transient probe error")
+		},
+		validateFn: func(_ context.Context, _ *personio.Session) error {
+			return errors.New("personio validate: unexpected status 502")
+		},
+	}
+
+	if _, err := src.EnsureSession(context.Background()); err != nil {
+		t.Fatalf("EnsureSession returned error: %v", err)
+	}
+	if got := loginCalls.Load(); got != 0 {
+		t.Fatalf("loginFn was called on transient probe failure (got %d, want 0)", got)
+	}
+	if _, err := store.Get(); err != nil {
+		t.Fatal("transient probe failure should leave the session in the store")
+	}
+}

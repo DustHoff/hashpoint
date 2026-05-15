@@ -58,6 +58,9 @@ func TestValidateAt_401IsExpired(t *testing.T) {
 	if !strings.Contains(err.Error(), "unauthenticated") {
 		t.Errorf("expected unauthenticated error, got %v", err)
 	}
+	if !errors.Is(err, ErrSessionExpired) {
+		t.Errorf("expected errors.Is(err, ErrSessionExpired); got %v", err)
+	}
 }
 
 func TestValidateAt_403IsExpired(t *testing.T) {
@@ -70,6 +73,9 @@ func TestValidateAt_403IsExpired(t *testing.T) {
 	err := validateAt(context.Background(), &http.Client{Timeout: 5 * time.Second}, srv.URL, fakeSession())
 	if err == nil {
 		t.Fatal("expected error for 403")
+	}
+	if !errors.Is(err, ErrSessionExpired) {
+		t.Errorf("expected errors.Is(err, ErrSessionExpired); got %v", err)
 	}
 }
 
@@ -88,6 +94,9 @@ func TestValidateAt_LoginRedirectIsExpired(t *testing.T) {
 	if !strings.Contains(err.Error(), "/login") {
 		t.Errorf("expected /login marker in error, got %v", err)
 	}
+	if !errors.Is(err, ErrSessionExpired) {
+		t.Errorf("expected errors.Is(err, ErrSessionExpired); got %v", err)
+	}
 }
 
 func TestValidateAt_AuthRedirectIsExpired(t *testing.T) {
@@ -101,6 +110,9 @@ func TestValidateAt_AuthRedirectIsExpired(t *testing.T) {
 	err := validateAt(context.Background(), &http.Client{Timeout: 5 * time.Second}, srv.URL, fakeSession())
 	if err == nil {
 		t.Fatal("expected error for /auth redirect")
+	}
+	if !errors.Is(err, ErrSessionExpired) {
+		t.Errorf("expected errors.Is(err, ErrSessionExpired); got %v", err)
 	}
 }
 
@@ -123,6 +135,11 @@ func TestValidateAt_OtherRedirectFailsClosed(t *testing.T) {
 	if !strings.Contains(err.Error(), "unexpected redirect") {
 		t.Errorf("expected unexpected-redirect error, got %v", err)
 	}
+	// A non-/login redirect is a fail-closed signal but NOT a session
+	// expiry — the App layer must not purge the stored session on it.
+	if errors.Is(err, ErrSessionExpired) {
+		t.Errorf("non-/login redirect should not surface as ErrSessionExpired; got %v", err)
+	}
 }
 
 func TestValidateAt_5xxIsError(t *testing.T) {
@@ -138,6 +155,11 @@ func TestValidateAt_5xxIsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unexpected status") {
 		t.Errorf("expected unexpected-status error, got %v", err)
+	}
+	// A 5xx is a server-side issue, not a cookie problem — must NOT
+	// trigger the App-layer session purge.
+	if errors.Is(err, ErrSessionExpired) {
+		t.Errorf("5xx should not surface as ErrSessionExpired; got %v", err)
 	}
 }
 

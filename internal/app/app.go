@@ -169,6 +169,11 @@ type App struct {
 	// otherwise. The source owns its own mutex — no App-level lock is
 	// taken across the (potentially minute-long) CDP reauth.
 	personioSrc *personioSessionSource
+	// validatePersonio is the function used by PersonioCheck to probe
+	// the stored cookies. Defaults to personio.Validate in production;
+	// overridable from tests so the probe doesn't have to hit
+	// app.personio.com.
+	validatePersonio func(ctx context.Context, sess *personio.Session) error
 }
 
 // quickTagWindowState captures the main-window placement before the
@@ -193,11 +198,12 @@ func New(deps Deps) *App {
 		deps.Logger = slog.Default()
 	}
 	a := &App{
-		deps:          deps,
-		logger:        deps.Logger,
-		cfg:           deps.Config,
-		ctx:           context.Background(),
-		windowVisible: true,
+		deps:             deps,
+		logger:           deps.Logger,
+		cfg:              deps.Config,
+		ctx:              context.Background(),
+		windowVisible:    true,
+		validatePersonio: personio.Validate,
 	}
 	if deps.EntraFor != nil && deps.Config != nil && deps.Config.Entra.Configured() {
 		mgr, err := deps.EntraFor(deps.Config.Entra)
@@ -1083,7 +1089,16 @@ func (a *App) PersonioCheck() PersonioSessionStatus {
 		st.CheckedAt = time.Now().UTC()
 		return st
 	}
-	if err := personio.Validate(a.ctx, sess); err != nil {
+	validate := a.validatePersonio
+	if validate == nil {
+		validate = personio.Validate
+	}
+	// validateAndPurgeSession is the single chokepoint that decides
+	// whether a probe failure should drop the local cookies — shared
+	// with personioSessionSource.EnsureSession's fast path so a plugin
+	// can never see cookies that a parallel PersonioCheck would have
+	// purged.
+	if err := validateAndPurgeSession(a.ctx, validate, a.deps.Sessions, a.logger, sess); err != nil {
 		a.logger.Info("app: PersonioCheck — session invalid", "err", err)
 		st.Valid = false
 		st.Reason = "Session abgelaufen"
