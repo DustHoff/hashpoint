@@ -274,3 +274,173 @@ func TestRequestPersonioSession_FreshSourceEachCall(t *testing.T) {
 		t.Errorf("personioSource invocations = %d, want 3", calls)
 	}
 }
+
+// ---------------------------------------------------------------------
+// ListTags / PublishTags coverage.
+// ---------------------------------------------------------------------
+
+type fakeTagSource struct {
+	list func(ctx context.Context) ([]TagView, error)
+}
+
+func (f *fakeTagSource) List(ctx context.Context) ([]TagView, error) {
+	if f.list == nil {
+		return nil, errors.New("no script")
+	}
+	return f.list(ctx)
+}
+
+type fakeTagSink struct {
+	publish func(ctx context.Context, plugin string, tags []ImportedTagView) (int, error)
+}
+
+func (f *fakeTagSink) Publish(ctx context.Context, plugin string, tags []ImportedTagView) (int, error) {
+	if f.publish == nil {
+		return 0, errors.New("no script")
+	}
+	return f.publish(ctx, plugin, tags)
+}
+
+func TestListTags_NoSourceReturnsEmpty(t *testing.T) {
+	api := &boundHostAPI{
+		pluginName: "test",
+		log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		handles:    newHandleRegistry(),
+	}
+	out, err := api.ListTags(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil err on missing source, got %v", err)
+	}
+	if len(out) != 0 {
+		t.Errorf("expected empty slice, got %d entries", len(out))
+	}
+}
+
+func TestListTags_ProjectsToHostTag(t *testing.T) {
+	src := &fakeTagSource{
+		list: func(_ context.Context) ([]TagView, error) {
+			return []TagView{
+				{ID: 1, Name: "#root"},
+				{ID: 2, Name: "#leaf", ParentID: 1, Color: "#7c3aed"},
+			}, nil
+		},
+	}
+	api := &boundHostAPI{
+		pluginName: "test",
+		log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		handles:    newHandleRegistry(),
+		tagSource:  func() TagSource { return src },
+	}
+	out, err := api.ListTags(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("got %d tags, want 2", len(out))
+	}
+	if out[1].ID != 2 || out[1].ParentID != 1 || out[1].Color != "#7c3aed" {
+		t.Errorf("projection mismatch on entry 1: %+v", out[1])
+	}
+}
+
+func TestPublishTags_DeniedWithoutCapability(t *testing.T) {
+	called := false
+	api := &boundHostAPI{
+		pluginName:     "no-cap-plugin",
+		log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		handles:        newHandleRegistry(),
+		hasTagProvider: false,
+		tagSink: func() TagSink {
+			return &fakeTagSink{publish: func(_ context.Context, _ string, _ []ImportedTagView) (int, error) {
+				called = true
+				return 0, nil
+			}}
+		},
+	}
+	_, err := api.PublishTags(context.Background(), []sdk.ImportedTag{{Path: "x"}})
+	if !errors.Is(err, sdk.ErrPublishTagsNotAllowed) {
+		t.Fatalf("expected ErrPublishTagsNotAllowed, got %v", err)
+	}
+	if called {
+		t.Fatal("sink was invoked despite capability gate")
+	}
+}
+
+func TestPublishTags_DeniedWithoutSink(t *testing.T) {
+	api := &boundHostAPI{
+		pluginName:     "ok-cap-plugin",
+		log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		handles:        newHandleRegistry(),
+		hasTagProvider: true,
+	}
+	_, err := api.PublishTags(context.Background(), []sdk.ImportedTag{{Path: "x"}})
+	if !errors.Is(err, sdk.ErrPublishTagsNotAllowed) {
+		t.Fatalf("expected ErrPublishTagsNotAllowed when host has no sink, got %v", err)
+	}
+}
+
+func TestPublishTags_HappyPath(t *testing.T) {
+	var received []ImportedTagView
+	sink := &fakeTagSink{
+		publish: func(_ context.Context, plugin string, tags []ImportedTagView) (int, error) {
+			received = tags
+			if plugin != "tag-plug" {
+				t.Errorf("plugin = %q, want tag-plug", plugin)
+			}
+			return 2, nil
+		},
+	}
+	api := &boundHostAPI{
+		pluginName:     "tag-plug",
+		log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		handles:        newHandleRegistry(),
+		hasTagProvider: true,
+		tagSink:        func() TagSink { return sink },
+	}
+	in := []sdk.ImportedTag{
+		{Path: "a/b", Description: "x"},
+		{Path: "c", Color: "#fff"},
+	}
+	created, err := api.PublishTags(context.Background(), in)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if created != 2 {
+		t.Errorf("created = %d, want 2", created)
+	}
+	if len(received) != 2 {
+		t.Fatalf("sink received %d entries, want 2", len(received))
+	}
+	if received[0].Path != "a/b" || received[0].Description != "x" {
+		t.Errorf("entry 0 mismatch: %+v", received[0])
+	}
+	if received[1].Color != "#fff" {
+		t.Errorf("entry 1 color = %q, want #fff", received[1].Color)
+	}
+}
+
+func TestPublishTags_EmptyListIsNoop(t *testing.T) {
+	sinkCalled := false
+	api := &boundHostAPI{
+		pluginName:     "tag-plug",
+		log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		handles:        newHandleRegistry(),
+		hasTagProvider: true,
+		tagSink: func() TagSink {
+			return &fakeTagSink{publish: func(_ context.Context, _ string, _ []ImportedTagView) (int, error) {
+				sinkCalled = true
+				return 0, nil
+			}}
+		},
+	}
+	created, err := api.PublishTags(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if created != 0 {
+		t.Errorf("created = %d, want 0", created)
+	}
+	if sinkCalled {
+		t.Error("sink should not be called for an empty list")
+	}
+}

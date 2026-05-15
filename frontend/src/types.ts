@@ -265,7 +265,15 @@ export type PluginState =
   | "failed"
   | "disabled";
 
-export type PluginCapability = "oncall_documentation" | "plugin_management";
+// Mirrors the host-side sdk.Capability constants. Plain string union so
+// the frontend stays decoupled from the wire enum; the backend serialises
+// these verbatim.
+export type PluginCapability =
+  | "oncall_documentation"
+  | "plugin_management"
+  | "process_autotag"
+  | "off_hours_provider"
+  | "tag_provider";
 
 // FieldType discriminates input rendering + persistence strategy.
 // `password` values are encrypted at rest and never round-tripped to

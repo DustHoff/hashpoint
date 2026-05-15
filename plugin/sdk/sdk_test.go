@@ -43,6 +43,11 @@ func (stubOffHours) OffHours(_ context.Context, _ OffHoursRequest) ([]OffHoursIn
 	return nil, nil
 }
 
+// stubTagProvider adds the tag-provider capability.
+type stubTagProvider struct{ stubCore }
+
+func (stubTagProvider) ListTags(_ context.Context) ([]ImportedTag, error) { return nil, nil }
+
 // stubBoth advertises all current capabilities at once.
 type stubBoth struct {
 	stubCore
@@ -50,6 +55,7 @@ type stubBoth struct {
 	stubMgmt
 	stubProcessAutoTag
 	stubOffHours
+	stubTagProvider
 }
 
 func TestPluginMap_CoreOnly(t *testing.T) {
@@ -57,7 +63,7 @@ func TestPluginMap_CoreOnly(t *testing.T) {
 	if _, ok := set[CoreKey]; !ok {
 		t.Errorf("CoreKey missing")
 	}
-	for _, key := range []string{OnCallKey, OffHoursKey, MgmtKey, ProcessAutoTagKey} {
+	for _, key := range []string{OnCallKey, OffHoursKey, MgmtKey, ProcessAutoTagKey, TagProviderKey} {
 		if _, ok := set[key]; ok {
 			t.Errorf("%q unexpectedly present for plugin without capability", key)
 		}
@@ -105,7 +111,19 @@ func TestPluginMap_OffHours(t *testing.T) {
 	if _, ok := set[OffHoursKey]; !ok {
 		t.Errorf("OffHoursKey missing for OffHoursProviderHandler")
 	}
-	for _, key := range []string{OnCallKey, MgmtKey, ProcessAutoTagKey} {
+	for _, key := range []string{OnCallKey, MgmtKey, ProcessAutoTagKey, TagProviderKey} {
+		if _, ok := set[key]; ok {
+			t.Errorf("%q unexpectedly present", key)
+		}
+	}
+}
+
+func TestPluginMap_TagProvider(t *testing.T) {
+	set := PluginMap(stubTagProvider{})
+	if _, ok := set[TagProviderKey]; !ok {
+		t.Errorf("TagProviderKey missing for TagProviderHandler")
+	}
+	for _, key := range []string{OnCallKey, OffHoursKey, MgmtKey, ProcessAutoTagKey} {
 		if _, ok := set[key]; ok {
 			t.Errorf("%q unexpectedly present", key)
 		}
@@ -114,7 +132,7 @@ func TestPluginMap_OffHours(t *testing.T) {
 
 func TestPluginMap_AllCapabilities(t *testing.T) {
 	set := PluginMap(stubBoth{})
-	for _, key := range []string{CoreKey, OnCallKey, OffHoursKey, MgmtKey, ProcessAutoTagKey} {
+	for _, key := range []string{CoreKey, OnCallKey, OffHoursKey, MgmtKey, ProcessAutoTagKey, TagProviderKey} {
 		if _, ok := set[key]; !ok {
 			t.Errorf("expected %q in plugin set, missing", key)
 		}
@@ -123,7 +141,7 @@ func TestPluginMap_AllCapabilities(t *testing.T) {
 
 func TestHostSidePluginMap_IncludesAllKeys(t *testing.T) {
 	set := HostSidePluginMap()
-	for _, key := range []string{CoreKey, OnCallKey, OffHoursKey, MgmtKey, ProcessAutoTagKey} {
+	for _, key := range []string{CoreKey, OnCallKey, OffHoursKey, MgmtKey, ProcessAutoTagKey, TagProviderKey} {
 		if _, ok := set[key]; !ok {
 			t.Errorf("HostSidePluginMap missing %q", key)
 		}

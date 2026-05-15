@@ -114,6 +114,23 @@ type TagRepository interface {
 	// when no segment survives normalisation. The walk runs in a single
 	// transaction so concurrent callers cannot double-create.
 	EnsureByPath(ctx context.Context, path string) (*Tag, error)
+	// EnsureByPathWithMetadata is like EnsureByPath but, when the leaf
+	// segment is newly created, also persists Description and Color
+	// from meta. Existing nodes — whether intermediate or leaf — are
+	// never modified: the contract is "user-tag wins, plugin metadata
+	// only on first create". Returns the leaf tag plus a bool that is
+	// true iff this call created the leaf (so callers can branch on
+	// "we just imported a new tag" vs. "tag already existed").
+	EnsureByPathWithMetadata(ctx context.Context, path string, meta TagMetadata) (*Tag, bool, error)
+}
+
+// TagMetadata bundles the optional fields tag_provider plugins may
+// attach to a leaf when EnsureByPathWithMetadata first creates it.
+// Both fields are ignored when the leaf already existed. Color
+// follows the hex form ("#7c3aed"); Description is free-form text.
+type TagMetadata struct {
+	Description string
+	Color       string
 }
 
 // RuleRepository persists auto-tagging rules.

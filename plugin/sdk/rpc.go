@@ -545,6 +545,64 @@ func (c *offHoursClient) OffHours(_ context.Context, req OffHoursRequest) ([]Off
 }
 
 // ---------------------------------------------------------------------
+// Tag provider capability adapter.
+// ---------------------------------------------------------------------
+
+type tagProviderPluginAdapter struct {
+	impl TagProviderHandler // nil on host side
+}
+
+// Server returns the RPC-server stub running inside the plugin process.
+func (p *tagProviderPluginAdapter) Server(_ *hplugin.MuxBroker) (interface{}, error) {
+	return &tagProviderServer{impl: p.impl}, nil
+}
+
+// Client returns the RPC-client stub the host wires up to call into the plugin.
+func (p *tagProviderPluginAdapter) Client(_ *hplugin.MuxBroker, c *rpc.Client) (interface{}, error) {
+	return &tagProviderClient{client: c}, nil
+}
+
+type tagProviderServer struct {
+	impl TagProviderHandler
+}
+
+// TagProviderListArgs is the empty arg type for ListTags.
+type TagProviderListArgs struct{}
+
+// TagProviderListReply carries the plugin's imported tags or an error.
+type TagProviderListReply struct {
+	Tags []ImportedTag
+	Err  string
+}
+
+// ListTags is the net/rpc-callable TagProviderHandler.ListTags.
+func (s *tagProviderServer) ListTags(_ TagProviderListArgs, reply *TagProviderListReply) error {
+	out, err := s.impl.ListTags(context.Background())
+	if err != nil {
+		reply.Err = err.Error()
+		return nil
+	}
+	reply.Tags = out
+	return nil
+}
+
+type tagProviderClient struct {
+	client *rpc.Client
+}
+
+// ListTags forwards to the plugin and returns its catalogue.
+func (c *tagProviderClient) ListTags(_ context.Context) ([]ImportedTag, error) {
+	var reply TagProviderListReply
+	if err := c.client.Call("Plugin.ListTags", TagProviderListArgs{}, &reply); err != nil {
+		return nil, err
+	}
+	if reply.Err != "" {
+		return nil, errors.New(reply.Err)
+	}
+	return reply.Tags, nil
+}
+
+// ---------------------------------------------------------------------
 // HostAPI (reverse RPC: plugin → host).
 // ---------------------------------------------------------------------
 
@@ -670,6 +728,53 @@ func (s *hostAPIServer) RequestPersonioSession(_ HostRequestPersonioSessionArgs,
 	return nil
 }
 
+// HostListTagsArgs is the empty arg type for HostAPI.ListTags.
+type HostListTagsArgs struct{}
+
+// HostListTagsReply carries the host's projected tag set or an error.
+type HostListTagsReply struct {
+	Tags []HostTag
+	Err  string
+}
+
+// ListTags is the net/rpc-callable HostAPI.ListTags.
+func (s *hostAPIServer) ListTags(_ HostListTagsArgs, reply *HostListTagsReply) error {
+	out, err := s.impl.ListTags(context.Background())
+	if err != nil {
+		reply.Err = err.Error()
+		return nil
+	}
+	reply.Tags = out
+	return nil
+}
+
+// HostPublishTagsArgs carries the imports a tag_provider plugin wants
+// merged into the host store.
+type HostPublishTagsArgs struct {
+	Tags []ImportedTag
+}
+
+// HostPublishTagsReply carries the count of actually-created tags or
+// a typed error. IsNotAllowed rehydrates ErrPublishTagsNotAllowed on
+// the plugin side so callers can errors.Is against the sentinel.
+type HostPublishTagsReply struct {
+	Created     int
+	Err         string
+	IsNotAllowed bool
+}
+
+// PublishTags is the net/rpc-callable HostAPI.PublishTags.
+func (s *hostAPIServer) PublishTags(args HostPublishTagsArgs, reply *HostPublishTagsReply) error {
+	n, err := s.impl.PublishTags(context.Background(), args.Tags)
+	if err != nil {
+		reply.Err = err.Error()
+		reply.IsNotAllowed = errors.Is(err, ErrPublishTagsNotAllowed)
+		return nil
+	}
+	reply.Created = n
+	return nil
+}
+
 // hostAPIClient is what the plugin sees as sdk.HostAPI.
 type hostAPIClient struct {
 	client *rpc.Client
@@ -735,4 +840,33 @@ func (c *hostAPIClient) RequestPersonioSession(_ context.Context) (PersonioSessi
 		return PersonioSession{}, fmt.Errorf("%w: %s", ErrPersonioNotAvailable, reply.Err)
 	}
 	return PersonioSession{}, errors.New(reply.Err)
+}
+
+// ListTags returns the host's current tag set projected to HostTag.
+func (c *hostAPIClient) ListTags(_ context.Context) ([]HostTag, error) {
+	var reply HostListTagsReply
+	if err := c.client.Call("HostAPI.ListTags", HostListTagsArgs{}, &reply); err != nil {
+		return nil, err
+	}
+	if reply.Err != "" {
+		return nil, errors.New(reply.Err)
+	}
+	return reply.Tags, nil
+}
+
+// PublishTags merges the supplied tags into the host store.
+// ErrPublishTagsNotAllowed is rehydrated on the plugin side so callers
+// can `errors.Is` against it.
+func (c *hostAPIClient) PublishTags(_ context.Context, tags []ImportedTag) (int, error) {
+	var reply HostPublishTagsReply
+	if err := c.client.Call("HostAPI.PublishTags", HostPublishTagsArgs{Tags: tags}, &reply); err != nil {
+		return 0, err
+	}
+	if reply.Err == "" {
+		return reply.Created, nil
+	}
+	if reply.IsNotAllowed {
+		return 0, fmt.Errorf("%w: %s", ErrPublishTagsNotAllowed, reply.Err)
+	}
+	return 0, errors.New(reply.Err)
 }
