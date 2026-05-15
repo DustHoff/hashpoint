@@ -128,7 +128,7 @@ func (a *App) PluginRefreshTags(name string) (int, error) {
 // this on render so the Auftrag combobox shows current data; the host
 // applies a per-plugin timeout so one slow plugin cannot stall the
 // tab. A plugin host that is not wired (test path) returns nil.
-func (a *App) ListPluginOrders() []pluginhost.PluginOrders {
+func (a *App) ListPluginOrders() []pluginhost.Orders {
 	if a.pluginHost == nil {
 		return nil
 	}

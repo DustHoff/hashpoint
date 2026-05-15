@@ -67,14 +67,14 @@ func (b TagBlock) IsOpen() bool { return b.EndTime == nil }
 
 // Tag represents a hierarchical tag (Parent or Sub).
 type Tag struct {
-	ID                 int64     `json:"id"`
-	ParentID           *int64    `json:"parent_id,omitempty"`
-	Name               string    `json:"name"`
-	Description        *string   `json:"description,omitempty"`
-	Color              *string   `json:"color,omitempty"`
-	PersonioProjectID  *string   `json:"personio_project_id,omitempty"`
-	PersonioActivityID *string   `json:"personio_activity_id,omitempty"`
-	SyncToPersonio     bool      `json:"sync_to_personio"`
+	ID                 int64   `json:"id"`
+	ParentID           *int64  `json:"parent_id,omitempty"`
+	Name               string  `json:"name"`
+	Description        *string `json:"description,omitempty"`
+	Color              *string `json:"color,omitempty"`
+	PersonioProjectID  *string `json:"personio_project_id,omitempty"`
+	PersonioActivityID *string `json:"personio_activity_id,omitempty"`
+	SyncToPersonio     bool    `json:"sync_to_personio"`
 	// OrderName is the user's external-order mapping for this tag —
 	// either a name supplied by a tag_provider plugin's order
 	// catalogue or arbitrary freitext. Optional; nil ⇒ no mapping.

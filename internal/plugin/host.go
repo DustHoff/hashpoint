@@ -564,13 +564,13 @@ func (h *Host) pullTagsFromHandler(ctx context.Context, name string, handler sdk
 	return created
 }
 
-// PluginOrders is one entry in the result of ListAllOrders: the orders
+// Orders is one entry in the result of ListAllOrders: the orders
 // contributed by a single running tag_provider plugin. Empty Orders is
 // preserved so the frontend can still render an empty group header
 // (useful for "this plugin is up but has no orders yet" — distinct from
 // "plugin offline / dropped").
-type PluginOrders struct {
-	PluginName string     `json:"plugin_name"`
+type Orders struct {
+	PluginName string      `json:"plugin_name"`
 	Orders     []sdk.Order `json:"orders"`
 }
 
@@ -584,7 +584,7 @@ type PluginOrders struct {
 // the remaining plugins' orders rather than an opaque error. The host
 // applies SubmitTimeout per plugin to bound a single misbehaving
 // plugin's impact on the user's tab-open latency.
-func (h *Host) ListAllOrders(ctx context.Context) []PluginOrders {
+func (h *Host) ListAllOrders(ctx context.Context) []Orders {
 	type target struct {
 		name    string
 		handler sdk.TagProviderHandler
@@ -604,7 +604,7 @@ func (h *Host) ListAllOrders(ctx context.Context) []PluginOrders {
 	}
 	sort.Slice(targets, func(i, j int) bool { return targets[i].name < targets[j].name })
 
-	out := make([]PluginOrders, 0, len(targets))
+	out := make([]Orders, 0, len(targets))
 	for _, t := range targets {
 		callCtx, cancel := context.WithTimeout(ctx, h.deps.SubmitTimeout)
 		orders, err := t.handler.ListOrders(callCtx)
@@ -614,7 +614,7 @@ func (h *Host) ListAllOrders(ctx context.Context) []PluginOrders {
 				"plugin", t.name, "err", err)
 			continue
 		}
-		out = append(out, PluginOrders{PluginName: t.name, Orders: orders})
+		out = append(out, Orders{PluginName: t.name, Orders: orders})
 	}
 	return out
 }
