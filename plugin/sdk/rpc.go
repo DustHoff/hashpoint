@@ -586,6 +586,27 @@ func (s *tagProviderServer) ListTags(_ TagProviderListArgs, reply *TagProviderLi
 	return nil
 }
 
+// TagProviderListOrdersArgs is the empty arg type for ListOrders.
+type TagProviderListOrdersArgs struct{}
+
+// TagProviderListOrdersReply carries the plugin's order catalogue or
+// an error. The host populates the Tags-tab Auftrag dropdown from it.
+type TagProviderListOrdersReply struct {
+	Orders []Order
+	Err    string
+}
+
+// ListOrders is the net/rpc-callable TagProviderHandler.ListOrders.
+func (s *tagProviderServer) ListOrders(_ TagProviderListOrdersArgs, reply *TagProviderListOrdersReply) error {
+	out, err := s.impl.ListOrders(context.Background())
+	if err != nil {
+		reply.Err = err.Error()
+		return nil
+	}
+	reply.Orders = out
+	return nil
+}
+
 type tagProviderClient struct {
 	client *rpc.Client
 }
@@ -600,6 +621,18 @@ func (c *tagProviderClient) ListTags(_ context.Context) ([]ImportedTag, error) {
 		return nil, errors.New(reply.Err)
 	}
 	return reply.Tags, nil
+}
+
+// ListOrders forwards to the plugin and returns its order catalogue.
+func (c *tagProviderClient) ListOrders(_ context.Context) ([]Order, error) {
+	var reply TagProviderListOrdersReply
+	if err := c.client.Call("Plugin.ListOrders", TagProviderListOrdersArgs{}, &reply); err != nil {
+		return nil, err
+	}
+	if reply.Err != "" {
+		return nil, errors.New(reply.Err)
+	}
+	return reply.Orders, nil
 }
 
 // ---------------------------------------------------------------------

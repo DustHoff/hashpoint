@@ -34,7 +34,26 @@ export interface Tag {
   personio_project_id?: string;
   personio_activity_id?: string;
   sync_to_personio: boolean;
+  // Optional external-order mapping. Either a name supplied by a
+  // tag_provider plugin's order catalogue or a user-entered freitext
+  // string. Empty / undefined ⇒ no mapping.
+  order_name?: string;
   created_at: string;
+}
+
+// PluginOrder mirrors sdk.Order. Description is rendered as helper text
+// in the Tag-Manager combobox but is never persisted on the tag.
+export interface PluginOrder {
+  ID: string;
+  Name: string;
+  Description: string;
+}
+
+// PluginOrderGroup mirrors pluginhost.PluginOrders — one group per
+// running tag_provider plugin in the result of api.listPluginOrders().
+export interface PluginOrderGroup {
+  plugin_name: string;
+  orders: PluginOrder[] | null;
 }
 
 export type MatchField = "process_name" | "window_title" | "both";
