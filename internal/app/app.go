@@ -1093,24 +1093,13 @@ func (a *App) PersonioCheck() PersonioSessionStatus {
 	if validate == nil {
 		validate = personio.Validate
 	}
-	if err := validate(a.ctx, sess); err != nil {
+	// validateAndPurgeSession is the single chokepoint that decides
+	// whether a probe failure should drop the local cookies — shared
+	// with personioSessionSource.EnsureSession's fast path so a plugin
+	// can never see cookies that a parallel PersonioCheck would have
+	// purged.
+	if err := validateAndPurgeSession(a.ctx, validate, a.deps.Sessions, a.logger, sess); err != nil {
 		a.logger.Info("app: PersonioCheck — session invalid", "err", err)
-		// When Personio rejects the cookies the locally cached blob is
-		// dead by observation — drop it so every downstream consumer
-		// (auto-relogin's slow-path, plugins calling
-		// RequestPersonioSession, the badge itself on the next probe)
-		// stops trusting Session.Expired()'s 24h heuristic and treats
-		// the state as "no session". Without this purge, an
-		// AutoRelogin trigger would short-circuit through
-		// personioSessionSource.EnsureSession's fast path (which only
-		// looks at CapturedAt age) and never actually open Chrome.
-		// Other failure modes (5xx, unexpected redirects, network
-		// errors) keep the cookies intact: they may still be valid.
-		if errors.Is(err, personio.ErrSessionExpired) {
-			if delErr := a.deps.Sessions.Delete(); delErr != nil {
-				a.logger.Warn("app: PersonioCheck — could not purge stale session", "err", delErr)
-			}
-		}
 		st.Valid = false
 		st.Reason = "Session abgelaufen"
 		st.CheckedAt = time.Now().UTC()
