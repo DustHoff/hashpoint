@@ -758,8 +758,8 @@ type HostPublishTagsArgs struct {
 // a typed error. IsNotAllowed rehydrates ErrPublishTagsNotAllowed on
 // the plugin side so callers can errors.Is against the sentinel.
 type HostPublishTagsReply struct {
-	Created     int
-	Err         string
+	Created      int
+	Err          string
 	IsNotAllowed bool
 }
 
