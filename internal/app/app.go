@@ -169,6 +169,11 @@ type App struct {
 	// otherwise. The source owns its own mutex — no App-level lock is
 	// taken across the (potentially minute-long) CDP reauth.
 	personioSrc *personioSessionSource
+	// validatePersonio is the function used by PersonioCheck to probe
+	// the stored cookies. Defaults to personio.Validate in production;
+	// overridable from tests so the probe doesn't have to hit
+	// app.personio.com.
+	validatePersonio func(ctx context.Context, sess *personio.Session) error
 }
 
 // quickTagWindowState captures the main-window placement before the
@@ -193,11 +198,12 @@ func New(deps Deps) *App {
 		deps.Logger = slog.Default()
 	}
 	a := &App{
-		deps:          deps,
-		logger:        deps.Logger,
-		cfg:           deps.Config,
-		ctx:           context.Background(),
-		windowVisible: true,
+		deps:             deps,
+		logger:           deps.Logger,
+		cfg:              deps.Config,
+		ctx:              context.Background(),
+		windowVisible:    true,
+		validatePersonio: personio.Validate,
 	}
 	if deps.EntraFor != nil && deps.Config != nil && deps.Config.Entra.Configured() {
 		mgr, err := deps.EntraFor(deps.Config.Entra)
@@ -1083,8 +1089,28 @@ func (a *App) PersonioCheck() PersonioSessionStatus {
 		st.CheckedAt = time.Now().UTC()
 		return st
 	}
-	if err := personio.Validate(a.ctx, sess); err != nil {
+	validate := a.validatePersonio
+	if validate == nil {
+		validate = personio.Validate
+	}
+	if err := validate(a.ctx, sess); err != nil {
 		a.logger.Info("app: PersonioCheck — session invalid", "err", err)
+		// When Personio rejects the cookies the locally cached blob is
+		// dead by observation — drop it so every downstream consumer
+		// (auto-relogin's slow-path, plugins calling
+		// RequestPersonioSession, the badge itself on the next probe)
+		// stops trusting Session.Expired()'s 24h heuristic and treats
+		// the state as "no session". Without this purge, an
+		// AutoRelogin trigger would short-circuit through
+		// personioSessionSource.EnsureSession's fast path (which only
+		// looks at CapturedAt age) and never actually open Chrome.
+		// Other failure modes (5xx, unexpected redirects, network
+		// errors) keep the cookies intact: they may still be valid.
+		if errors.Is(err, personio.ErrSessionExpired) {
+			if delErr := a.deps.Sessions.Delete(); delErr != nil {
+				a.logger.Warn("app: PersonioCheck — could not purge stale session", "err", delErr)
+			}
+		}
 		st.Valid = false
 		st.Reason = "Session abgelaufen"
 		st.CheckedAt = time.Now().UTC()

@@ -310,13 +310,13 @@ func validateAt(ctx context.Context, cli *http.Client, baseURL string, sess *Ses
 		if loc != "" {
 			lu, _ := url.Parse(loc)
 			if lu != nil && (strings.HasPrefix(lu.Path, "/login") || strings.Contains(lu.Path, "/auth")) {
-				return errors.New("personio validate: redirected to /login — session expired")
+				return fmt.Errorf("personio validate: redirected to /login: %w", ErrSessionExpired)
 			}
 		}
 		return fmt.Errorf("personio validate: unexpected redirect (status %d, location %q)", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return fmt.Errorf("personio validate: unauthenticated (status %d)", resp.StatusCode)
+		return fmt.Errorf("personio validate: unauthenticated (status %d): %w", resp.StatusCode, ErrSessionExpired)
 	}
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("personio validate: unexpected status %d", resp.StatusCode)

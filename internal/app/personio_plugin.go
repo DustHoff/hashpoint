@@ -138,6 +138,13 @@ func (p *personioSessionSource) EnsureSession(ctx context.Context) (pluginhost.P
 // probe's short-lived ctx cannot cancel a five-minute Chrome window.
 // Logs the outcome at Info/Warn — there is no error channel back to the
 // caller by design (this is fire-and-forget housekeeping).
+//
+// The "succeeded" log fires only when EnsureSession actually opened a
+// new login (i.e. the returned session's CapturedAt differs from the
+// pre-call value). When EnsureSession returns the existing cookies via
+// its fast path nothing was refreshed; we log that case at Debug so the
+// minute-tick probe does not pollute Info-level logs with synthetic
+// success.
 func (p *personioSessionSource) TriggerAutoRelogin() {
 	if p == nil || p.sessions == nil || p.tenant == nil {
 		return
@@ -147,13 +154,22 @@ func (p *personioSessionSource) TriggerAutoRelogin() {
 	}
 	go func() {
 		defer p.autoReloginInFlight.Store(false)
+		var preCapturedAt time.Time
+		if prev, err := p.sessions.Get(); err == nil && prev != nil {
+			preCapturedAt = prev.CapturedAt
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), personioReauthTimeout)
 		defer cancel()
-		if _, err := p.EnsureSession(ctx); err != nil {
+		view, err := p.EnsureSession(ctx)
+		if err != nil {
 			p.logger.Warn("personio auto-relogin: failed", "err", err)
 			return
 		}
-		p.logger.Info("personio auto-relogin: succeeded")
+		if view.CapturedAt.Equal(preCapturedAt) {
+			p.logger.Debug("personio auto-relogin: stored session still fresh — no login performed")
+			return
+		}
+		p.logger.Info("personio auto-relogin: succeeded", "captured_at", view.CapturedAt)
 	}()
 }
 
