@@ -133,6 +133,19 @@ Dieses Dokument legt verbindliche Konventionen für die Entwicklung des TimeTrac
 
 ---
 
+## 9a. UI-Vollständigkeit der Config
+
+- **Jedes Feld in `internal/config/config.go` muss über die Settings-UI bearbeitbar sein.** TOML ist Persistenzschicht, kein User-Interface. Ein Feld, das nur durch direktes Editieren von `config.toml` konfigurierbar ist, gilt als nicht zu Ende gebaut.
+- Konkret: ein neues Config-Feld ist erst „Done", wenn
+  1. `frontend/src/types.ts` das Feld typisiert (im passenden Interface unter `AppConfig`),
+  2. `frontend/src/components/Settings.tsx` einen sichtbaren Input/Picker dafür rendert,
+  3. `normalize()` und `emptyConfig` in `Settings.tsx` einen sicheren Default für das Feld haben,
+  4. ein kurzer Hilfstext neben dem Feld erklärt, was es bewirkt (über die `Field`-Komponente oder ein eingebettetes `<span>`).
+- Plugin-Settings sind nicht von dieser Regel betroffen — sie leben in der `plugin_settings`-Tabelle und haben einen eigenen, vom Manifest generierten UI-Pfad.
+- Default-Werte gehören in `config/defaults.go`. Settings-UI-Defaults in `emptyConfig` (`Settings.tsx`) müssen mit den Backend-Defaults übereinstimmen, damit ein „leerer" Render nach dem ersten Save keine Werte verändert.
+
+---
+
 ## 10. Tests
 
 - **Unit-Tests Pflicht** für: `tracker` (Block-Logik, Idle-Detection), `tagging` (Regel-Engine), `personio` (Comment-Aufbau, Aggregation), `storage` (Repos via In-Memory-SQLite).

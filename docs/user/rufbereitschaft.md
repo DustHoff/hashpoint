@@ -27,9 +27,12 @@ Bedingungen erfüllt sind:
    automatisch, wenn `#oncall` als Rufbereitschafts-Tag eingetragen
    ist).
 
-Die Tag-IDs werden unter `[oncall]` in der `config.toml` gepflegt. Solange
-die Liste leer ist, bleibt die Rufbereitschafts-Funktion **passiv** — es
-werden keine Doku-Zeilen erzeugt.
+Die Tags pflegen Sie unter **Einstellungen → Rufbereitschaft** über die
+Multi-Select-Auswahl „Rufbereitschafts-Tags". Untergeordnete Tags zählen
+automatisch mit — es genügt, den Root-Tag auszuwählen. Solange die Liste
+leer ist, bleibt die Rufbereitschafts-Funktion **passiv** und es werden
+keine Doku-Zeilen erzeugt. Wird ein zuvor markierter Tag gelöscht,
+entfernt Hashpoint die zugehörige ID automatisch aus der Konfiguration.
 
 ## Aufbau des Tabs
 

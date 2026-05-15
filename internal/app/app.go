@@ -770,8 +770,74 @@ func (a *App) UpdateTag(t storage.Tag) error {
 	return a.deps.Tags.Update(a.ctx, &t)
 }
 
-// DeleteTag removes a tag and its sub-tags.
-func (a *App) DeleteTag(id int64) error { return a.deps.Tags.Delete(a.ctx, id) }
+// DeleteTag removes a tag and its sub-tags (FK cascade).
+//
+// After a successful delete we also reconcile OnCall.TagIDs: any ID in the
+// config that no longer corresponds to an existing tag is dropped. This
+// covers the case where the user removed a configured on-call root (or
+// any of its descendants) and would otherwise leave stale IDs behind that
+// silently disable the feature for those branches.
+func (a *App) DeleteTag(id int64) error {
+	if err := a.deps.Tags.Delete(a.ctx, id); err != nil {
+		return err
+	}
+	if err := a.pruneOnCallTagIDs(a.ctx); err != nil {
+		// Pruning failure is non-fatal — the delete succeeded; we log and
+		// let the next SaveConfig re-validate.
+		a.logger.Warn("DeleteTag: oncall tag-id reconciliation failed", "err", err)
+	}
+	return nil
+}
+
+// pruneOnCallTagIDs drops any OnCall.TagIDs entry whose tag no longer
+// exists. No-op when the resulting list is identical to the current one.
+// Safe to call from any code path that mutates the tag set.
+func (a *App) pruneOnCallTagIDs(ctx context.Context) error {
+	a.mu.Lock()
+	if a.cfg == nil {
+		a.mu.Unlock()
+		return nil
+	}
+	current := append([]int64(nil), a.cfg.OnCall.TagIDs...)
+	a.mu.Unlock()
+	if len(current) == 0 {
+		return nil
+	}
+	tags, err := a.deps.Tags.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list tags: %w", err)
+	}
+	alive := make(map[int64]struct{}, len(tags))
+	for _, t := range tags {
+		alive[t.ID] = struct{}{}
+	}
+	filtered := make([]int64, 0, len(current))
+	for _, id := range current {
+		if _, ok := alive[id]; ok {
+			filtered = append(filtered, id)
+		}
+	}
+	if len(filtered) == len(current) {
+		return nil
+	}
+	a.mu.Lock()
+	if a.cfg == nil {
+		a.mu.Unlock()
+		return nil
+	}
+	next := *a.cfg
+	next.OnCall.TagIDs = filtered
+	a.cfg = &next
+	a.mu.Unlock()
+	if a.deps.ConfigPath != "" {
+		if err := config.Save(a.deps.ConfigPath, &next); err != nil {
+			return fmt.Errorf("persist pruned config: %w", err)
+		}
+	}
+	a.logger.Info("oncall: pruned stale tag ids from config",
+		"removed", len(current)-len(filtered), "remaining", len(filtered))
+	return nil
+}
 
 // ----- Rules --------------------------------------------------------------
 
@@ -1022,11 +1088,29 @@ func (a *App) PersonioCheck() PersonioSessionStatus {
 		st.Valid = false
 		st.Reason = "Session abgelaufen"
 		st.CheckedAt = time.Now().UTC()
+		a.maybeTriggerAutoRelogin()
 		return st
 	}
 	st.Valid = true
 	st.CheckedAt = time.Now().UTC()
 	return st
+}
+
+// maybeTriggerAutoRelogin fires a fire-and-forget CDP login when the
+// user has opted in via Personio.AutoRelogin. The CAS guard inside the
+// session source absorbs the repeated minute-tick PersonioCheck calls
+// that happen while the previous login is still waiting for the user.
+func (a *App) maybeTriggerAutoRelogin() {
+	if a.personioSrc == nil {
+		return
+	}
+	a.mu.Lock()
+	enabled := a.cfg != nil && a.cfg.Personio.AutoRelogin
+	a.mu.Unlock()
+	if !enabled {
+		return
+	}
+	a.personioSrc.TriggerAutoRelogin()
 }
 
 // PersonioLogin launches an interactive Chrome session for login.

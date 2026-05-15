@@ -9,7 +9,8 @@ func Default() *Config {
 			Enabled:          true,
 		},
 		Personio: PersonioConfig{
-			Tenant: "",
+			Tenant:      "",
+			AutoRelogin: false,
 		},
 		Entra: EntraConfig{
 			ClientID: "",

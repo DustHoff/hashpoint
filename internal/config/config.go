@@ -75,6 +75,13 @@ type PersonioConfig struct {
 	// Tenant is the Personio subdomain (e.g. "acme" → https://acme.personio.de).
 	// May be left empty on first start; populated via the in-app settings UI.
 	Tenant string `toml:"tenant" json:"tenant"`
+	// AutoRelogin lets the background session probe trigger an interactive
+	// CDP login when the stored cookies are stale. Default false — the
+	// session badge prompts the user manually. Note that plugins which
+	// request a session via HostAPI.RequestPersonioSession always get an
+	// auto-relogin regardless of this toggle; this flag only controls the
+	// host's own periodic probe.
+	AutoRelogin bool `toml:"auto_relogin" json:"auto_relogin"`
 }
 
 // EntraConfig parameterises the optional Microsoft Entra ID authentication
@@ -568,6 +575,11 @@ func (c *Config) Validate() error {
 	for _, d := range c.WorkSchedule.WorkDays {
 		if canonicalWorkDay(d) == "" {
 			errs = append(errs, "work_schedule.work_days enthält unbekannten Wochentag: "+d)
+		}
+	}
+	for _, id := range c.OnCall.TagIDs {
+		if id <= 0 {
+			errs = append(errs, fmt.Sprintf("on_call.tag_ids enthält ungültige Tag-ID: %d", id))
 		}
 	}
 	if len(errs) == 0 {

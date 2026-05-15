@@ -5,8 +5,10 @@ import type {
   AppConfig,
   EntraStatus,
   PersonioStatus,
+  Tag,
   WorkDay,
 } from "../types";
+import TagMultiSelect from "./TagMultiSelect";
 
 // Weekday rows for the work-schedule checkbox row. Key is the canonical
 // English short name that round-trips through TOML; label is the German
@@ -28,7 +30,7 @@ const emptyConfig: AppConfig = {
     enabled: true,
     tag_block_granularity_min: 0,
   },
-  personio: { tenant: "" },
+  personio: { tenant: "", auto_relogin: false },
   entra: { client_id: "", tenant_id: "" },
   quick_tag: { enabled: true, hotkey: "Ctrl+Alt+T" },
   communication: { process_names: ["teams.exe"], title_exclude_phrases: [] },
@@ -37,6 +39,7 @@ const emptyConfig: AppConfig = {
     end_hour: 18,
     work_days: ["Mon", "Tue", "Wed", "Thu", "Fri"],
   },
+  on_call: { tag_ids: [] },
 };
 
 // normalize defends against backends that omit (or rename) sub-objects so a
@@ -53,7 +56,11 @@ function normalize(c: Partial<AppConfig> | null | undefined): AppConfig {
         c?.tracking?.tag_block_granularity_min ??
         emptyConfig.tracking.tag_block_granularity_min,
     },
-    personio: { tenant: c?.personio?.tenant ?? "" },
+    personio: {
+      tenant: c?.personio?.tenant ?? "",
+      auto_relogin:
+        c?.personio?.auto_relogin ?? emptyConfig.personio.auto_relogin,
+    },
     entra: {
       client_id: c?.entra?.client_id ?? "",
       tenant_id: c?.entra?.tenant_id ?? "",
@@ -78,6 +85,7 @@ function normalize(c: Partial<AppConfig> | null | undefined): AppConfig {
       work_days:
         c?.work_schedule?.work_days ?? emptyConfig.work_schedule.work_days,
     },
+    on_call: { tag_ids: c?.on_call?.tag_ids ?? [] },
   };
 }
 
@@ -85,6 +93,7 @@ export default function Settings() {
   const [config, setConfig] = useState<AppConfig>(emptyConfig);
   const [status, setStatus] = useState<PersonioStatus | null>(null);
   const [entraStatus, setEntraStatus] = useState<EntraStatus | null>(null);
+  const [tags, setTags] = useState<Tag[]>([]);
   const [saving, setSaving] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
   const [entraLoggingIn, setEntraLoggingIn] = useState(false);
@@ -93,15 +102,22 @@ export default function Settings() {
 
   async function refresh() {
     try {
-      const [c, s, es] = await Promise.all([
+      const [c, s, es, ts] = await Promise.all([
         api.getConfig(),
         api.personioStatus(),
         api.entraStatus(),
+        api.listTags(),
       ]);
-      log.debug("settings: loaded", { config: c, status: s, entra: es });
+      log.debug("settings: loaded", {
+        config: c,
+        status: s,
+        entra: es,
+        tag_count: ts?.length ?? 0,
+      });
       setConfig(normalize(c as Partial<AppConfig>));
       setStatus(s);
       setEntraStatus(es);
+      setTags(ts ?? []);
     } catch (e) {
       log.error("settings: refresh failed", { err: String(e) });
       setError(String(e));
@@ -572,6 +588,29 @@ export default function Settings() {
           />
         </Field>
 
+        <label className="flex items-start gap-3 text-sm text-slate-300">
+          <input
+            type="checkbox"
+            checked={config.personio.auto_relogin}
+            onChange={(e) =>
+              update("personio", {
+                ...config.personio,
+                auto_relogin: e.target.checked,
+              })
+            }
+            className="mt-0.5 h-4 w-4"
+          />
+          <span className="flex flex-col">
+            <span>Automatisch neu anmelden, wenn die Session abläuft</span>
+            <span className="text-[11px] text-slate-500">
+              Öffnet bei der nächsten Session-Prüfung automatisch das
+              Chrome-Login-Fenster, sobald die gespeicherten Cookies ungültig
+              werden. Unabhängig hiervon können Plugins jederzeit eine Session
+              anfordern und einen Login auslösen.
+            </span>
+          </span>
+        </label>
+
         <div className="rounded bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
           {status?.has_session ? (
             <>
@@ -735,6 +774,33 @@ export default function Settings() {
           PRT-SSO und der Flow läuft promptlos durch. Folgestarts holen das
           Token still aus dem DPAPI-verschlüsselten lokalen Cache.
         </p>
+      </section>
+
+      {/* On-call section ------------------------------------------------ */}
+      <section className="space-y-3 rounded bg-surface p-4">
+        <h3 className="text-sm font-semibold text-slate-200">Rufbereitschaft</h3>
+        <p className="text-[11px] text-slate-500">
+          Tags, deren Blöcke außerhalb der Arbeitszeit als Rufbereitschaft
+          dokumentiert werden. Untergeordnete Tags zählen automatisch mit —
+          es genügt, den Root-Tag auszuwählen. Ohne Auswahl bleibt die
+          Rufbereitschafts-Funktion deaktiviert.
+        </p>
+        <Field
+          label="Rufbereitschafts-Tags"
+          help="Mehrfachauswahl. Über das Suchfeld können Tag-Namen oder Branch-Pfade (z. B. „rufbereitschaft/applikation-x“) gefiltert werden."
+        >
+          <TagMultiSelect
+            tags={tags}
+            selected={config.on_call.tag_ids}
+            onChange={(next) => update("on_call", { tag_ids: next })}
+          />
+        </Field>
+        {config.on_call.tag_ids.length === 0 && (
+          <div className="rounded bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
+            Keine Tags ausgewählt — Rufbereitschafts-Dokumentation ist
+            deaktiviert.
+          </div>
+        )}
       </section>
 
       <div className="flex justify-end">
