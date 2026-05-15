@@ -367,6 +367,42 @@ func TestWorkSchedule_LoadNormalises(t *testing.T) {
 	}
 }
 
+func TestValidate_OnCallTagIDs(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		ids     []int64
+		wantErr bool
+	}{
+		{"nil — feature off", nil, false},
+		{"empty — feature off", []int64{}, false},
+		{"positive ids ok", []int64{1, 42, 7}, false},
+		{"zero rejected", []int64{1, 0, 3}, true},
+		{"negative rejected", []int64{-5}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Default()
+			c.OnCall.TagIDs = tc.ids
+			err := c.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatal("expected validation error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+		})
+	}
+}
+
+func TestDefault_PersonioAutoReloginIsFalse(t *testing.T) {
+	t.Parallel()
+	c := Default()
+	if c.Personio.AutoRelogin {
+		t.Fatal("default Personio.AutoRelogin should be false — opt-in only")
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

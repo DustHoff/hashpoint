@@ -104,6 +104,12 @@ export interface TrackingConfig {
 
 export interface PersonioConfig {
   tenant: string;
+  // When true, the periodic session probe (PersonioCheck) will trigger an
+  // interactive CDP login as soon as it detects an expired session. When
+  // false, the user has to launch the login manually from the badge.
+  // Plugin-initiated session requests (RequestPersonioSession) always
+  // trigger a login regardless of this flag.
+  auto_relogin: boolean;
 }
 
 export interface EntraConfig {
@@ -132,6 +138,14 @@ export interface WorkScheduleConfig {
   work_days: WorkDay[];
 }
 
+// On-call ("Rufbereitschaft") feature configuration. TagIDs lists the
+// root tags whose blocks (including their descendants) are eligible for
+// auto-generated on-call documentation when they fall into off-hours.
+// Empty list = feature dormant.
+export interface OnCallConfig {
+  tag_ids: number[];
+}
+
 export interface AppConfig {
   tracking: TrackingConfig;
   personio: PersonioConfig;
@@ -139,6 +153,7 @@ export interface AppConfig {
   quick_tag: QuickTagConfig;
   communication: CommunicationConfig;
   work_schedule: WorkScheduleConfig;
+  on_call: OnCallConfig;
 }
 
 export interface QuickTagSlot {

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dusthoff/hashpoint/internal/config"
@@ -41,6 +42,12 @@ type personioSessionSource struct {
 	validateFn func(ctx context.Context, sess *personio.Session) error
 
 	mu sync.Mutex
+	// autoReloginInFlight gates the host-side periodic probe so the
+	// minute-tick PersonioCheck does not fan out a fresh CDP login every
+	// minute while a previous attempt is still waiting for the user.
+	// Plugin-driven EnsureSession callers always go through mu directly
+	// and ignore this flag.
+	autoReloginInFlight atomic.Bool
 }
 
 // newPersonioSessionSource constructs the source with production-default
@@ -119,6 +126,35 @@ func (p *personioSessionSource) EnsureSession(ctx context.Context) (pluginhost.P
 		"app_host", res.Session.AppHost,
 		"employee_id", res.Session.EmployeeID)
 	return personioViewFrom(res.Session), nil
+}
+
+// TriggerAutoRelogin asynchronously runs EnsureSession to refresh a stale
+// session. Returns immediately. A no-op when:
+//   - the source is unconfigured,
+//   - an auto-relogin is already in flight (CAS-guarded),
+//   - the tenant is unset.
+//
+// Detached from the caller's context (background ctx) so the periodic
+// probe's short-lived ctx cannot cancel a five-minute Chrome window.
+// Logs the outcome at Info/Warn — there is no error channel back to the
+// caller by design (this is fire-and-forget housekeeping).
+func (p *personioSessionSource) TriggerAutoRelogin() {
+	if p == nil || p.sessions == nil || p.tenant == nil {
+		return
+	}
+	if !p.autoReloginInFlight.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer p.autoReloginInFlight.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), personioReauthTimeout)
+		defer cancel()
+		if _, err := p.EnsureSession(ctx); err != nil {
+			p.logger.Warn("personio auto-relogin: failed", "err", err)
+			return
+		}
+		p.logger.Info("personio auto-relogin: succeeded")
+	}()
 }
 
 // personioViewFrom projects a personio.Session onto the host-side
