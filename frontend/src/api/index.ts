@@ -184,6 +184,11 @@ export const api = {
     bridge().PluginSetEnabled(name, enabled) as Promise<void>,
   pluginReload: (name: string) =>
     bridge().PluginReload(name) as Promise<void>,
+  // Asks the host to re-pull the named plugin's tag catalogue via the
+  // tag_provider capability. Returns the count of newly-created tags
+  // (existing paths are no-ops per the user-tag-wins rule).
+  pluginRefreshTags: (name: string) =>
+    bridge().PluginRefreshTags(name) as Promise<number>,
   pluginListAvailable: () =>
     bridge().PluginListAvailable() as Promise<AvailablePluginEntry[] | null>,
   pluginInstall: (sourcePlugin: string, name: string) =>

@@ -168,3 +168,149 @@ func TestTagRepo_EnsureByPath_RejectsEmpty(t *testing.T) {
 		}
 	}
 }
+
+func TestTagRepo_EnsureByPathWithMetadata_FirstCreateAppliesMeta(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := OpenInMemory(ctx)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	repo := NewTagRepo(db)
+
+	leaf, created, err := repo.EnsureByPathWithMetadata(ctx, "jira/PROJ-123", TagMetadata{
+		Description: "Customer onboarding",
+		Color:       "#7c3aed",
+	})
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if !created {
+		t.Fatal("expected createdLeaf=true on first import")
+	}
+	if leaf.Description == nil || *leaf.Description != "Customer onboarding" {
+		t.Errorf("description = %v, want %q", leaf.Description, "Customer onboarding")
+	}
+	if leaf.Color == nil || *leaf.Color != "#7c3aed" {
+		t.Errorf("color = %v, want %q", leaf.Color, "#7c3aed")
+	}
+}
+
+func TestTagRepo_EnsureByPathWithMetadata_ExistingLeafNotModified(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := OpenInMemory(ctx)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	repo := NewTagRepo(db)
+
+	// User manually creates the leaf with their own description first.
+	parent := &Tag{Name: "#jira"}
+	if err := repo.Create(ctx, parent); err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	userLeaf := &Tag{
+		Name:        "#proj123",
+		ParentID:    ptr(parent.ID),
+		Description: ptr("User-written notes"),
+		Color:       ptr("#ff0000"),
+	}
+	if err := repo.Create(ctx, userLeaf); err != nil {
+		t.Fatalf("create user leaf: %v", err)
+	}
+
+	// Plugin imports the same path with different metadata.
+	leaf, created, err := repo.EnsureByPathWithMetadata(ctx, "jira/PROJ-123", TagMetadata{
+		Description: "Plugin description",
+		Color:       "#00ff00",
+	})
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if created {
+		t.Fatal("expected createdLeaf=false when leaf already exists")
+	}
+	if leaf.Description == nil || *leaf.Description != "User-written notes" {
+		t.Errorf("user description was overwritten: got %v", leaf.Description)
+	}
+	if leaf.Color == nil || *leaf.Color != "#ff0000" {
+		t.Errorf("user color was overwritten: got %v", leaf.Color)
+	}
+	if leaf.ID != userLeaf.ID {
+		t.Errorf("leaf id changed (got %d, want %d) — should reuse the existing row", leaf.ID, userLeaf.ID)
+	}
+}
+
+func TestTagRepo_EnsureByPathWithMetadata_IntermediateNodesStayBare(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := OpenInMemory(ctx)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	repo := NewTagRepo(db)
+
+	leaf, _, err := repo.EnsureByPathWithMetadata(ctx, "jira/PROJ-1/task-A", TagMetadata{
+		Description: "leaf only",
+		Color:       "#abcdef",
+	})
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if leaf.Description == nil || *leaf.Description != "leaf only" {
+		t.Errorf("leaf description = %v, want leaf only", leaf.Description)
+	}
+	// Walk up: the two intermediate nodes (jira, proj1) should have no
+	// description / color — metadata is leaf-only.
+	cur := leaf
+	for cur.ParentID != nil {
+		p, err := repo.Get(ctx, *cur.ParentID)
+		if err != nil || p == nil {
+			t.Fatalf("get parent: %v", err)
+		}
+		if p.Description != nil {
+			t.Errorf("intermediate %q got a description (%q) — metadata must stay leaf-only", p.Name, *p.Description)
+		}
+		if p.Color != nil {
+			t.Errorf("intermediate %q got a color (%q) — metadata must stay leaf-only", p.Name, *p.Color)
+		}
+		cur = p
+	}
+}
+
+func TestTagRepo_EnsureByPathWithMetadata_SecondCallIsNoop(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := OpenInMemory(ctx)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	repo := NewTagRepo(db)
+
+	_, created1, err := repo.EnsureByPathWithMetadata(ctx, "jira/PROJ-9", TagMetadata{
+		Description: "first",
+	})
+	if err != nil {
+		t.Fatalf("ensure 1: %v", err)
+	}
+	if !created1 {
+		t.Fatal("first call should report created=true")
+	}
+	leaf2, created2, err := repo.EnsureByPathWithMetadata(ctx, "jira/PROJ-9", TagMetadata{
+		Description: "second — must be ignored",
+	})
+	if err != nil {
+		t.Fatalf("ensure 2: %v", err)
+	}
+	if created2 {
+		t.Fatal("second call should report created=false")
+	}
+	if leaf2.Description == nil || *leaf2.Description != "first" {
+		t.Errorf("description changed on the second call: got %v, want %q", leaf2.Description, "first")
+	}
+}

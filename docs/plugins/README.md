@@ -4,7 +4,7 @@ Hashpoint plugins are separate executables that the host (Hashpoint itself)
 launches as subprocesses. Communication is over `net/rpc`, multiplexed via
 [hashicorp/go-plugin][hcl], so a plugin crash never crashes the host.
 
-Four capabilities are defined today:
+Five capabilities are defined today:
 
 - **`oncall_documentation`** — receives filled-out off-duty docs from the
   user (solution / impacted application / incident type) and pushes them
@@ -26,6 +26,15 @@ Four capabilities are defined today:
   matching rule for the focused (or comm-track) process, the host asks
   the plugin which tag to apply, then opens an auto-tag-block. User
   rules always win — the plugin sits behind them as a fallback.
+- **`tag_provider`** — supplies tags the host should know about
+  (Personio projects, Jira tickets, Outlook categories, …). The host
+  pulls `ListTags()` at plugin launch / `Configure` / on the user's
+  "Tags neu laden" click; the plugin may also push at any time via
+  `HostAPI.PublishTags`. Imported paths are merged via `EnsureByPath`
+  — existing tags are never modified (user-tag wins). Two HostAPI
+  methods come with this capability: `ListTags` (universal) lets any
+  plugin read the host's tag set, `PublishTags` (gated) is what
+  `tag_provider` plugins use to push.
 
 Beyond the capability surface, every plugin also gets a small reverse-RPC
 **HostAPI** for talking back into the host: redeeming secret handles,
@@ -45,6 +54,7 @@ Read on for:
 - [On-call documentation capability spec](capability-oncall-documentation.md)
 - [Off-hours provider capability spec](capability-off-hours-provider.md)
 - [Process auto-tag capability spec](capability-process-autotag.md)
+- [Tag provider capability spec](capability-tag-provider.md)
 
 ---
 
@@ -216,9 +226,10 @@ plugin cannot uninstall itself.
 
 ## Future capabilities
 
-`oncall_documentation`, `off_hours_provider`, `plugin_management`, and
-`process_autotag` are the capabilities defined today. Adding new ones
-is a small SDK change: a new interface, a new wire-protocol service, an
-entry in the host's plugin set. See [`api.md`](api.md) for the pattern.
+`oncall_documentation`, `off_hours_provider`, `plugin_management`,
+`process_autotag`, and `tag_provider` are the capabilities defined
+today. Adding new ones is a small SDK change: a new interface, a new
+wire-protocol service, an entry in the host's plugin set. See
+[`api.md`](api.md) for the pattern.
 
 [hcl]: https://github.com/hashicorp/go-plugin

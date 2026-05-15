@@ -119,24 +119,45 @@ func (r *TagRepo) List(ctx context.Context) ([]Tag, error) {
 // the contract. The walk runs in a single transaction so that two
 // concurrent callers cannot race and double-create the same node.
 func (r *TagRepo) EnsureByPath(ctx context.Context, path string) (*Tag, error) {
+	leaf, _, err := r.ensureByPath(ctx, path, TagMetadata{})
+	return leaf, err
+}
+
+// EnsureByPathWithMetadata is like EnsureByPath but persists Description
+// and Color on the leaf when this call is the one that creates it.
+// Intermediate nodes are always created bare even on a metadata import;
+// only the user-named leaf gets the plugin's hint values.
+func (r *TagRepo) EnsureByPathWithMetadata(ctx context.Context, path string, meta TagMetadata) (*Tag, bool, error) {
+	return r.ensureByPath(ctx, path, meta)
+}
+
+// ensureByPath is the shared implementation. leafMeta is applied to the
+// leaf row when (and only when) this call creates the leaf. Returns
+// (leaf, createdLeaf, err).
+func (r *TagRepo) ensureByPath(ctx context.Context, path string, leafMeta TagMetadata) (*Tag, bool, error) {
 	segments, err := normalizeTagPath(path)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("begin: %w", err)
+		return nil, false, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	const findChild = `SELECT ` + tagColumns + ` FROM tags
 		WHERE name = ? COLLATE NOCASE
 		  AND ((? IS NULL AND parent_id IS NULL) OR parent_id = ?)`
-	const insertChild = `INSERT INTO tags (parent_id, name) VALUES (?, ?)`
+	const insertChildBare = `INSERT INTO tags (parent_id, name) VALUES (?, ?)`
+	const insertLeafWithMeta = `INSERT INTO tags (parent_id, name, description, color) VALUES (?, ?, ?, ?)`
 	const fetchByID = `SELECT ` + tagColumns + ` FROM tags WHERE id = ?`
 
-	var current *Tag
-	for _, seg := range segments {
+	var (
+		current     *Tag
+		createdLeaf bool
+	)
+	for i, seg := range segments {
+		isLeaf := i == len(segments)-1
 		var parentArg interface{}
 		if current != nil {
 			parentArg = current.ID
@@ -144,7 +165,7 @@ func (r *TagRepo) EnsureByPath(ctx context.Context, path string) (*Tag, error) {
 		row := tx.QueryRowContext(ctx, findChild, seg, parentArg, parentArg)
 		t, err := scanTag(row)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("lookup segment %q: %w", seg, err)
+			return nil, false, fmt.Errorf("lookup segment %q: %w", seg, err)
 		}
 		if t != nil {
 			current = t
@@ -155,27 +176,48 @@ func (r *TagRepo) EnsureByPath(ctx context.Context, path string) (*Tag, error) {
 		if current != nil {
 			parentInsert = current.ID
 		}
-		res, err := tx.ExecContext(ctx, insertChild, parentInsert, seg)
+		var res sql.Result
+		if isLeaf && (leafMeta.Description != "" || leafMeta.Color != "") {
+			res, err = tx.ExecContext(ctx, insertLeafWithMeta,
+				parentInsert, seg,
+				nullableStringPtr(stringPtrOrNil(leafMeta.Description)),
+				nullableStringPtr(stringPtrOrNil(leafMeta.Color)),
+			)
+		} else {
+			res, err = tx.ExecContext(ctx, insertChildBare, parentInsert, seg)
+		}
 		if err != nil {
-			return nil, fmt.Errorf("insert segment %q: %w", seg, err)
+			return nil, false, fmt.Errorf("insert segment %q: %w", seg, err)
 		}
 		id, err := res.LastInsertId()
 		if err != nil {
-			return nil, fmt.Errorf("inserted id: %w", err)
+			return nil, false, fmt.Errorf("inserted id: %w", err)
 		}
 		created, err := scanTag(tx.QueryRowContext(ctx, fetchByID, id))
 		if err != nil {
-			return nil, fmt.Errorf("read created tag %d: %w", id, err)
+			return nil, false, fmt.Errorf("read created tag %d: %w", id, err)
 		}
 		current = created
+		if isLeaf {
+			createdLeaf = true
+		}
 	}
 	if current == nil {
-		return nil, ErrInvalidTagPath
+		return nil, false, ErrInvalidTagPath
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit: %w", err)
+		return nil, false, fmt.Errorf("commit: %w", err)
 	}
-	return current, nil
+	return current, createdLeaf, nil
+}
+
+// stringPtrOrNil returns &s when s is non-empty, nil otherwise — a tiny
+// helper to keep the nil-vs-pointer dance out of the call sites above.
+func stringPtrOrNil(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // normalizeTagPath splits path on "/" and reduces each segment to the

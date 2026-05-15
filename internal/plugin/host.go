@@ -127,6 +127,18 @@ type HostDeps struct {
 	// HostAPI.RequestPersonioSession always returns
 	// sdk.ErrPersonioNotAvailable.
 	PersonioSource func() PersonioSessionSource
+	// TagSource returns the host's read-only tag projection so plugins
+	// can consult the current tag set via HostAPI.ListTags. The bound
+	// API invokes this on every call so a fresh import is visible
+	// without a plugin reload. Nil ⇒ ListTags returns an empty slice.
+	TagSource func() TagSource
+	// TagSink absorbs PublishTags calls from CapTagProvider plugins
+	// AND the host-driven pull at plugin launch. The implementation
+	// (App layer) translates each ImportedTagView to an
+	// EnsureByPathWithMetadata call. Nil ⇒ tag imports silently
+	// short-circuit to "no tags created" both at pull-on-start and
+	// from PublishTags.
+	TagSink func() TagSink
 }
 
 const (
@@ -198,6 +210,7 @@ type pluginInstance struct {
 	offHours       sdk.OffHoursProviderHandler
 	mgmt           sdk.PluginManagementHandler
 	processAutoTag sdk.ProcessAutoTagHandler
+	tagProvider    sdk.TagProviderHandler
 	// autoTagNames is the lower-cased set of executable basenames the
 	// processAutoTag handler has declared interest in. Populated at
 	// launch (and cleared on Stop/Reload); a nil/empty set keeps the
@@ -501,6 +514,101 @@ func (h *Host) ResolveProcessAutoTag(ctx context.Context, processName, windowTit
 	return nil
 }
 
+// pullTagsFromHandler fetches the plugin's catalogue and feeds it
+// through the configured tag sink. Used both at plugin launch (eager
+// import so the UI is populated by the time the user opens the Tags
+// tab) and from RefreshPluginTags (user-triggered re-import). The
+// call is best-effort: any RPC, conversion, or sink error is logged
+// at Warn but does not affect the plugin's state — the user can
+// re-trigger.
+//
+// Returns the number of tags the sink actually created (existing
+// paths are no-ops), so the UI can show a meaningful toast.
+func (h *Host) pullTagsFromHandler(ctx context.Context, name string, handler sdk.TagProviderHandler) int {
+	tags, err := handler.ListTags(ctx)
+	if err != nil {
+		h.log.Warn("tag_provider ListTags failed",
+			"plugin", name, "err", err)
+		return 0
+	}
+	if len(tags) == 0 {
+		return 0
+	}
+	if h.deps.TagSink == nil {
+		h.log.Debug("tag_provider import skipped — no sink wired",
+			"plugin", name, "tag_count", len(tags))
+		return 0
+	}
+	sink := h.deps.TagSink()
+	if sink == nil {
+		h.log.Debug("tag_provider import skipped — sink unavailable",
+			"plugin", name, "tag_count", len(tags))
+		return 0
+	}
+	views := make([]ImportedTagView, 0, len(tags))
+	for _, t := range tags {
+		views = append(views, ImportedTagView{
+			Path:        t.Path,
+			Description: t.Description,
+			Color:       t.Color,
+		})
+	}
+	created, err := sink.Publish(ctx, name, views)
+	if err != nil {
+		h.log.Warn("tag_provider import: sink failed",
+			"plugin", name, "err", err)
+		return 0
+	}
+	h.log.Info("tag_provider import completed",
+		"plugin", name, "submitted", len(views), "created", created)
+	return created
+}
+
+// RefreshPluginTags re-pulls the named plugin's tag catalogue and
+// merges it into the host store. Returns the number of new tags
+// actually created (existing paths are no-ops). Errors are returned
+// to the caller so the UI can surface them; an unknown / stopped /
+// non-tag_provider plugin produces a clear error rather than a silent
+// no-op.
+func (h *Host) RefreshPluginTags(ctx context.Context, name string) (int, error) {
+	h.mu.RLock()
+	p, ok := h.plugins[name]
+	if !ok {
+		h.mu.RUnlock()
+		return 0, fmt.Errorf("plugin %q not found", name)
+	}
+	if p.state != StateRunning {
+		h.mu.RUnlock()
+		return 0, fmt.Errorf("plugin %q not running (state=%s)", name, p.state)
+	}
+	if p.tagProvider == nil {
+		h.mu.RUnlock()
+		return 0, fmt.Errorf("plugin %q does not advertise tag_provider", name)
+	}
+	handler := p.tagProvider
+	h.mu.RUnlock()
+	return h.pullTagsFromHandler(ctx, name, handler), nil
+}
+
+// manifestAdvertises reports whether the manifest declares the given
+// capability. The manifest is the source of truth for "what is this
+// plugin allowed to do" at boot, even before the runtime Metadata()
+// reply has been observed — that lets us gate HostAPI methods on the
+// caller's identity during the very first plugin RPC (Init runs before
+// Metadata in the launch handshake).
+func manifestAdvertises(man *Manifest, cap sdk.Capability) bool {
+	if man == nil {
+		return false
+	}
+	target := string(cap)
+	for _, c := range man.Capabilities {
+		if c == target {
+			return true
+		}
+	}
+	return false
+}
+
 // normalizeAutoTagNames builds the lookup set the resolver hot path
 // consults. Each entry is trimmed and lower-cased; empties are dropped.
 // Duplicate entries collapse silently.
@@ -667,6 +775,9 @@ func (h *Host) launch(ctx context.Context, name string) error {
 		settings:       h.deps.Settings,
 		entraSource:    h.deps.EntraSource,
 		personioSource: h.deps.PersonioSource,
+		tagSource:      h.deps.TagSource,
+		tagSink:        h.deps.TagSink,
+		hasTagProvider: manifestAdvertises(man, sdk.CapTagProvider),
 	}
 	if err := core.Init(ctx, api); err != nil {
 		client.Kill()
@@ -778,6 +889,25 @@ func (h *Host) launch(ctx context.Context, name string) error {
 				continue
 			}
 			inst.autoTagNames = normalizeAutoTagNames(names)
+		case sdk.CapTagProvider:
+			raw, err := rpcClient.Dispense(sdk.TagProviderKey)
+			if err != nil {
+				h.log.Warn("dispense tag_provider handler failed — capability disabled",
+					"plugin", name, "err", err)
+				continue
+			}
+			handler, ok := raw.(sdk.TagProviderHandler)
+			if !ok {
+				h.log.Warn("tag_provider handler: unexpected type",
+					"plugin", name, "type", fmt.Sprintf("%T", raw))
+				continue
+			}
+			inst.tagProvider = handler
+			// Pull the plugin's catalogue eagerly so a freshly-launched
+			// plugin contributes tags before the UI is rendered. A
+			// failure here leaves the handler dispensed; the user can
+			// retry via the "Tags neu laden" action.
+			h.pullTagsFromHandler(ctx, name, handler)
 		default:
 			h.log.Debug("plugin advertised unknown capability — ignoring",
 				"plugin", name, "capability", c)
@@ -844,6 +974,7 @@ func (h *Host) watchExit(name string, cli clientHandle) {
 			p.mgmt = nil
 			p.processAutoTag = nil
 			p.autoTagNames = nil
+			p.tagProvider = nil
 			info := p.info()
 			h.mu.Unlock()
 			h.handles.revokeFor(name)

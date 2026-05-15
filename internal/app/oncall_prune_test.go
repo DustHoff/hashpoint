@@ -48,6 +48,9 @@ func (r *stubTagRepo) Children(context.Context, int64) ([]storage.Tag, error) {
 func (r *stubTagRepo) EnsureByPath(context.Context, string) (*storage.Tag, error) {
 	panic("not used")
 }
+func (r *stubTagRepo) EnsureByPathWithMetadata(context.Context, string, storage.TagMetadata) (*storage.Tag, bool, error) {
+	panic("not used")
+}
 
 func TestDeleteTag_PrunesOnCallTagIDs(t *testing.T) {
 	t.Parallel()

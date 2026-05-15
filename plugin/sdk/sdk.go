@@ -88,6 +88,7 @@ const (
 	pluginKeyOffHours       = "off_hours_provider"
 	pluginKeyMgmt           = "plugin_management"
 	pluginKeyProcessAutoTag = "process_autotag"
+	pluginKeyTagProvider    = "tag_provider"
 )
 
 // Capability is the string each plugin advertises in Metadata.Capabilities
@@ -127,6 +128,16 @@ const (
 	// as working-hours even though WorkScheduleConfig would otherwise
 	// classify them as off-hours.
 	CapOffHoursProvider Capability = "off_hours_provider"
+
+	// CapTagProvider is advertised by plugins that implement
+	// TagProviderHandler. The host pulls ListTags() at plugin start, on
+	// each Configure(), and on demand from the UI ("Tags neu laden").
+	// Plugins may additionally push imports via HostAPI.PublishTags. The
+	// host merges every imported path through EnsureByPath: existing
+	// nodes are left untouched (user-tag wins); only paths the host has
+	// never seen are created. Description / Color are honoured only on
+	// first create — subsequent imports of the same path are no-ops.
+	CapTagProvider Capability = "tag_provider"
 )
 
 // FieldType identifies the input element AND the persistence strategy
@@ -274,6 +285,25 @@ type HostAPI interface {
 	// 401/403 from Personio rather than caching the session struct
 	// across long idle periods.
 	RequestPersonioSession(ctx context.Context) (PersonioSession, error)
+
+	// ListTags returns the host's current tag set as a flat slice with
+	// parent IDs. Available to every plugin regardless of capability —
+	// a process_autotag plugin can use it to check whether its target
+	// tag already exists before suggesting an EnsureByPath that would
+	// create it, and a tag_provider plugin can use it to compute a diff
+	// against its own catalogue before deciding what to publish. The
+	// projection deliberately omits Personio identifiers and sync flags;
+	// plugins do not need them.
+	ListTags(ctx context.Context) ([]HostTag, error)
+
+	// PublishTags merges the supplied tags into the host's tag store.
+	// Restricted to plugins that advertise CapTagProvider — other
+	// plugins see ErrPublishTagsNotAllowed. Returns the number of tags
+	// the host actually created (i.e. paths that did not already
+	// exist); existing paths are left untouched per the user-tag-wins
+	// rule. Idempotent: calling with the same list twice in a row
+	// reports 0 the second time.
+	PublishTags(ctx context.Context, tags []ImportedTag) (created int, err error)
 }
 
 // Plugin is the base interface every plugin must implement. The host
@@ -515,6 +545,44 @@ type OffHoursProviderHandler interface {
 	OffHours(ctx context.Context, req OffHoursRequest) ([]OffHoursInterval, error)
 }
 
+// ImportedTag is one entry in a tag_provider plugin's response. Path
+// is slash-separated, e.g. "jira/PROJ-123" — the host normalises each
+// segment via the same rules EnsureByPath uses (strip leading "#",
+// drop non-alphanumeric characters, re-prefix "#"), so case-sensitive
+// duplicates ("alpha", "Alpha") merge into one canonical node.
+//
+// Description and Color are honoured ONLY when the leaf segment did
+// not previously exist. An existing tag — whether the user created it
+// or a previous plugin import did — is never modified.
+type ImportedTag struct {
+	Path        string
+	Description string
+	Color       string
+}
+
+// HostTag is the read-only projection HostAPI.ListTags returns. Fields
+// are the host's bare-minimum tag identity — name plus parent chain —
+// without exposing Personio-specific identifiers or sync settings.
+type HostTag struct {
+	ID       int64
+	Name     string
+	ParentID int64 // 0 when the tag is a root.
+	Color    string
+}
+
+// TagProviderHandler is implemented by plugins advertising
+// CapTagProvider. The host calls ListTags pull-based at plugin start,
+// on each Configure(), and from the UI on user request. Plugins may
+// additionally push via HostAPI.PublishTags whenever an external
+// source they wrap has changed.
+//
+// ListTags MUST be idempotent: returning the same path list twice in
+// a row is a no-op on the second pass. Returning an error is logged
+// at Warn and skips the import for that round.
+type TagProviderHandler interface {
+	ListTags(ctx context.Context) ([]ImportedTag, error)
+}
+
 // PersonioSession is the read-only snapshot HostAPI.RequestPersonioSession
 // returns. It carries the same material Hashpoint itself uses to talk to
 // the internal UI API: AppHost (per-tenant SPA host), the URL-decoded
@@ -596,6 +664,13 @@ var (
 	// skip their Personio-touching code path or surface a
 	// Log("warn", …) hint.
 	ErrPersonioNotAvailable = errors.New("plugin: personio session not available")
+
+	// ErrPublishTagsNotAllowed is returned by HostAPI.PublishTags when
+	// the calling plugin does not advertise CapTagProvider. Treat as a
+	// programming error in the plugin's manifest — publishing requires
+	// the capability declaration so the host can track which plugins
+	// are allowed to add tags.
+	ErrPublishTagsNotAllowed = errors.New("plugin: publish_tags requires tag_provider capability")
 )
 
 // Serve is the entry point a plugin's main() calls. It blocks until the
@@ -633,6 +708,9 @@ func PluginMap(impl Plugin) hplugin.PluginSet {
 	if h, ok := impl.(ProcessAutoTagHandler); ok {
 		set[pluginKeyProcessAutoTag] = &processAutoTagPluginAdapter{impl: h}
 	}
+	if h, ok := impl.(TagProviderHandler); ok {
+		set[pluginKeyTagProvider] = &tagProviderPluginAdapter{impl: h}
+	}
 	return set
 }
 
@@ -646,15 +724,18 @@ func HostSidePluginMap() hplugin.PluginSet {
 		pluginKeyOffHours:       &offHoursPluginAdapter{},
 		pluginKeyMgmt:           &mgmtPluginAdapter{},
 		pluginKeyProcessAutoTag: &processAutoTagPluginAdapter{},
+		pluginKeyTagProvider:    &tagProviderPluginAdapter{},
 	}
 }
 
-// CoreKey, OnCallKey, OffHoursKey, MgmtKey, and ProcessAutoTagKey export
-// the plugin-set keys so the host can Dispense() the right service.
+// CoreKey, OnCallKey, OffHoursKey, MgmtKey, ProcessAutoTagKey, and
+// TagProviderKey export the plugin-set keys so the host can Dispense()
+// the right service.
 const (
 	CoreKey           = pluginKeyCore
 	OnCallKey         = pluginKeyOnCall
 	OffHoursKey       = pluginKeyOffHours
 	MgmtKey           = pluginKeyMgmt
 	ProcessAutoTagKey = pluginKeyProcessAutoTag
+	TagProviderKey    = pluginKeyTagProvider
 )

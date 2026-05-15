@@ -57,6 +57,44 @@ type PersonioSessionSource interface {
 	EnsureSession(ctx context.Context) (PersonioSessionView, error)
 }
 
+// TagView is the host-side projection of one tag. Mirrors sdk.HostTag
+// so the App layer can populate it without importing the SDK.
+type TagView struct {
+	ID       int64
+	Name     string
+	ParentID int64
+	Color    string
+}
+
+// TagSource is the narrow read-surface boundHostAPI needs to serve
+// HostAPI.ListTags. The App-layer implementation projects the tags
+// table to TagView (dropping Personio identifiers and sync flags) so
+// plugins never see fields they have no business with. Available to
+// every plugin regardless of capability.
+type TagSource interface {
+	List(ctx context.Context) ([]TagView, error)
+}
+
+// TagSink is the narrow write-surface boundHostAPI needs to serve
+// HostAPI.PublishTags. The App-layer implementation calls into
+// TagRepository.EnsureByPathWithMetadata for each entry; the bound
+// API is responsible for the capability gate (only tag_provider
+// plugins may publish). Returns the number of tags actually created
+// (existing paths are no-ops).
+type TagSink interface {
+	Publish(ctx context.Context, pluginName string, tags []ImportedTagView) (int, error)
+}
+
+// ImportedTagView mirrors sdk.ImportedTag one-for-one — same fields,
+// same semantics — but lives in internal/plugin so the App-layer
+// adapter doesn't need an sdk import. The host translates between
+// sdk.ImportedTag and ImportedTagView at the RPC boundary.
+type ImportedTagView struct {
+	Path        string
+	Description string
+	Color       string
+}
+
 // boundHostAPI is the host-side sdk.HostAPI implementation handed to a
 // single plugin via Plugin.Init. It is "bound" to the plugin's name so
 // secret redemption refuses handles minted for a different plugin —
@@ -77,6 +115,20 @@ type boundHostAPI struct {
 	// Personio. Invoked on every RequestPersonioSession call so a
 	// freshly-configured tenant takes effect without a plugin reload.
 	personioSource func() PersonioSessionSource
+	// tagSource returns the host's tag-read projection. Nil ⇒
+	// ListTags returns an empty slice (no tags configured / feature
+	// dormant). Invoked on every ListTags call so a freshly-imported
+	// set takes effect without restart.
+	tagSource func() TagSource
+	// tagSink merges tag_provider-driven imports into the host store.
+	// Nil ⇒ PublishTags returns sdk.ErrPublishTagsNotAllowed even for
+	// well-capable plugins (host not wired for tag imports).
+	tagSink func() TagSink
+	// hasTagProvider gates PublishTags against the calling plugin's
+	// own capability set. The bound API is the only place that
+	// knows the caller — pluginInstance state lives behind the host
+	// mutex which we deliberately do NOT take on every RPC.
+	hasTagProvider bool
 }
 
 // RedeemSecret resolves the handle to (plugin, key), confirms the plugin
@@ -197,6 +249,85 @@ func (a *boundHostAPI) RequestPersonioSession(ctx context.Context) (sdk.Personio
 		}
 	}
 	return out, nil
+}
+
+// ListTags returns the host's current tag set projected to sdk.HostTag.
+// Available to every plugin regardless of capability — a process_autotag
+// plugin can use it to check whether its target tag already exists
+// before suggesting an EnsureByPath, and a tag_provider plugin can use
+// it to compute a diff against its own catalogue before publishing.
+//
+// Returns an empty slice (never nil) when no tag source is wired or the
+// source itself reports no tags. Any source error is logged at Warn and
+// surfaced verbatim — plugins SHOULD treat a transient failure as "no
+// information" and retry on their normal cadence.
+func (a *boundHostAPI) ListTags(ctx context.Context) ([]sdk.HostTag, error) {
+	if a.tagSource == nil {
+		return []sdk.HostTag{}, nil
+	}
+	src := a.tagSource()
+	if src == nil {
+		return []sdk.HostTag{}, nil
+	}
+	views, err := src.List(ctx)
+	if err != nil {
+		a.log.Warn("plugin list_tags: source failed",
+			"plugin", a.pluginName, "err", err)
+		return nil, fmt.Errorf("list tags: %w", err)
+	}
+	out := make([]sdk.HostTag, 0, len(views))
+	for _, v := range views {
+		out = append(out, sdk.HostTag{
+			ID:       v.ID,
+			Name:     v.Name,
+			ParentID: v.ParentID,
+			Color:    v.Color,
+		})
+	}
+	return out, nil
+}
+
+// PublishTags merges the supplied tags into the host's tag store.
+// Restricted to plugins that advertise CapTagProvider — other plugins
+// see sdk.ErrPublishTagsNotAllowed without the host even consulting
+// the sink, so a misconfigured plugin manifest fails fast.
+//
+// Returns the number of tags actually created. Existing paths
+// (whether the user or a previous import created them) are no-ops —
+// the user-tag-wins rule is enforced inside the App layer's sink.
+func (a *boundHostAPI) PublishTags(ctx context.Context, tags []sdk.ImportedTag) (int, error) {
+	if !a.hasTagProvider {
+		return 0, fmt.Errorf("%w: plugin %q does not advertise tag_provider", sdk.ErrPublishTagsNotAllowed, a.pluginName)
+	}
+	if a.tagSink == nil {
+		return 0, fmt.Errorf("%w: plugin host not wired for tag imports", sdk.ErrPublishTagsNotAllowed)
+	}
+	sink := a.tagSink()
+	if sink == nil {
+		return 0, fmt.Errorf("%w: tag sink not available", sdk.ErrPublishTagsNotAllowed)
+	}
+	if len(tags) == 0 {
+		return 0, nil
+	}
+	views := make([]ImportedTagView, 0, len(tags))
+	for _, t := range tags {
+		views = append(views, ImportedTagView{
+			Path:        t.Path,
+			Description: t.Description,
+			Color:       t.Color,
+		})
+	}
+	created, err := sink.Publish(ctx, a.pluginName, views)
+	if err != nil {
+		a.log.Warn("plugin publish_tags: sink failed",
+			"plugin", a.pluginName, "err", err)
+		return 0, fmt.Errorf("publish tags: %w", err)
+	}
+	if created > 0 {
+		a.log.Info("plugin published tags",
+			"plugin", a.pluginName, "submitted", len(tags), "created", created)
+	}
+	return created, nil
 }
 
 // Log forwards a structured log line to the host's slog with an attached

@@ -265,6 +265,17 @@ func New(deps Deps) *App {
 			// re-auth flows. Returns nil while no tenant is
 			// configured — plugins then see sdk.ErrPersonioNotAvailable.
 			PersonioSource: a.currentPersonioSessionSource,
+			// Hand running plugins read-access to the host's tag set
+			// via HostAPI.ListTags. The source is universal — every
+			// plugin gets it; the projection drops Personio identifiers
+			// and sync flags so plugins never see internal fields.
+			TagSource: a.currentTagSource,
+			// Accept tag imports from CapTagProvider plugins (both
+			// pull-on-start and HostAPI.PublishTags). The sink
+			// translates each imported path to an
+			// EnsureByPathWithMetadata call so existing tags survive
+			// untouched (user-tag wins).
+			TagSink: a.currentTagSink,
 		})
 	}
 

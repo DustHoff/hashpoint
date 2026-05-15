@@ -241,6 +241,14 @@ function PluginDetailInner({ plugin, onSaved, onError }: PluginDetailProps) {
   // leave the stored secret untouched).
   const [pwTouched, setPwTouched] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
+  // info is the local "success" toast for actions whose result the user
+  // wants to see (e.g. "5 Tags neu importiert"). Cleared on the next
+  // save / restart action; not shared with onError which uses the
+  // parent's banner.
+  const [info, setInfo] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const isTagProvider = plugin.capabilities.includes("tag_provider");
 
   useEffect(() => {
     let cancelled = false;
@@ -352,7 +360,7 @@ function PluginDetailInner({ plugin, onSaved, onError }: PluginDetailProps) {
         </div>
       )}
 
-      <div className="mt-2 flex items-center gap-3">
+      <div className="mt-2 flex flex-wrap items-center gap-3">
         <button
           onClick={save}
           disabled={saving || view === null}
@@ -368,13 +376,45 @@ function PluginDetailInner({ plugin, onSaved, onError }: PluginDetailProps) {
             // the plugin from scratch — exactly what "Neu starten" means
             // both for a crashed plugin (failed → running) and an
             // already-running one (refresh of config + subprocess).
+            setInfo(null);
             void api
               .pluginReload(plugin.name)
               .then(onSaved)
               .catch((e) => onError(String(e)));
           }}
         />
+        {isTagProvider && (
+          <button
+            onClick={() => {
+              setRefreshing(true);
+              setInfo(null);
+              onError(null);
+              api
+                .pluginRefreshTags(plugin.name)
+                .then((created) => {
+                  setInfo(
+                    created === 0
+                      ? "Keine neuen Tags — bestehende Tags wurden nicht überschrieben."
+                      : `${created} neue Tag${created === 1 ? "" : "s"} importiert.`,
+                  );
+                  onSaved();
+                })
+                .catch((e) => onError(String(e)))
+                .finally(() => setRefreshing(false));
+            }}
+            disabled={saving || refreshing || plugin.state !== "running"}
+            className="rounded border border-slate-700 bg-slate-800 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+            title="Pull-Import: das Plugin liefert seinen Tag-Katalog, der Host mergt neue Pfade in die Tag-Hierarchie."
+          >
+            {refreshing ? "Importiere…" : "Tags neu laden"}
+          </button>
+        )}
       </div>
+      {info && (
+        <div className="rounded border border-emerald-700/40 bg-emerald-900/30 px-3 py-2 text-xs text-emerald-200">
+          {info}
+        </div>
+      )}
     </div>
   );
 }

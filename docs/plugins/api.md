@@ -272,6 +272,32 @@ Resolve runs on the orchestrator's hot path. The host applies a tight
 per-call timeout (default 500 ms); slow plugins are dropped for that
 event without aborting other plugins.
 
+### `tag_provider`
+
+```go
+type ImportedTag struct {
+    Path        string // slash-separated, e.g. "jira/PROJ-123"
+    Description string // optional; honoured only on first create
+    Color       string // optional hex (e.g. "#7c3aed"); same rule
+}
+
+type TagProviderHandler interface {
+    ListTags(ctx context.Context) ([]ImportedTag, error)
+}
+```
+
+The host pulls `ListTags` at plugin launch, on `Configure`, and on the
+user's "Tags neu laden" click in the Plugins tab. A plugin may also
+push imports at any time via `HostAPI.PublishTags`.
+
+Each imported path is run through the same normalisation
+`EnsureByPath` uses (strip `#`, drop non-alphanumerics, re-prefix
+`#`). Existing tags are never modified — **user-tag wins** — so an
+imported `Description` / `Color` only takes effect when the leaf
+node did not previously exist. See
+[capability-tag-provider.md](./capability-tag-provider.md) for the
+full merge contract, lifecycle, and conflict examples.
+
 ## HostAPI
 
 The reverse-RPC surface plugins use to talk back to the host:
@@ -282,6 +308,8 @@ type HostAPI interface {
     Log(ctx context.Context, level, message string, fields map[string]string) error
     RequestEntraToken(ctx context.Context, scopes []string) (token string, expiresAt time.Time, err error)
     RequestPersonioSession(ctx context.Context) (PersonioSession, error)
+    ListTags(ctx context.Context) ([]HostTag, error)
+    PublishTags(ctx context.Context, tags []ImportedTag) (created int, err error)
 }
 ```
 
@@ -457,6 +485,55 @@ Security notes:
   documents in `docs/hashpoint-spec.md` §2.5.2; calls that look
   unlike a normal user session risk getting the cookie set flagged
   on the Personio side.
+
+### `ListTags`
+
+```go
+type HostTag struct {
+    ID       int64
+    Name     string
+    ParentID int64 // 0 when the tag is a root
+    Color    string
+}
+
+list, err := host.ListTags(ctx)
+```
+
+Returns the host's current tag set, flat with parent IDs (build the
+tree caller-side). Available to **every plugin** regardless of
+capability — useful e.g. for a `process_autotag` plugin that wants to
+check whether a target tag already exists before suggesting an
+`EnsureByPath` that would create it.
+
+The projection deliberately omits Personio identifiers and
+`sync_to_personio` — plugins do not need those, and exposing them
+would widen the data surface beyond what the capability promises.
+
+### `PublishTags`
+
+```go
+created, err := host.PublishTags(ctx, []sdk.ImportedTag{
+    {Path: "jira/PROJ-123", Description: "Customer onboarding"},
+})
+```
+
+Pushes tags into the host store. Restricted to plugins that
+advertise `CapTagProvider` — others see `ErrPublishTagsNotAllowed`.
+
+Each path goes through the same merge contract as the host-driven
+pull at plugin launch:
+
+- **Existing paths are no-ops.** A tag the user created, or that any
+  prior import created, is never modified. The return value
+  `created` reflects only newly-created leaves.
+- `Description` and `Color` are honoured only when the leaf is being
+  created in this call.
+- Idempotent: calling with the same list twice in a row returns 0
+  the second time.
+
+See [capability-tag-provider.md](./capability-tag-provider.md) for
+worked merge examples and the lifecycle (which is: there isn't one —
+tags the plugin no longer reports stay in place).
 
 ## Configuration model
 

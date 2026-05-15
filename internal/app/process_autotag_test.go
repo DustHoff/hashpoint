@@ -50,6 +50,17 @@ func (f *fakeTagRepo) EnsureByPath(_ context.Context, path string) (*storage.Tag
 	return f.ensure(path)
 }
 
+// EnsureByPathWithMetadata is part of the TagRepository surface but
+// process_autotag never calls it — stubbed to satisfy the interface.
+func (f *fakeTagRepo) EnsureByPathWithMetadata(_ context.Context, path string, _ storage.TagMetadata) (*storage.Tag, bool, error) {
+	f.ensureCall.Add(1)
+	if f.ensure == nil {
+		return &storage.Tag{ID: 0, Name: path}, true, nil
+	}
+	t, err := f.ensure(path)
+	return t, true, err
+}
+
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
