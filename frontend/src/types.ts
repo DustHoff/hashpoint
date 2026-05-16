@@ -344,3 +344,65 @@ export interface AvailablePluginEntry {
   source_plugin: string;
   installed_version: string;
 }
+
+// Feedback (GitHub issue submitter) ---------------------------------------
+
+// FeedbackStatus mirrors app.FeedbackStatusDTO. `linked` is the source
+// of truth for whether the form's Submit button is enabled; `reason`
+// renders next to the login button when not linked (e.g. "erneute
+// Anmeldung erforderlich" after a refresh-token expiry).
+export interface FeedbackStatus {
+  linked: boolean;
+  login?: string;
+  reason?: string;
+  checked_at: string;
+}
+
+// FeedbackDeviceCode is the public face of a Device-Flow start. The
+// underlying device_code stays in the backend; the UI only ever
+// renders user_code and the verification URI.
+export interface FeedbackDeviceCode {
+  user_code: string;
+  verification_uri: string;
+  interval_seconds: number;
+  expires_at: string;
+}
+
+// FeedbackPollStatus enumerates every poll outcome the backend may
+// return. The UI maps each to one of: keep polling (pending /
+// slow_down), transition (linked), or stop with error (expired /
+// denied / error).
+export type FeedbackPollStatus =
+  | "pending"
+  | "linked"
+  | "slow_down"
+  | "expired"
+  | "denied"
+  | "error";
+
+export interface FeedbackPollResult {
+  status: FeedbackPollStatus;
+  interval?: number;
+  error?: string;
+}
+
+export type FeedbackCategory = "bug" | "feature" | "question";
+export type FeedbackSeverity = "low" | "medium" | "high" | "critical";
+export type FeedbackLogWindow = "today" | "1h" | "24h";
+
+export interface FeedbackInput {
+  title: string;
+  category: FeedbackCategory;
+  severity: FeedbackSeverity;
+  description: string;
+  expected: string;
+  actual: string;
+  repro: string;
+  include_log: boolean;
+  log_window: FeedbackLogWindow;
+}
+
+export interface FeedbackSubmitResult {
+  number: number;
+  html_url: string;
+}

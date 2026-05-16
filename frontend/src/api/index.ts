@@ -5,6 +5,11 @@ import type {
   AppConfig,
   AvailablePluginEntry,
   EntraStatus,
+  FeedbackDeviceCode,
+  FeedbackInput,
+  FeedbackPollResult,
+  FeedbackStatus,
+  FeedbackSubmitResult,
   ImportResult,
   OnCallDocDraft,
   OnCallDocView,
@@ -217,6 +222,18 @@ export const api = {
     bridge().ListUserDocs() as Promise<Array<{ slug: string; title: string }>>,
   getUserDoc: (slug: string) =>
     bridge().GetUserDoc(slug) as Promise<string>,
+
+  // Feedback (GitHub issue submitter) -----------------------------------
+  feedbackStatus: () => bridge().FeedbackStatus() as Promise<FeedbackStatus>,
+  feedbackStartDeviceLogin: () =>
+    bridge().FeedbackStartDeviceLogin() as Promise<FeedbackDeviceCode>,
+  feedbackPollDeviceLogin: () =>
+    bridge().FeedbackPollDeviceLogin() as Promise<FeedbackPollResult>,
+  feedbackLogout: () => bridge().FeedbackLogout() as Promise<void>,
+  feedbackPreview: (input: FeedbackInput) =>
+    bridge().FeedbackPreview(input) as Promise<string>,
+  feedbackSubmit: (input: FeedbackInput) =>
+    bridge().FeedbackSubmit(input) as Promise<FeedbackSubmitResult>,
 
   // Wails event subscription -------------------------------------------
   // Returns an unsubscribe function. The handler receives nothing useful

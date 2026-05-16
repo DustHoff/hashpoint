@@ -8,6 +8,7 @@ import Settings from "./components/Settings";
 import Plugins from "./components/Plugins";
 import AvailablePlugins from "./components/AvailablePlugins";
 import About from "./components/About";
+import Feedback from "./components/Feedback";
 import Help from "./components/Help";
 import PersonioBadge from "./components/PersonioBadge";
 import QuickTagPicker from "./components/QuickTagPicker";
@@ -23,6 +24,7 @@ type Tab =
   | "plugins"
   | "available-plugins"
   | "help"
+  | "feedback"
   | "about";
 
 const tabs: { id: Tab; label: string }[] = [
@@ -34,6 +36,7 @@ const tabs: { id: Tab; label: string }[] = [
   { id: "plugins", label: "Plugins" },
   { id: "available-plugins", label: "Verfügbare Plugins" },
   { id: "help", label: "Hilfe" },
+  { id: "feedback", label: "Feedback" },
   { id: "about", label: "Über" },
 ];
 
@@ -176,6 +179,7 @@ export default function App() {
         {tab === "plugins" && <Plugins />}
         {tab === "available-plugins" && <AvailablePlugins />}
         {tab === "help" && <Help />}
+        {tab === "feedback" && <Feedback />}
         {tab === "about" && <About />}
       </main>
       {quickTagOpen && (
