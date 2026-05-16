@@ -48,6 +48,9 @@ type stubTagProvider struct{ stubCore }
 
 func (stubTagProvider) ListTags(_ context.Context) ([]ImportedTag, error) { return nil, nil }
 func (stubTagProvider) ListOrders(_ context.Context) ([]Order, error)     { return nil, nil }
+func (stubTagProvider) NotifyTagOrders(_ context.Context, _ []TagOrderMapping) error {
+	return nil
+}
 
 // stubBoth advertises all current capabilities at once.
 type stubBoth struct {

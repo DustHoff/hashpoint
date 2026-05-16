@@ -7,6 +7,7 @@ import (
 
 	pluginhost "github.com/dusthoff/hashpoint/internal/plugin"
 	"github.com/dusthoff/hashpoint/internal/storage"
+	"github.com/dusthoff/hashpoint/plugin/sdk"
 )
 
 // recordingTagRepo wraps fakeTagRepo's surface but tracks every
@@ -122,5 +123,101 @@ func TestAppTagSink_Publish_NilRepoReturnsError(t *testing.T) {
 	_, err := sink.Publish(context.Background(), "p", []pluginhost.ImportedTagView{{Path: "x"}})
 	if err == nil {
 		t.Fatal("expected error when sink has no repo")
+	}
+}
+
+// listingTagRepo is a fakeTagRepo extension that lets a test script
+// what Tags.List returns. Used by the snapshot-builder tests.
+type listingTagRepo struct {
+	fakeTagRepo
+	rows []storage.Tag
+}
+
+func (r *listingTagRepo) List(context.Context) ([]storage.Tag, error) { return r.rows, nil }
+
+func sptr(s string) *string { return &s }
+func iptr(i int64) *int64   { return &i }
+
+func TestBuildTagOrderSnapshot_FlatPathsAndOrderNames(t *testing.T) {
+	t.Parallel()
+	repo := &listingTagRepo{rows: []storage.Tag{
+		{ID: 1, Name: "#personio"},
+		{ID: 2, ParentID: iptr(1), Name: "#projekta", OrderName: sptr("Auftrag-42")},
+		{ID: 3, ParentID: iptr(1), Name: "#projektb"},
+		{ID: 4, Name: "#admin", OrderName: sptr("Freitext")},
+	}}
+
+	got, err := buildTagOrderSnapshot(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	want := []sdk.TagOrderMapping{
+		{TagPath: "admin", OrderName: "Freitext"},
+		{TagPath: "personio", OrderName: ""},
+		{TagPath: "personio/projekta", OrderName: "Auftrag-42"},
+		{TagPath: "personio/projektb", OrderName: ""},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("snapshot len = %d, want %d (%+v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("snapshot[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestBuildTagOrderSnapshot_IncludesEmptyOrderNames(t *testing.T) {
+	t.Parallel()
+	// Decision: snapshot covers every tag, even those without an
+	// order_name — the plugin owns the diff so an empty OrderName must
+	// carry the "currently unmapped" signal.
+	repo := &listingTagRepo{rows: []storage.Tag{
+		{ID: 1, Name: "#solo"},
+	}}
+	got, err := buildTagOrderSnapshot(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("snapshot len = %d, want 1 (tag without order_name must still appear)", len(got))
+	}
+	if got[0].OrderName != "" {
+		t.Errorf("OrderName = %q, want empty string", got[0].OrderName)
+	}
+}
+
+func TestBuildTagOrderSnapshot_DanglingParentEmitsPartialPath(t *testing.T) {
+	t.Parallel()
+	// Parent ID 99 is not in the list — buildTagOrderSnapshot walks
+	// what it can and stops, so the leaf still shows up under just its
+	// own name. This guards against a silent drop if the FK ever
+	// breaks for an in-flight delete.
+	repo := &listingTagRepo{rows: []storage.Tag{
+		{ID: 1, ParentID: iptr(99), Name: "#orphan", OrderName: sptr("X")},
+	}}
+	got, err := buildTagOrderSnapshot(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(got) != 1 || got[0].TagPath != "orphan" {
+		t.Errorf("snapshot = %+v, want single entry with TagPath=%q", got, "orphan")
+	}
+}
+
+func TestBuildTagOrderSnapshot_EmptyNameDropped(t *testing.T) {
+	t.Parallel()
+	// A tag whose Name reduces to "" after stripping the # prefix
+	// (degenerate but defensive) must not pollute the snapshot.
+	repo := &listingTagRepo{rows: []storage.Tag{
+		{ID: 1, Name: "#"},
+		{ID: 2, Name: "#real", OrderName: sptr("A")},
+	}}
+	got, err := buildTagOrderSnapshot(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(got) != 1 || got[0].TagPath != "real" {
+		t.Errorf("snapshot = %+v, want single entry with TagPath=%q", got, "real")
 	}
 }

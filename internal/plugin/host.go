@@ -619,6 +619,50 @@ func (h *Host) ListAllOrders(ctx context.Context) []Orders {
 	return out
 }
 
+// NotifyTagOrdersChanged fans the full tag-order mapping snapshot out
+// to every running tag_provider plugin. Fire-and-forget: targets are
+// collected synchronously under the read-lock, then each plugin is
+// called on its own goroutine with HostDeps.SubmitTimeout so a slow
+// plugin cannot delay the others or the App-layer caller. Individual
+// RPC failures and per-plugin timeouts are logged at Debug; the host
+// never retries — the next user mutation will rebuild the snapshot
+// and try again.
+//
+// Targets are collected in lexicographic name order so test assertions
+// that watch call order can be deterministic, but actual execution is
+// parallel via goroutines.
+func (h *Host) NotifyTagOrdersChanged(snapshot []sdk.TagOrderMapping) {
+	type target struct {
+		name    string
+		handler sdk.TagProviderHandler
+	}
+	var targets []target
+
+	h.mu.RLock()
+	for name, p := range h.plugins {
+		if p.state == StateRunning && p.tagProvider != nil {
+			targets = append(targets, target{name: name, handler: p.tagProvider})
+		}
+	}
+	h.mu.RUnlock()
+
+	if len(targets) == 0 {
+		return
+	}
+	sort.Slice(targets, func(i, j int) bool { return targets[i].name < targets[j].name })
+
+	for _, t := range targets {
+		go func(t target) {
+			ctx, cancel := context.WithTimeout(h.bgCtx, h.deps.SubmitTimeout)
+			defer cancel()
+			if err := t.handler.NotifyTagOrders(ctx, snapshot); err != nil {
+				h.log.Debug("tag_provider NotifyTagOrders failed — snapshot dropped",
+					"plugin", t.name, "err", err)
+			}
+		}(t)
+	}
+}
+
 // RefreshPluginTags re-pulls the named plugin's tag catalogue and
 // merges it into the host store. Returns the number of new tags
 // actually created (existing paths are no-ops). Errors are returned

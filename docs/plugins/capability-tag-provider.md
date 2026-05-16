@@ -46,9 +46,15 @@ type Order struct {
     Description string // optional helper text in the dropdown
 }
 
+type TagOrderMapping struct {
+    TagPath   string // slash-separated path, segments without leading '#'
+    OrderName string // value stored on tags.order_name; "" when unmapped
+}
+
 type TagProviderHandler interface {
     ListTags(ctx context.Context) ([]ImportedTag, error)
     ListOrders(ctx context.Context) ([]Order, error)
+    NotifyTagOrders(ctx context.Context, mappings []TagOrderMapping) error
 }
 ```
 
@@ -145,6 +151,97 @@ If you need stricter lifecycle semantics for your use case, model the
 tag hierarchy so plugin-managed tags live under a clearly named root
 (`#jira/...`, `#personio/...`) and instruct users to delete that
 whole subtree if they want a clean slate.
+
+## Order assignments (`NotifyTagOrders`)
+
+`NotifyTagOrders` is the third leg of `tag_provider` and the only one
+where the host pushes to the plugin instead of pulling. The host
+invokes it **fire-and-forget** on every user-initiated tag mutation —
+`CreateTag`, `UpdateTag`, `DeleteTag` via the Tag-Manager. The
+argument is a snapshot of every tag in the host store with its
+currently-assigned `OrderName`; tags without a mapping appear with
+`OrderName == ""` so the plugin can diff against its previous snapshot
+and detect:
+
+- **new mappings** — entry present this round, absent or empty last
+  round;
+- **unmappings** — entry's `OrderName` went from non-empty to empty;
+- **deletions** — entry present last round, absent this round.
+
+There is no delta wire format. The full set is sent every time, sorted
+by `TagPath` (ASCII) so the plugin's diff does not need a re-sort
+pass.
+
+### When the host invokes the handler
+
+After a successful commit in any of these App-layer methods:
+
+| Method | Trigger |
+| --- | --- |
+| `App.CreateTag` | User adds a tag in the Tag-Manager (including with an `order_name` pre-filled). |
+| `App.UpdateTag` | User saves changes — `order_name` change, rename, recolour, anything. |
+| `App.DeleteTag` | User deletes a tag (the mapping disappears with it). |
+
+Plugin-driven tag operations — `HostAPI.PublishTags`, the launch-pull,
+`RefreshPluginTags` — do **not** trigger `NotifyTagOrders`. Those code
+paths cannot touch `order_name`, so a notification would just be
+noise.
+
+The notification fires whether or not the changed field was
+`order_name`. The plugin's snapshot diff filters down to "did anything
+I care about change?" — that responsibility deliberately lives in the
+plugin so the host does not have to track per-plugin interest.
+
+### Payload semantics
+
+- `TagPath` is slash-separated and segment-normalised: each segment is
+  the canonical tag name with the leading `#` stripped. This matches
+  the format the plugin originally submitted via `ImportedTag.Path`.
+- `OrderName` is exactly the string stored on `tags.order_name`. May be
+  a `Name` previously returned by this plugin's `ListOrders`, may be
+  freitext from another plugin's catalogue, may be arbitrary user
+  freitext. The host does not partition the snapshot per plugin — every
+  running `tag_provider` plugin gets every mapping.
+- Tags whose normalised path is empty (degenerate) are dropped.
+- Tags with a dangling parent FK emit the partial path the walker
+  could resolve. This should not happen given the schema's
+  `ON DELETE CASCADE`, but is defended.
+
+### Lifecycle and reliability
+
+- **Fire-and-forget.** The host spawns one goroutine per running
+  `tag_provider` plugin, applies `HostDeps.SubmitTimeout` to each call,
+  and never retries. A dropped snapshot (timeout, RPC error, plugin
+  returned non-nil error) is logged at `Debug` and forgotten — the
+  next user mutation rebuilds and re-sends the current state, so the
+  plugin self-heals on the next change.
+- **No coalescing.** Two rapid mutations produce two notifications; the
+  plugin may see the second snapshot before finishing with the first.
+  Plugins that hit a rate-limited upstream should debounce themselves.
+- **No bootstrap.** The plugin does not receive an initial snapshot at
+  launch — the first `NotifyTagOrders` arrives with the first user
+  mutation after start-up. A plugin that needs to know the current
+  state immediately should call `HostAPI.ListTags` and build the
+  initial snapshot from there.
+- **Order is preserved across siblings.** The host dispatches
+  notifications in lexicographic plugin-name order so test assertions
+  can be deterministic, but the goroutines run in parallel — do not
+  assume a specific arrival order at the plugin side.
+
+### Implementation notes for plugin authors
+
+- The method MUST be implemented even if the plugin has no interest in
+  user-side order changes. Return `nil` immediately to opt out cheaply.
+- Returning a non-nil error is logged but never surfaced — it cannot
+  trigger a host-side retry, a banner, or a state transition. Treat
+  the return value as informational.
+- The supplied snapshot is owned by the host but never mutated after
+  the call returns. A plugin that needs to retain it past the call
+  body must copy.
+- A plugin can call `HostAPI.PublishTags` from inside `NotifyTagOrders`
+  (e.g. to materialise a new path the user introduced), but doing so
+  in the hot path is discouraged — the call holds a goroutine and
+  contends with the next user mutation. Prefer an internal queue.
 
 ## Orders (`ListOrders`)
 
