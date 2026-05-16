@@ -181,6 +181,7 @@ func run() error {
 		PluginSettings: pluginSettingsRepo,
 		ConfigPath:     paths.ConfigFile,
 		Config:         cfg,
+		LogDir:         paths.LogDir,
 		OnConfigSet: func(c *config.Config) error {
 			trkMu.Lock()
 			defer trkMu.Unlock()
