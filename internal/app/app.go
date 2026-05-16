@@ -15,6 +15,7 @@ import (
 	hashpoint "github.com/dusthoff/hashpoint"
 	"github.com/dusthoff/hashpoint/internal/config"
 	"github.com/dusthoff/hashpoint/internal/entra"
+	"github.com/dusthoff/hashpoint/internal/feedback"
 	"github.com/dusthoff/hashpoint/internal/personio"
 	pluginhost "github.com/dusthoff/hashpoint/internal/plugin"
 	"github.com/dusthoff/hashpoint/internal/storage"
@@ -139,6 +140,17 @@ type Deps struct {
 	OnConfigSet func(*config.Config) error
 	Version     VersionInfo
 	Logger      *slog.Logger
+	// LogDir is the directory the rotating slog writer writes
+	// timetracker.log into (see internal/logging). The Feedback tab
+	// reads the active log from here when the user opts to attach
+	// it. Empty disables the "Log anhängen" branch — the rest of
+	// the feedback flow still works.
+	LogDir string
+	// FeedbackTokens is the credential store backing the GitHub
+	// Device-Flow tokens. Nil ⇒ the platform default
+	// (feedback.NewDefaultTokenStore) is used; tests inject an
+	// in-memory store so wincred isn't hit.
+	FeedbackTokens feedback.TokenStore
 }
 
 // App is the Wails-bound facade. Methods on *App must be safe to call from
@@ -174,6 +186,11 @@ type App struct {
 	// overridable from tests so the probe doesn't have to hit
 	// app.personio.com.
 	validatePersonio func(ctx context.Context, sess *personio.Session) error
+
+	// feedback bundles the GitHub Feedback-tab state. The client is
+	// constructed lazily on first FeedbackStatus / FeedbackStart…
+	// call so a user who never opens the tab never spins one up.
+	feedback feedbackState
 }
 
 // quickTagWindowState captures the main-window placement before the
