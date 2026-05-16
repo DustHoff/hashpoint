@@ -404,56 +404,73 @@ func (c *Client) Logout(_ context.Context) error {
 	return c.store.Delete()
 }
 
-// EnsureLabels creates any of the requested labels that don't already
-// exist in the target repo. Names not present in DefaultLabels are
-// silently ignored — the caller is the source of truth for label
-// metadata.
-func (c *Client) EnsureLabels(ctx context.Context, names []string) error {
+// AvailableLabels returns the subset of `names` that are present in
+// the target repo after a best-effort create pass. Labels we cannot
+// create (typically a 403 when the GitHub App installation lacks
+// `Issues: Write` for label management) are silently omitted so the
+// rest of the submit can proceed — GitHub rejects issue creates that
+// reference non-existent labels with 422, which would otherwise
+// torpedo the whole feedback flow.
+//
+// Names not present in DefaultLabels are also dropped (we don't know
+// their colour / description so the create payload would be
+// incomplete). The caller is responsible for label naming.
+func (c *Client) AvailableLabels(ctx context.Context, names []string) ([]string, error) {
 	if len(names) == 0 {
-		return nil
+		return nil, nil
 	}
 	tok, err := c.EnsureToken(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	specs := make(map[string]LabelSpec, len(DefaultLabels))
 	for _, s := range DefaultLabels {
 		specs[s.Name] = s
 	}
+	out := make([]string, 0, len(names))
 	for _, name := range names {
 		spec, ok := specs[name]
 		if !ok {
 			continue
 		}
-		if err := c.ensureLabel(ctx, tok, spec); err != nil {
-			return err
+		present, err := c.ensureLabel(ctx, tok, spec)
+		if err != nil {
+			return nil, err
+		}
+		if present {
+			out = append(out, name)
 		}
 	}
-	return nil
+	return out, nil
 }
 
-func (c *Client) ensureLabel(ctx context.Context, accessToken string, spec LabelSpec) error {
+// ensureLabel probes for the label and, on 404, tries to create it.
+// Returns (true, nil) when the label is present in the repo (existing
+// or freshly created), (false, nil) when creation was refused by the
+// integration (403 on POST) — the caller drops the label from its
+// issue payload — and (false, err) for any other failure.
+func (c *Client) ensureLabel(ctx context.Context, accessToken string, spec LabelSpec) (bool, error) {
 	// GitHub URL-escapes the label name in the path. Spaces and ':'
 	// pass through QueryEscape correctly for path segments here.
 	getURL := fmt.Sprintf("%s/repos/%s/%s/labels/%s",
 		c.apiBaseURL, c.owner, c.repo, url.PathEscape(spec.Name))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, getURL, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	c.setGitHubHeaders(req, accessToken)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("label probe %q: %w", spec.Name, err)
+		return false, fmt.Errorf("label probe %q: %w", spec.Name, err)
 	}
 	resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return nil
+		return true, nil
 	case http.StatusNotFound:
 		// fall through to create
 	default:
-		return fmt.Errorf("label probe %q: status %d", spec.Name, resp.StatusCode)
+		return false, fmt.Errorf("label probe %q: status %d", spec.Name, resp.StatusCode)
 	}
 	body, _ := json.Marshal(map[string]string{
 		"name":        spec.Name,
@@ -463,26 +480,33 @@ func (c *Client) ensureLabel(ctx context.Context, accessToken string, spec Label
 	createURL := fmt.Sprintf("%s/repos/%s/%s/labels", c.apiBaseURL, c.owner, c.repo)
 	req, err = http.NewRequestWithContext(ctx, http.MethodPost, createURL, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return false, err
 	}
 	c.setGitHubHeaders(req, accessToken)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err = c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("label create %q: %w", spec.Name, err)
+		return false, fmt.Errorf("label create %q: %w", spec.Name, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("label create %q: status %d: %s",
-			spec.Name, resp.StatusCode, strings.TrimSpace(string(errBody)))
+	if resp.StatusCode/100 == 2 {
+		return true, nil
 	}
-	return nil
+	errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	if resp.StatusCode == http.StatusForbidden {
+		c.logger.Warn("feedback: label create refused — App installation lacks permission",
+			"label", spec.Name, "status", resp.StatusCode,
+			"body", strings.TrimSpace(string(errBody)))
+		return false, nil
+	}
+	return false, fmt.Errorf("label create %q: status %d: %s",
+		spec.Name, resp.StatusCode, strings.TrimSpace(string(errBody)))
 }
 
 // CreateIssue posts a new issue in RepoOwner/RepoName. Labels are
-// passed through verbatim — EnsureLabels must have been called first
-// for any labels that may not exist yet.
+// passed through verbatim — AvailableLabels must have been called
+// first to drop any the integration cannot ensure exist (GitHub
+// rejects issue creates that reference unknown labels with 422).
 func (c *Client) CreateIssue(ctx context.Context, title, body string, labels []string) (*IssueCreated, error) {
 	tok, err := c.EnsureToken(ctx)
 	if err != nil {
