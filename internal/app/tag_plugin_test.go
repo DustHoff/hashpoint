@@ -47,7 +47,7 @@ func TestAppTagSink_Publish_HappyPath(t *testing.T) {
 	repo := &recordingTagRepo{}
 	sink := &appTagSink{tags: repo}
 	in := []pluginhost.ImportedTagView{
-		{Path: "jira/PROJ-1", Description: "First", Color: "#7c3aed"},
+		{Path: "jira/PROJ-1", Description: "First", Color: "#7c3aed", OrderName: "Auftrag-1"},
 		{Path: "jira/PROJ-2"},
 	}
 	created, err := sink.Publish(context.Background(), "jira-plug", in)
@@ -62,6 +62,12 @@ func TestAppTagSink_Publish_HappyPath(t *testing.T) {
 	}
 	if repo.calls[0].meta.Description != "First" || repo.calls[0].meta.Color != "#7c3aed" {
 		t.Errorf("metadata not propagated: %+v", repo.calls[0].meta)
+	}
+	if repo.calls[0].meta.OrderName != "Auftrag-1" {
+		t.Errorf("OrderName not propagated: got %q, want %q", repo.calls[0].meta.OrderName, "Auftrag-1")
+	}
+	if repo.calls[1].meta.OrderName != "" {
+		t.Errorf("OrderName for unset import = %q, want empty", repo.calls[1].meta.OrderName)
 	}
 }
 

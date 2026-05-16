@@ -86,6 +86,7 @@ func (s *appTagSink) Publish(ctx context.Context, pluginName string, tags []plug
 		meta := storage.TagMetadata{
 			Description: t.Description,
 			Color:       t.Color,
+			OrderName:   t.OrderName,
 		}
 		_, wasCreated, err := s.tags.EnsureByPathWithMetadata(ctx, t.Path, meta)
 		if err != nil {

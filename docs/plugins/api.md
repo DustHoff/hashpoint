@@ -279,6 +279,7 @@ type ImportedTag struct {
     Path        string // slash-separated, e.g. "jira/PROJ-123"
     Description string // optional; honoured only on first create
     Color       string // optional hex (e.g. "#7c3aed"); same rule
+    OrderName   string // optional Auftrag seed; same first-create rule
 }
 
 type Order struct {

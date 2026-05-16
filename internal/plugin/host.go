@@ -551,6 +551,7 @@ func (h *Host) pullTagsFromHandler(ctx context.Context, name string, handler sdk
 			Path:        t.Path,
 			Description: t.Description,
 			Color:       t.Color,
+			OrderName:   t.OrderName,
 		})
 	}
 	created, err := sink.Publish(ctx, name, views)

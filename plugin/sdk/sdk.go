@@ -551,13 +551,24 @@ type OffHoursProviderHandler interface {
 // drop non-alphanumeric characters, re-prefix "#"), so case-sensitive
 // duplicates ("alpha", "Alpha") merge into one canonical node.
 //
-// Description and Color are honoured ONLY when the leaf segment did
-// not previously exist. An existing tag — whether the user created it
-// or a previous plugin import did — is never modified.
+// Description, Color, and OrderName are honoured ONLY when the leaf
+// segment did not previously exist. An existing tag — whether the user
+// created it, a previous plugin import did, or a sibling plugin did —
+// is never modified. This keeps the user-tag-wins contract intact: a
+// user who clears an OrderName cannot have it silently reinstated by
+// the plugin's next import.
+//
+// OrderName lets a tag_provider plugin seed an initial Auftrag
+// assignment when it creates a new tag — useful for plugins whose
+// upstream system already has a canonical project/order/job name. The
+// host stores it verbatim into tags.order_name; the value is shown in
+// the Tag-Manager Auftrag combobox and replays through the same
+// NotifyTagOrders snapshot stream as user-set assignments.
 type ImportedTag struct {
 	Path        string
 	Description string
 	Color       string
+	OrderName   string
 }
 
 // HostTag is the read-only projection HostAPI.ListTags returns. Fields

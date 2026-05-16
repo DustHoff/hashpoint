@@ -38,6 +38,7 @@ type ImportedTag struct {
     Path        string // slash-separated, e.g. "jira/PROJ-123"
     Description string // optional; honoured only on first create
     Color       string // optional hex (e.g. "#7c3aed"); same rule
+    OrderName   string // optional Auftrag seed; same first-create rule
 }
 
 type Order struct {
@@ -80,15 +81,25 @@ For each `ImportedTag`:
   name under the running parent (no parent ≙ root). If it exists,
   reuse it — no fields are touched, regardless of who created it.
 - If it does not exist, create it.
-- `Description` and `Color` are only applied **to the leaf** and only
-  when the leaf was created by this call. An existing leaf — whether
-  the user created it or a previous import did — keeps its existing
-  values.
+- `Description`, `Color`, and `OrderName` are only applied **to the
+  leaf** and only when the leaf was created by this call. An existing
+  leaf — whether the user created it, a previous import did, or a
+  sibling plugin did — keeps its existing values, even when those
+  values are empty / nil. A user who deliberately cleared an
+  `OrderName` will not see the plugin silently reinstate it on the
+  next refresh.
 
 Consequence: an import that re-runs against the same plugin is
-idempotent (no churn, no duplicate creates). A user who renames or
-recolours a tag will see their changes survive every subsequent
-import. The plugin has no path to mutate user-managed tags.
+idempotent (no churn, no duplicate creates). A user who renames,
+recolours, or re-mappings a tag will see their changes survive every
+subsequent import. The plugin has no path to mutate user-managed tags.
+
+`OrderName` is the only metadata field that *also* flows through the
+`NotifyTagOrders` snapshot stream — see below. The notification fires
+strictly on user mutations, **not** on plugin imports, so a plugin
+that seeds an `OrderName` should treat its own `PublishTags` return
+as the source of truth for "did my import land"; it will not receive
+a `NotifyTagOrders` callback for its own seed.
 
 ## HostAPI.ListTags
 
@@ -183,9 +194,14 @@ After a successful commit in any of these App-layer methods:
 | `App.DeleteTag` | User deletes a tag (the mapping disappears with it). |
 
 Plugin-driven tag operations — `HostAPI.PublishTags`, the launch-pull,
-`RefreshPluginTags` — do **not** trigger `NotifyTagOrders`. Those code
-paths cannot touch `order_name`, so a notification would just be
-noise.
+`RefreshPluginTags` — do **not** trigger `NotifyTagOrders`, even when
+they seed an `OrderName` on a newly-created leaf. The notification
+stream is scoped to *user intent*; the importing plugin already knows
+what it just published, and broadcasting plugin seeds to every other
+running `tag_provider` would turn launch into a notification storm
+(N plugins × N recipients). Other plugins discover plugin-seeded
+`OrderName` values on the next user-mutation snapshot, or by polling
+`HostAPI.ListTags` if they need it immediately.
 
 The notification fires whether or not the changed field was
 `order_name`. The plugin's snapshot diff filters down to "did anything
@@ -272,10 +288,11 @@ Implementation notes for plugin authors:
 
 | Scenario | What the host does |
 | --- | --- |
-| Plugin imports `proj-x`; no tag exists yet | Create `#proj-x` with the plugin's description / color. |
-| Plugin imports `proj-x`; user-created `#proj-x` exists | Reuse the existing tag. Plugin's description / color are ignored. |
-| Plugin A imports `shared`, Plugin B imports `shared` | First one creates, second one reuses. Both report `created=0` after the first round. |
-| Plugin imports `jira/PROJ-1`; only `#jira` exists | Reuse `#jira`, create `#proj1` under it (plugin's metadata on the leaf only). |
+| Plugin imports `proj-x`; no tag exists yet | Create `#proj-x` with the plugin's description / color / order_name. |
+| Plugin imports `proj-x`; user-created `#proj-x` exists | Reuse the existing tag. Plugin's description / color / order_name are ignored — even when the existing tag's order_name is nil. |
+| Plugin A imports `shared` with order_name `A-Auftrag`, Plugin B imports `shared` with order_name `B-Auftrag` | First call creates the tag with the first plugin's order_name; second call reuses and ignores the second plugin's value. Order between two plugins racing on the same path is not guaranteed. |
+| Plugin imports `jira/PROJ-1`; only `#jira` exists | Reuse `#jira`, create `#proj1` under it (plugin's metadata + order_name on the leaf only). |
+| User clears the order_name on `proj-x`; plugin re-imports `proj-x` with its order_name | User's empty order_name survives — the plugin cannot back-fill. |
 
 ## Errors
 
