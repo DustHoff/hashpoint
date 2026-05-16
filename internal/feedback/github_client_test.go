@@ -257,7 +257,7 @@ func TestEnsureToken_NotLinkedWhenStoreEmpty(t *testing.T) {
 	}
 }
 
-func TestEnsureLabels_CreatesMissingSkipsExisting(t *testing.T) {
+func TestAvailableLabels_CreatesMissingSkipsExisting(t *testing.T) {
 	g := newFakeGitHub()
 	defer g.Close()
 	store := withFreshToken(t)
@@ -290,14 +290,62 @@ func TestEnsureLabels_CreatesMissingSkipsExisting(t *testing.T) {
 		_, _ = io.WriteString(w, `{"name":"`+body["name"]+`"}`)
 	})
 	c := buildClient(t, g, store, nil)
-	if err := c.EnsureLabels(context.Background(), []string{"bug", "severity:critical", "user-feedback"}); err != nil {
-		t.Fatalf("EnsureLabels: %v", err)
+	got, err := c.AvailableLabels(context.Background(), []string{"bug", "severity:critical", "user-feedback"})
+	if err != nil {
+		t.Fatalf("AvailableLabels: %v", err)
+	}
+	want := []string{"bug", "severity:critical", "user-feedback"}
+	if len(got) != len(want) {
+		t.Fatalf("got=%v want=%v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("got[%d]=%q want %q", i, got[i], w)
+		}
 	}
 	if created["bug"] {
 		t.Errorf("existing label should not have been re-created")
 	}
 	if !created["severity:critical"] || !created["user-feedback"] {
 		t.Errorf("missing labels not created: %v", created)
+	}
+}
+
+// When the GitHub App installation lacks permission to create labels
+// the POST returns 403 with "Resource not accessible by integration".
+// The submit must keep going — we drop the offending labels from the
+// result, log a warning, and let the issue create proceed without
+// them. Regression for the first end-to-end smoke test on the real
+// repo where severity:* labels did not pre-exist.
+func TestAvailableLabels_Drops403LabelsAndKeepsOthers(t *testing.T) {
+	g := newFakeGitHub()
+	defer g.Close()
+	store := withFreshToken(t)
+	g.handleAPI("/repos/octo/demo/labels/", func(w http.ResponseWriter, r *http.Request) {
+		// "bug" exists, everything else is missing → create attempt.
+		name := strings.TrimPrefix(r.URL.Path, "/repos/octo/demo/labels/")
+		if name == "bug" {
+			_, _ = w.Write([]byte(`{"name":"bug"}`))
+			return
+		}
+		http.NotFound(w, r)
+	})
+	g.handleAPI("/repos/octo/demo/labels", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"message":"Resource not accessible by integration"}`)
+	})
+	c := buildClient(t, g, store, nil)
+	got, err := c.AvailableLabels(context.Background(),
+		[]string{"bug", "severity:critical", "user-feedback"})
+	if err != nil {
+		t.Fatalf("AvailableLabels: %v", err)
+	}
+	if len(got) != 1 || got[0] != "bug" {
+		t.Fatalf("expected only the pre-existing label, got=%v", got)
 	}
 }
 
