@@ -29,16 +29,22 @@ import (
 	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/public"
 )
 
-// DefaultLoginScopes are the bare-minimum delegated scopes we always
-// request on first login: User.Read pulls the signed-in user's profile
-// (used to populate the status badge), offline_access lets MSAL hold a
-// refresh token, openid + profile populate the cache's account record.
-// Resource-specific scopes (Sites.Read.All, Calendars.Read, …) are
-// requested incrementally by per-resource clients via AcquireToken.
+// DefaultLoginScopes is the bare-minimum delegated scope set we
+// request on first login. User.Read pulls the signed-in user's profile
+// so the status badge can show the username. Resource-specific scopes
+// (Sites.Read.All, Calendars.Read, …) are requested incrementally by
+// per-resource clients via AcquireToken.
+//
+// Reserved scopes (openid, profile, offline_access) MUST NOT appear
+// here even though we depend on them: MSAL-go injects them itself
+// via AppendDefaultScopes before the wire request, AND it strictly
+// compares the user-supplied scope list against the token response's
+// echoed scope claim. Entra never echoes offline_access (it materialises
+// as a separate refresh_token field instead), so including it here
+// makes MSAL-go flag the login as "declined scopes are present:
+// offline_access" — see findDeclinedScopes in MSAL-go accesstokens.
+// The fix is purely client-side; the wire payload is identical.
 var DefaultLoginScopes = []string{
-	"openid",
-	"profile",
-	"offline_access",
 	"https://graph.microsoft.com/User.Read",
 }
 
