@@ -14,11 +14,10 @@ import (
 	"time"
 )
 
-// fakeGitHub stands in for github.com + api.github.com. Tests instal
+// fakeGitHub stands in for github.com + api.github.com. Tests install
 // route handlers via mux; the helper buildClient wires the resulting
 // httptest.Server URLs into a fresh Client with an in-memory store.
 type fakeGitHub struct {
-	mu        sync.Mutex
 	device    *httptest.Server
 	api       *httptest.Server
 	deviceMux *http.ServeMux

@@ -68,7 +68,11 @@ type TokenStore interface {
 }
 
 // MarshalToken encodes the token for credential-manager storage.
-func MarshalToken(t *Token) ([]byte, error) { return json.Marshal(t) }
+func MarshalToken(t *Token) ([]byte, error) {
+	// #nosec G117 -- the JSON blob is the very thing we want to persist
+	// (wincred-encrypted at rest on Windows, never written to disk in clear).
+	return json.Marshal(t)
+}
 
 // UnmarshalToken decodes a credential-manager blob back into a Token.
 func UnmarshalToken(b []byte) (*Token, error) {

@@ -244,7 +244,9 @@ func (a *App) FeedbackSubmit(in FeedbackInputDTO) (*FeedbackSubmitResultDTO, err
 func (a *App) toFeedbackInput(in FeedbackInputDTO) (feedback.Input, error) {
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
-		return feedback.Input{}, errors.New("Titel darf nicht leer sein")
+		// User-facing German message; the staticcheck capitalisation rule
+		// doesn't apply to a proper-noun-style sentence start.
+		return feedback.Input{}, errors.New("Titel darf nicht leer sein") //nolint:staticcheck // ST1005
 	}
 	cat, err := parseFeedbackCategory(in.Category)
 	if err != nil {

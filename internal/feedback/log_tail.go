@@ -56,7 +56,7 @@ func ReadLogTail(ctx context.Context, logPath string, window LogWindow, now time
 		}
 		return nil, fmt.Errorf("open log: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
 	// slog JSON records can be long when fields are nested; raise the
