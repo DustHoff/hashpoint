@@ -212,20 +212,25 @@ func (a *App) FeedbackPreview(in FeedbackInputDTO) (string, error) {
 	return feedback.Render(input), nil
 }
 
-// FeedbackSubmit auto-creates any missing labels, posts the issue,
-// and returns the GitHub URL. Errors at any stage are surfaced
-// verbatim — the form-level reauth/network branches are distinct
-// codepaths the UI can recover from.
+// FeedbackSubmit posts the issue and returns the GitHub URL. Labels
+// the App installation cannot ensure (403 on create) are dropped from
+// the payload — the issue still gets filed and the user can label it
+// in the GitHub UI afterwards.
 func (a *App) FeedbackSubmit(in FeedbackInputDTO) (*FeedbackSubmitResultDTO, error) {
 	input, err := a.toFeedbackInput(in)
 	if err != nil {
 		return nil, err
 	}
 	c := a.initFeedback()
-	labels := feedback.LabelsFor(input)
-	if err := c.EnsureLabels(a.ctx, labels); err != nil {
+	requested := feedback.LabelsFor(input)
+	labels, err := c.AvailableLabels(a.ctx, requested)
+	if err != nil {
 		a.logger.Warn("feedback: ensure labels failed", "err", err)
 		return nil, fmt.Errorf("labels: %w", err)
+	}
+	if len(labels) < len(requested) {
+		a.logger.Warn("feedback: some labels were dropped (App installation lacks create perms)",
+			"requested", requested, "applied", labels)
 	}
 	body := feedback.Render(input)
 	out, err := c.CreateIssue(a.ctx, strings.TrimSpace(input.Title), body, labels)
