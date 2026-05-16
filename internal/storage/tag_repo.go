@@ -154,7 +154,7 @@ func (r *TagRepo) ensureByPath(ctx context.Context, path string, leafMeta TagMet
 		WHERE name = ? COLLATE NOCASE
 		  AND ((? IS NULL AND parent_id IS NULL) OR parent_id = ?)`
 	const insertChildBare = `INSERT INTO tags (parent_id, name) VALUES (?, ?)`
-	const insertLeafWithMeta = `INSERT INTO tags (parent_id, name, description, color) VALUES (?, ?, ?, ?)`
+	const insertLeafWithMeta = `INSERT INTO tags (parent_id, name, description, color, order_name) VALUES (?, ?, ?, ?, ?)`
 	const fetchByID = `SELECT ` + tagColumns + ` FROM tags WHERE id = ?`
 
 	var (
@@ -182,11 +182,12 @@ func (r *TagRepo) ensureByPath(ctx context.Context, path string, leafMeta TagMet
 			parentInsert = current.ID
 		}
 		var res sql.Result
-		if isLeaf && (leafMeta.Description != "" || leafMeta.Color != "") {
+		if isLeaf && (leafMeta.Description != "" || leafMeta.Color != "" || leafMeta.OrderName != "") {
 			res, err = tx.ExecContext(ctx, insertLeafWithMeta,
 				parentInsert, seg,
 				nullableStringPtr(stringPtrOrNil(leafMeta.Description)),
 				nullableStringPtr(stringPtrOrNil(leafMeta.Color)),
+				nullableStringPtr(stringPtrOrNil(leafMeta.OrderName)),
 			)
 		} else {
 			res, err = tx.ExecContext(ctx, insertChildBare, parentInsert, seg)

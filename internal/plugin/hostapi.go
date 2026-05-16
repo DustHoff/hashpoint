@@ -93,6 +93,7 @@ type ImportedTagView struct {
 	Path        string
 	Description string
 	Color       string
+	OrderName   string
 }
 
 // boundHostAPI is the host-side sdk.HostAPI implementation handed to a
@@ -315,6 +316,7 @@ func (a *boundHostAPI) PublishTags(ctx context.Context, tags []sdk.ImportedTag) 
 			Path:        t.Path,
 			Description: t.Description,
 			Color:       t.Color,
+			OrderName:   t.OrderName,
 		})
 	}
 	created, err := sink.Publish(ctx, a.pluginName, views)

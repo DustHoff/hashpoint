@@ -38,6 +38,7 @@ type ImportedTag struct {
     Path        string // slash-separated, e.g. "jira/PROJ-123"
     Description string // optional; honoured only on first create
     Color       string // optional hex (e.g. "#7c3aed"); same rule
+    OrderName   string // optional Auftrag seed; same first-create rule
 }
 
 type Order struct {
@@ -46,9 +47,15 @@ type Order struct {
     Description string // optional helper text in the dropdown
 }
 
+type TagOrderMapping struct {
+    TagPath   string // slash-separated path, segments without leading '#'
+    OrderName string // value stored on tags.order_name; "" when unmapped
+}
+
 type TagProviderHandler interface {
     ListTags(ctx context.Context) ([]ImportedTag, error)
     ListOrders(ctx context.Context) ([]Order, error)
+    NotifyTagOrders(ctx context.Context, mappings []TagOrderMapping) error
 }
 ```
 
@@ -74,15 +81,25 @@ For each `ImportedTag`:
   name under the running parent (no parent ≙ root). If it exists,
   reuse it — no fields are touched, regardless of who created it.
 - If it does not exist, create it.
-- `Description` and `Color` are only applied **to the leaf** and only
-  when the leaf was created by this call. An existing leaf — whether
-  the user created it or a previous import did — keeps its existing
-  values.
+- `Description`, `Color`, and `OrderName` are only applied **to the
+  leaf** and only when the leaf was created by this call. An existing
+  leaf — whether the user created it, a previous import did, or a
+  sibling plugin did — keeps its existing values, even when those
+  values are empty / nil. A user who deliberately cleared an
+  `OrderName` will not see the plugin silently reinstate it on the
+  next refresh.
 
 Consequence: an import that re-runs against the same plugin is
-idempotent (no churn, no duplicate creates). A user who renames or
-recolours a tag will see their changes survive every subsequent
-import. The plugin has no path to mutate user-managed tags.
+idempotent (no churn, no duplicate creates). A user who renames,
+recolours, or re-mappings a tag will see their changes survive every
+subsequent import. The plugin has no path to mutate user-managed tags.
+
+`OrderName` is the only metadata field that *also* flows through the
+`NotifyTagOrders` snapshot stream — see below. The notification fires
+strictly on user mutations, **not** on plugin imports, so a plugin
+that seeds an `OrderName` should treat its own `PublishTags` return
+as the source of truth for "did my import land"; it will not receive
+a `NotifyTagOrders` callback for its own seed.
 
 ## HostAPI.ListTags
 
@@ -146,6 +163,102 @@ tag hierarchy so plugin-managed tags live under a clearly named root
 (`#jira/...`, `#personio/...`) and instruct users to delete that
 whole subtree if they want a clean slate.
 
+## Order assignments (`NotifyTagOrders`)
+
+`NotifyTagOrders` is the third leg of `tag_provider` and the only one
+where the host pushes to the plugin instead of pulling. The host
+invokes it **fire-and-forget** on every user-initiated tag mutation —
+`CreateTag`, `UpdateTag`, `DeleteTag` via the Tag-Manager. The
+argument is a snapshot of every tag in the host store with its
+currently-assigned `OrderName`; tags without a mapping appear with
+`OrderName == ""` so the plugin can diff against its previous snapshot
+and detect:
+
+- **new mappings** — entry present this round, absent or empty last
+  round;
+- **unmappings** — entry's `OrderName` went from non-empty to empty;
+- **deletions** — entry present last round, absent this round.
+
+There is no delta wire format. The full set is sent every time, sorted
+by `TagPath` (ASCII) so the plugin's diff does not need a re-sort
+pass.
+
+### When the host invokes the handler
+
+After a successful commit in any of these App-layer methods:
+
+| Method | Trigger |
+| --- | --- |
+| `App.CreateTag` | User adds a tag in the Tag-Manager (including with an `order_name` pre-filled). |
+| `App.UpdateTag` | User saves changes — `order_name` change, rename, recolour, anything. |
+| `App.DeleteTag` | User deletes a tag (the mapping disappears with it). |
+
+Plugin-driven tag operations — `HostAPI.PublishTags`, the launch-pull,
+`RefreshPluginTags` — do **not** trigger `NotifyTagOrders`, even when
+they seed an `OrderName` on a newly-created leaf. The notification
+stream is scoped to *user intent*; the importing plugin already knows
+what it just published, and broadcasting plugin seeds to every other
+running `tag_provider` would turn launch into a notification storm
+(N plugins × N recipients). Other plugins discover plugin-seeded
+`OrderName` values on the next user-mutation snapshot, or by polling
+`HostAPI.ListTags` if they need it immediately.
+
+The notification fires whether or not the changed field was
+`order_name`. The plugin's snapshot diff filters down to "did anything
+I care about change?" — that responsibility deliberately lives in the
+plugin so the host does not have to track per-plugin interest.
+
+### Payload semantics
+
+- `TagPath` is slash-separated and segment-normalised: each segment is
+  the canonical tag name with the leading `#` stripped. This matches
+  the format the plugin originally submitted via `ImportedTag.Path`.
+- `OrderName` is exactly the string stored on `tags.order_name`. May be
+  a `Name` previously returned by this plugin's `ListOrders`, may be
+  freitext from another plugin's catalogue, may be arbitrary user
+  freitext. The host does not partition the snapshot per plugin — every
+  running `tag_provider` plugin gets every mapping.
+- Tags whose normalised path is empty (degenerate) are dropped.
+- Tags with a dangling parent FK emit the partial path the walker
+  could resolve. This should not happen given the schema's
+  `ON DELETE CASCADE`, but is defended.
+
+### Lifecycle and reliability
+
+- **Fire-and-forget.** The host spawns one goroutine per running
+  `tag_provider` plugin, applies `HostDeps.SubmitTimeout` to each call,
+  and never retries. A dropped snapshot (timeout, RPC error, plugin
+  returned non-nil error) is logged at `Debug` and forgotten — the
+  next user mutation rebuilds and re-sends the current state, so the
+  plugin self-heals on the next change.
+- **No coalescing.** Two rapid mutations produce two notifications; the
+  plugin may see the second snapshot before finishing with the first.
+  Plugins that hit a rate-limited upstream should debounce themselves.
+- **No bootstrap.** The plugin does not receive an initial snapshot at
+  launch — the first `NotifyTagOrders` arrives with the first user
+  mutation after start-up. A plugin that needs to know the current
+  state immediately should call `HostAPI.ListTags` and build the
+  initial snapshot from there.
+- **Order is preserved across siblings.** The host dispatches
+  notifications in lexicographic plugin-name order so test assertions
+  can be deterministic, but the goroutines run in parallel — do not
+  assume a specific arrival order at the plugin side.
+
+### Implementation notes for plugin authors
+
+- The method MUST be implemented even if the plugin has no interest in
+  user-side order changes. Return `nil` immediately to opt out cheaply.
+- Returning a non-nil error is logged but never surfaced — it cannot
+  trigger a host-side retry, a banner, or a state transition. Treat
+  the return value as informational.
+- The supplied snapshot is owned by the host but never mutated after
+  the call returns. A plugin that needs to retain it past the call
+  body must copy.
+- A plugin can call `HostAPI.PublishTags` from inside `NotifyTagOrders`
+  (e.g. to materialise a new path the user introduced), but doing so
+  in the hot path is discouraged — the call holds a goroutine and
+  contends with the next user mutation. Prefer an internal queue.
+
 ## Orders (`ListOrders`)
 
 `ListOrders` is the second leg of `tag_provider`. Unlike tags, orders
@@ -175,10 +288,11 @@ Implementation notes for plugin authors:
 
 | Scenario | What the host does |
 | --- | --- |
-| Plugin imports `proj-x`; no tag exists yet | Create `#proj-x` with the plugin's description / color. |
-| Plugin imports `proj-x`; user-created `#proj-x` exists | Reuse the existing tag. Plugin's description / color are ignored. |
-| Plugin A imports `shared`, Plugin B imports `shared` | First one creates, second one reuses. Both report `created=0` after the first round. |
-| Plugin imports `jira/PROJ-1`; only `#jira` exists | Reuse `#jira`, create `#proj1` under it (plugin's metadata on the leaf only). |
+| Plugin imports `proj-x`; no tag exists yet | Create `#proj-x` with the plugin's description / color / order_name. |
+| Plugin imports `proj-x`; user-created `#proj-x` exists | Reuse the existing tag. Plugin's description / color / order_name are ignored — even when the existing tag's order_name is nil. |
+| Plugin A imports `shared` with order_name `A-Auftrag`, Plugin B imports `shared` with order_name `B-Auftrag` | First call creates the tag with the first plugin's order_name; second call reuses and ignores the second plugin's value. Order between two plugins racing on the same path is not guaranteed. |
+| Plugin imports `jira/PROJ-1`; only `#jira` exists | Reuse `#jira`, create `#proj1` under it (plugin's metadata + order_name on the leaf only). |
+| User clears the order_name on `proj-x`; plugin re-imports `proj-x` with its order_name | User's empty order_name survives — the plugin cannot back-fill. |
 
 ## Errors
 

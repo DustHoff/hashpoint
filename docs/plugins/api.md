@@ -279,6 +279,7 @@ type ImportedTag struct {
     Path        string // slash-separated, e.g. "jira/PROJ-123"
     Description string // optional; honoured only on first create
     Color       string // optional hex (e.g. "#7c3aed"); same rule
+    OrderName   string // optional Auftrag seed; same first-create rule
 }
 
 type Order struct {
@@ -287,9 +288,15 @@ type Order struct {
     Description string // optional helper text in the dropdown
 }
 
+type TagOrderMapping struct {
+    TagPath   string // slash-separated path, segments without leading '#'
+    OrderName string // value stored on tags.order_name; "" when unmapped
+}
+
 type TagProviderHandler interface {
     ListTags(ctx context.Context) ([]ImportedTag, error)
     ListOrders(ctx context.Context) ([]Order, error)
+    NotifyTagOrders(ctx context.Context, mappings []TagOrderMapping) error
 }
 ```
 
@@ -300,10 +307,18 @@ push imports at any time via `HostAPI.PublishTags`.
 `ListOrders` powers the per-tag *Auftrag* combobox in the Tag-Manager
 and is queried **live** every time the user opens the Tags tab — the
 host never caches the result. A plugin without an order catalogue
-should return `(nil, nil)`. See
-[capability-tag-provider.md](./capability-tag-provider.md) for the
-full merge contract, lifecycle, conflict examples, and order
-semantics.
+should return `(nil, nil)`.
+
+`NotifyTagOrders` is push-from-host (fire-and-forget) and fires on
+every user-initiated `CreateTag` / `UpdateTag` / `DeleteTag`. The
+payload is a full snapshot of every tag with its current `OrderName`
+(empty when unmapped), letting a plugin diff against its last
+snapshot and react to changes in its upstream system. Plugins without
+interest should return `nil` immediately.
+
+See [capability-tag-provider.md](./capability-tag-provider.md) for the
+full merge contract, lifecycle, conflict examples, and order /
+notification semantics.
 
 ## HostAPI
 

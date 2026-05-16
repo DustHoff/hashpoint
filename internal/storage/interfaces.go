@@ -126,11 +126,17 @@ type TagRepository interface {
 
 // TagMetadata bundles the optional fields tag_provider plugins may
 // attach to a leaf when EnsureByPathWithMetadata first creates it.
-// Both fields are ignored when the leaf already existed. Color
-// follows the hex form ("#7c3aed"); Description is free-form text.
+// All fields are ignored when the leaf already existed — the user-tag
+// (or sibling-plugin-tag) wins, even when its OrderName is empty.
+// Color follows the hex form ("#7c3aed"); Description is free-form
+// text; OrderName seeds tags.order_name so a plugin whose upstream
+// already names a project / job / ticket can wire it through at
+// import time instead of waiting for the user to pick it from the
+// combobox.
 type TagMetadata struct {
 	Description string
 	Color       string
+	OrderName   string
 }
 
 // RuleRepository persists auto-tagging rules.

@@ -551,13 +551,24 @@ type OffHoursProviderHandler interface {
 // drop non-alphanumeric characters, re-prefix "#"), so case-sensitive
 // duplicates ("alpha", "Alpha") merge into one canonical node.
 //
-// Description and Color are honoured ONLY when the leaf segment did
-// not previously exist. An existing tag — whether the user created it
-// or a previous plugin import did — is never modified.
+// Description, Color, and OrderName are honoured ONLY when the leaf
+// segment did not previously exist. An existing tag — whether the user
+// created it, a previous plugin import did, or a sibling plugin did —
+// is never modified. This keeps the user-tag-wins contract intact: a
+// user who clears an OrderName cannot have it silently reinstated by
+// the plugin's next import.
+//
+// OrderName lets a tag_provider plugin seed an initial Auftrag
+// assignment when it creates a new tag — useful for plugins whose
+// upstream system already has a canonical project/order/job name. The
+// host stores it verbatim into tags.order_name; the value is shown in
+// the Tag-Manager Auftrag combobox and replays through the same
+// NotifyTagOrders snapshot stream as user-set assignments.
 type ImportedTag struct {
 	Path        string
 	Description string
 	Color       string
+	OrderName   string
 }
 
 // HostTag is the read-only projection HostAPI.ListTags returns. Fields
@@ -587,6 +598,24 @@ type Order struct {
 	Description string
 }
 
+// TagOrderMapping is one entry in the snapshot the host pushes to
+// CapTagProvider plugins on every user-initiated tag mutation (Create,
+// Update, Delete). The full snapshot covers every tag in the host
+// store — tags without an order assignment appear with OrderName == ""
+// so the plugin can diff against its previous snapshot and detect
+// unmappings (and outright deletes — a removed tag simply drops out)
+// without help from the host.
+//
+// TagPath is slash-separated and segment-normalised to match
+// ImportedTag.Path: segments are the canonical tag names with the
+// leading "#" stripped. OrderName is exactly the string stored on
+// tags.order_name — either a Name a plugin previously returned from
+// ListOrders or arbitrary user freitext; the host treats it as opaque.
+type TagOrderMapping struct {
+	TagPath   string
+	OrderName string
+}
+
 // TagProviderHandler is implemented by plugins advertising
 // CapTagProvider. The host calls ListTags pull-based at plugin start,
 // on each Configure(), and from the UI on user request. Plugins may
@@ -599,12 +628,25 @@ type Order struct {
 // implement the method and return (nil, nil); the host treats a nil
 // slice as "no orders contributed" and skips this plugin silently.
 //
-// Both methods MUST be idempotent: returning the same payload twice
-// in a row is a no-op on the second pass. Returning an error is
-// logged at Warn and skips the contribution for that round.
+// NotifyTagOrders is invoked fire-and-forget by the host whenever the
+// user creates, updates, or deletes a tag. The argument is a snapshot
+// of every tag in the host store with its currently-assigned OrderName
+// (empty string when the tag has no mapping). Plugins that do not care
+// about user-side order changes MUST still implement the method;
+// returning nil is the appropriate no-op. The host applies a per-plugin
+// timeout from HostDeps.SubmitTimeout to each call and never retries —
+// the next user mutation rebuilds and re-sends the current state, so a
+// dropped snapshot self-heals on the next change.
+//
+// All three methods MUST be idempotent: returning the same payload
+// twice in a row is a no-op on the second pass. Returning an error
+// from ListTags / ListOrders is logged at Warn and skips the
+// contribution for that round; an error from NotifyTagOrders is
+// logged at Debug because the host treats the call as best-effort.
 type TagProviderHandler interface {
 	ListTags(ctx context.Context) ([]ImportedTag, error)
 	ListOrders(ctx context.Context) ([]Order, error)
+	NotifyTagOrders(ctx context.Context, mappings []TagOrderMapping) error
 }
 
 // PersonioSession is the read-only snapshot HostAPI.RequestPersonioSession

@@ -774,6 +774,7 @@ func (a *App) CreateTag(t storage.Tag) (*storage.Tag, error) {
 	if err := a.deps.Tags.Create(a.ctx, &t); err != nil {
 		return nil, err
 	}
+	a.notifyPluginTagOrders()
 	return &t, nil
 }
 
@@ -784,7 +785,11 @@ func (a *App) UpdateTag(t storage.Tag) error {
 		return err
 	}
 	t.Name = name
-	return a.deps.Tags.Update(a.ctx, &t)
+	if err := a.deps.Tags.Update(a.ctx, &t); err != nil {
+		return err
+	}
+	a.notifyPluginTagOrders()
+	return nil
 }
 
 // DeleteTag removes a tag and its sub-tags (FK cascade).
@@ -803,6 +808,7 @@ func (a *App) DeleteTag(id int64) error {
 		// let the next SaveConfig re-validate.
 		a.logger.Warn("DeleteTag: oncall tag-id reconciliation failed", "err", err)
 	}
+	a.notifyPluginTagOrders()
 	return nil
 }
 

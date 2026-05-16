@@ -362,3 +362,84 @@ func TestTagRepo_EnsureByPathWithMetadata_SecondCallIsNoop(t *testing.T) {
 		t.Errorf("description changed on the second call: got %v, want %q", leaf2.Description, "first")
 	}
 }
+
+func TestTagRepo_EnsureByPathWithMetadata_OrderNameSeedsOnFirstCreate(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := OpenInMemory(ctx)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	repo := NewTagRepo(db)
+
+	// First create: OrderName lands on the new leaf alongside any other meta.
+	leaf, created, err := repo.EnsureByPathWithMetadata(ctx, "jira/PROJ-7", TagMetadata{
+		OrderName: "Auftrag-42",
+	})
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if !created {
+		t.Fatal("expected createdLeaf=true on first import")
+	}
+	if leaf.OrderName == nil || *leaf.OrderName != "Auftrag-42" {
+		t.Errorf("order_name = %v, want %q", leaf.OrderName, "Auftrag-42")
+	}
+
+	// Re-import with a different OrderName — leaf already exists, so the
+	// plugin's value must be ignored (user-tag wins).
+	leaf2, created2, err := repo.EnsureByPathWithMetadata(ctx, "jira/PROJ-7", TagMetadata{
+		OrderName: "should-be-ignored",
+	})
+	if err != nil {
+		t.Fatalf("ensure 2: %v", err)
+	}
+	if created2 {
+		t.Fatal("second call should report createdLeaf=false")
+	}
+	if leaf2.OrderName == nil || *leaf2.OrderName != "Auftrag-42" {
+		t.Errorf("order_name was overwritten by second import: got %v, want %q",
+			leaf2.OrderName, "Auftrag-42")
+	}
+}
+
+func TestTagRepo_EnsureByPathWithMetadata_OrderNameRespectsExistingUserTag(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := OpenInMemory(ctx)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	repo := NewTagRepo(db)
+
+	// User creates the leaf first (OrderName nil — user has not picked).
+	parent := &Tag{Name: "#jira"}
+	if err := repo.Create(ctx, parent); err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	userLeaf := &Tag{Name: "#proj7", ParentID: ptr(parent.ID)}
+	if err := repo.Create(ctx, userLeaf); err != nil {
+		t.Fatalf("create user leaf: %v", err)
+	}
+
+	// Plugin imports the same path with a non-empty OrderName.
+	// Existing-leaf rule: the user's nil OrderName must survive, even
+	// though it is "empty" — the plugin cannot back-fill an unset
+	// mapping for an existing tag. This is what protects a user who
+	// deliberately cleared an order from having it silently re-set on
+	// the next import.
+	leaf, created, err := repo.EnsureByPathWithMetadata(ctx, "jira/PROJ-7", TagMetadata{
+		OrderName: "Plugin-Auftrag",
+	})
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if created {
+		t.Fatal("expected createdLeaf=false when leaf already exists")
+	}
+	if leaf.OrderName != nil {
+		t.Errorf("OrderName was set on existing user tag: got %v, want nil", leaf.OrderName)
+	}
+}

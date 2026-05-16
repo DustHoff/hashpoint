@@ -607,6 +607,28 @@ func (s *tagProviderServer) ListOrders(_ TagProviderListOrdersArgs, reply *TagPr
 	return nil
 }
 
+// TagProviderNotifyOrdersArgs ships the full tag-order mapping
+// snapshot from the host to the plugin on every user-initiated tag
+// mutation.
+type TagProviderNotifyOrdersArgs struct {
+	Mappings []TagOrderMapping
+}
+
+// TagProviderNotifyOrdersReply carries an optional error string. The
+// host treats the call fire-and-forget — a non-empty Err is logged at
+// Debug on the host side and never surfaced to the user.
+type TagProviderNotifyOrdersReply struct {
+	Err string
+}
+
+// NotifyTagOrders is the net/rpc-callable TagProviderHandler.NotifyTagOrders.
+func (s *tagProviderServer) NotifyTagOrders(args TagProviderNotifyOrdersArgs, reply *TagProviderNotifyOrdersReply) error {
+	if err := s.impl.NotifyTagOrders(context.Background(), args.Mappings); err != nil {
+		reply.Err = err.Error()
+	}
+	return nil
+}
+
 type tagProviderClient struct {
 	client *rpc.Client
 }
@@ -633,6 +655,20 @@ func (c *tagProviderClient) ListOrders(_ context.Context) ([]Order, error) {
 		return nil, errors.New(reply.Err)
 	}
 	return reply.Orders, nil
+}
+
+// NotifyTagOrders forwards the snapshot to the plugin. An RPC-transport
+// error surfaces here so the host's fan-out can log it; the plugin's
+// own error (rehydrated from reply.Err) gets the same treatment.
+func (c *tagProviderClient) NotifyTagOrders(_ context.Context, mappings []TagOrderMapping) error {
+	var reply TagProviderNotifyOrdersReply
+	if err := c.client.Call("Plugin.NotifyTagOrders", TagProviderNotifyOrdersArgs{Mappings: mappings}, &reply); err != nil {
+		return err
+	}
+	if reply.Err != "" {
+		return errors.New(reply.Err)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------
