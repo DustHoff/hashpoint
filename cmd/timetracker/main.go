@@ -332,16 +332,17 @@ func run() error {
 		Bind:              []any{a},
 	})
 
-	if !onShutdownCompleted.Load() {
+	switch {
+	case !onShutdownCompleted.Load():
 		slog.Warn("wails.Run returned without OnShutdown — running fallback cleanup",
 			"err", runErr)
 		a.Shutdown(context.Background())
 		hotkeyMgr.Stop()
 		flushOnShutdown(trk, slog.Default())
 		cancel()
-	} else if runErr != nil {
+	case runErr != nil:
 		slog.Warn("wails.Run returned an error after OnShutdown", "err", runErr)
-	} else {
+	default:
 		slog.Info("wails.Run returned cleanly")
 	}
 
