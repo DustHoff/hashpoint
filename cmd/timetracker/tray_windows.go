@@ -33,7 +33,14 @@ func defaultSessionStore() personio.SessionStore {
 }
 
 func runTray(ctx context.Context, a *app.App, version string) {
-	systray.Run(func() { onTrayReady(ctx, a, version) }, func() {})
+	// systray.Run blocks until systray.Quit is called. If it returns for
+	// any other reason — e.g. the underlying message-only window is
+	// destroyed by an OS event we don't yet handle — the tray icon
+	// disappears silently. Logging the return makes that case visible in
+	// the production log instead of being a missing log line. See #21.
+	systray.Run(func() { onTrayReady(ctx, a, version) }, func() {
+		slog.Info("tray: systray.Run returned")
+	})
 }
 
 func onTrayReady(ctx context.Context, a *app.App, version string) {
