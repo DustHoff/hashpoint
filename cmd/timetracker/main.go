@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -32,6 +33,12 @@ import (
 	wails "github.com/wailsapp/wails/v2"
 )
 
+// singleInstanceMutexName is the session-local mutex used to enforce a
+// single running Hashpoint process per user. The name is intentionally
+// stable across versions so newer builds collide with older ones still
+// running from the previous login.
+const singleInstanceMutexName = "Hashpoint.SingleInstance"
+
 // version is overwritten via -ldflags in CI.
 var (
 	version   = "dev"
@@ -47,6 +54,24 @@ func main() {
 }
 
 func run() error {
+	// Single-instance lock must come before file logging is configured:
+	// without it a second instance would interleave entries into the same
+	// timetracker.log and race the first instance on the SQLite DB and
+	// the global Win32 hotkey. See issue #21 for the L262 case in the
+	// production log where two instances briefly co-existed.
+	lock, err := winapi.AcquireSingleInstanceLock(singleInstanceMutexName)
+	if err != nil {
+		if errors.Is(err, winapi.ErrAlreadyRunning) {
+			// Stderr is hidden under -H windowsgui, so this is best-effort
+			// for users launching from a console. The first instance keeps
+			// running and stays visible in the tray.
+			fmt.Fprintln(os.Stderr, "hashpoint: another instance is already running")
+			return nil
+		}
+		return fmt.Errorf("acquire single-instance lock: %w", err)
+	}
+	defer func() { _ = lock.Release() }()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -230,6 +255,39 @@ func run() error {
 		}
 	}()
 
+	// Power monitor: pause the tracker on Modern Standby / sleep and
+	// resume on wake. The Wails OnShutdown callback is not invoked when
+	// Windows kills the WebView2 host during suspend (issue #21), so we
+	// close open tracks at the suspend edge instead of letting recovery
+	// fall back on the 5-minute idle heuristic. pausedBySuspend tracks
+	// system-initiated pauses so we never accidentally un-pause a user
+	// who paused tracking from the tray.
+	var pausedBySuspend atomic.Bool
+	power, powerErr := winapi.NewPowerMonitor(slog.Default(),
+		func() {
+			if trk.Paused() {
+				slog.Debug("power: suspend — tracker already paused")
+				return
+			}
+			slog.Info("power: suspend — pausing tracker")
+			pausedBySuspend.Store(true)
+			trk.Pause(ctx)
+		},
+		func() {
+			if pausedBySuspend.Swap(false) {
+				slog.Info("power: resume — resuming tracker")
+				trk.Resume()
+			} else {
+				slog.Debug("power: resume — tracker was not suspend-paused")
+			}
+		},
+	)
+	if powerErr != nil {
+		slog.Warn("power: monitor registration failed — suspend/resume edges will not be observed", "err", powerErr)
+	} else {
+		defer func() { _ = power.Close() }()
+	}
+
 	// OS signals → graceful shutdown via Wails so OnShutdown's flush runs.
 	// If Wails has not finished Startup yet, fall back to cancelling the
 	// root context directly.
@@ -245,7 +303,14 @@ func run() error {
 	// Tray runs on Windows only (no-op on other GOOS via build tag).
 	go runTray(ctx, a, version)
 
-	return wails.Run(&options.App{
+	// onShutdownCompleted distinguishes a clean Wails shutdown (OnShutdown
+	// ran) from an abnormal exit where Wails returns without invoking the
+	// callback. The latter is the production symptom in issue #21:
+	// WebView2 is killed during Modern Standby, wails.Run returns, no log
+	// of shutdown, open tracks left behind. When that happens we run the
+	// same cleanup OnShutdown would have run so DB state stays consistent.
+	var onShutdownCompleted atomic.Bool
+	runErr := wails.Run(&options.App{
 		Title:            "Hashpoint TimeTracker",
 		Width:            1200,
 		Height:           800,
@@ -260,11 +325,27 @@ func run() error {
 			hotkeyMgr.Stop()
 			flushOnShutdown(trk, slog.Default())
 			cancel()
+			onShutdownCompleted.Store(true)
 		},
 		HideWindowOnClose: true,
 		OnBeforeClose:     a.OnWindowBeforeClose,
 		Bind:              []any{a},
 	})
+
+	if !onShutdownCompleted.Load() {
+		slog.Warn("wails.Run returned without OnShutdown — running fallback cleanup",
+			"err", runErr)
+		a.Shutdown(context.Background())
+		hotkeyMgr.Stop()
+		flushOnShutdown(trk, slog.Default())
+		cancel()
+	} else if runErr != nil {
+		slog.Warn("wails.Run returned an error after OnShutdown", "err", runErr)
+	} else {
+		slog.Info("wails.Run returned cleanly")
+	}
+
+	return runErr
 }
 
 // applyHotkey reconciles the configured quick-tag hotkey with the
