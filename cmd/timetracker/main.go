@@ -151,8 +151,14 @@ func run() error {
 		}
 	}()
 
-	// Tray runs on Windows only (no-op on other GOOS via build tag).
-	go runTray(ctx, a, version)
+	// Tray runs on Windows only (no-op on other GOOS via build tag). In the
+	// monolith it drives the in-process Wails window directly.
+	trayAct := trayActions{
+		open:     a.ShowWindow,
+		openHelp: a.OpenHelpTab,
+		quit:     func() bool { return !a.Quit() },
+	}
+	go runTray(ctx, a, trayAct, version)
 
 	// onShutdownCompleted distinguishes a clean Wails shutdown (OnShutdown
 	// ran) from an abnormal exit where Wails returns without invoking the

@@ -14,4 +14,4 @@ func defaultSessionStore() personio.SessionStore {
 }
 
 // runTray is a no-op on non-Windows builds — used only by linting on Linux CI.
-func runTray(_ context.Context, _ *app.App, _ string) {}
+func runTray(_ context.Context, _ *app.App, _ trayActions, _ string) {}

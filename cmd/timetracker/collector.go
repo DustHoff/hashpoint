@@ -101,6 +101,16 @@ func runCollector() error {
 	supDone := make(chan struct{})
 	go func() { _ = sup.Run(ctx); close(supDone) }()
 
+	// The tray lives in the collector (ADR): domain actions (pause, sync,
+	// manual-tag) run in-process on d.app; "Öffnen"/"Hilfe" signal the UI
+	// process via the hub, and "Beenden" cancels the collector context.
+	trayAct := trayActions{
+		open:     func() { hub.Publish(uiShowEvent, nil) },
+		openHelp: func() { hub.Publish(uiShowEvent, nil); hub.Publish(uiHelpEvent, nil) },
+		quit:     func() bool { cancel(); return false },
+	}
+	go runTray(ctx, d.app, trayAct, version)
+
 	select {
 	case <-ctx.Done():
 		slog.Info("collector: shutting down")

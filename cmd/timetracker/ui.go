@@ -98,6 +98,13 @@ func pumpEvents(ctx context.Context, cli *ipc.Client, uiCtx context.Context) {
 			}
 			return
 		}
+		// Control events act on the UI's own window rather than being
+		// forwarded to the frontend.
+		if ev.Name == uiShowEvent {
+			wailsruntime.WindowShow(uiCtx)
+			wailsruntime.WindowUnminimise(uiCtx)
+			continue
+		}
 		if len(ev.JsonPayload) == 0 {
 			wailsruntime.EventsEmit(uiCtx, ev.Name)
 		} else {
