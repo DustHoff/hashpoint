@@ -1,9 +1,25 @@
 # ADR 0001 – Trennung von Collector- und UI-Prozess
 
-- **Status:** Vorgeschlagen (kein Implementierungsauftrag)
+- **Status:** Akzeptiert — in Umsetzung (ab 2026-05-21)
 - **Datum:** 2026-05-20
 - **Bezug:** Issue #21 (stiller Tod nach Inaktivität), PR #22 (Diagnose/Resilienz), Trade-off-Matrix Option **B** im #21-Kommentar
 - **Autor:** Analyse im Vorfeld einer Entscheidung
+
+---
+
+## Update 2026-05-21 — Entscheidung & Diagnose-Bestätigung
+
+**Diagnose abgeschlossen.** Geräte-/Flotten-Analyse über 7,5 Monate: **kein** nativer WebView2-Crash (kein WER-`AppCrash`/Event 1000 für `hashpoint.exe`/`msedgewebview2.exe`) und **kein** BSOD/Speicherdruck-Kill (kein Resource-Exhaustion 2004). Übrig bleibt ein **stiller Teardown rund um den Modern-Standby-/Hibernate-Zyklus**; der endgültige Exit-Code-Beweis (Security 4688/4689) fehlt nur, weil er nicht im Intune-Diagnosepaket gesammelt wird.
+
+**Konsequenz für die Optionswahl:** Die *Crash-Isolation* (ursprünglich beworbener Kernnutzen von B) ist damit empirisch gegenstandslos. B wird dennoch gewählt — wegen des **Survivability**-Teils (§5): ein headless Collector ohne Edge-Host wird vom Modern-Standby-Teardown nicht miterfasst. **Option A (Heartbeat) ist bereits umgesetzt** (Commit `3f35e18`) und kappt den Datenverlust unabhängig vom Todesmodus.
+
+**Festgelegte Entscheidungen:**
+
+- **Transport (§7.3):** **Named Pipe + gRPC.** gRPC liefert typsichere, bidirektionale Streams für den Event-Kanal; der Stub-Code wird per `buf` generiert und **eingecheckt**, sodass der Laufzeit-Build pure-Go bleibt (kein System-`protoc`). Bewusst abweichend von der protoc-freien Linie des Plugin-SDK (`docs/plugins/protocol.md`).
+- **Packaging:** **ein Binary, zwei Modi** (`--collector` / `--ui`); der Collector spawnt sich selbst als `--ui`. Eine Version, ein Handshake, minimale Installer-Änderung.
+- **Quit-Semantik (§7.2):** Tray-„Beenden" beendet Collector **und** UI; das Fenster-X schließt nur die UI, der Collector läuft weiter.
+- **Quick-Tag-Cold-Start (§7.1):** für v1 akzeptiert (Hotkey startet den UI-Prozess kalt).
+- **Migration (§7.4):** collector-eigener Single-Instance-Name; Ablösung des Alt-Monolithen in der Install-Phase.
 
 ---
 
