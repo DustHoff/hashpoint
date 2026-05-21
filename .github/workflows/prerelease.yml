@@ -1,0 +1,203 @@
+name: prerelease
+
+# Every push to the `release` branch publishes a GitHub *prerelease* carrying
+# the same artifacts as a normal release (hashpoint.exe, the MSI installer and
+# checksums.txt). It mirrors release.yml's build, but instead of bumping a
+# semver tag it derives a throwaway version 0.0.<run_number>:
+#   - purely numeric, so WiX/VERSIONINFO accept it;
+#   - deliberately below any real release (which start higher) so a prerelease
+#     never outranks/blocks a real install via MSI MajorUpgrade;
+#   - run_number is monotonic, so successive prereleases upgrade each other.
+# The displayed version carries a -pre suffix + short SHA. A tester who has a
+# real release installed must uninstall it before installing a prerelease
+# (lower version), which is the safe direction.
+#
+# Note: this duplicates release.yml's build steps rather than sharing a
+# reusable workflow, to keep the production release pipeline untouched.
+
+on:
+  push:
+    branches: [release]
+
+permissions:
+  contents: write
+
+jobs:
+  prerelease:
+    name: prerelease
+    runs-on: windows-2022
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.2
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.18.1
+
+      - name: Install go-winres
+        run: go install github.com/tc-hib/go-winres@v0.3.3
+
+      - name: Resolve prerelease version
+        id: version
+        shell: bash
+        run: |
+          run="${{ github.run_number }}"
+          short="$(git rev-parse --short HEAD)"
+          numeric="0.0.${run}"
+          echo "numeric=${numeric}" >> "$GITHUB_OUTPUT"
+          echo "display=${numeric}-pre+${short}" >> "$GITHUB_OUTPUT"
+          echo "tag=prerelease-${run}" >> "$GITHUB_OUTPUT"
+          echo "short=${short}" >> "$GITHUB_OUTPUT"
+          # Commit committer date → embedded buildDate is a function of source.
+          echo "iso=$(git show -s --format=%cI HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Frontend install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Frontend build
+        working-directory: frontend
+        run: npm run build
+
+      - name: Sync winres.json identity.version
+        shell: pwsh
+        run: |
+          $v = "${{ steps.version.outputs.numeric }}"
+          $parts = $v.Split(".")
+          while ($parts.Length -lt 4) { $parts += "0" }
+          $full = $parts -join "."
+          $jsonPath = "winres/winres.json"
+          $j = Get-Content $jsonPath -Raw | ConvertFrom-Json
+          $j.RT_MANIFEST."#1"."0409".identity.version = $full
+          ($j | ConvertTo-Json -Depth 32) | Set-Content -Path $jsonPath -Encoding utf8NoBOM
+          Write-Host "Patched winres.json identity.version -> $full"
+
+      - name: Generate Windows resource (.syso)
+        shell: bash
+        run: |
+          go-winres make \
+            --in winres/winres.json \
+            --arch amd64 \
+            --out cmd/timetracker/hashpoint \
+            --product-version "${{ steps.version.outputs.numeric }}" \
+            --file-version "${{ steps.version.outputs.numeric }}"
+
+      - name: Build Go binary with embedded resources
+        shell: bash
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p build/bin
+          go build -trimpath -tags desktop,production \
+            -ldflags "-s -w -buildid= -H windowsgui -X main.version=${{ steps.version.outputs.display }} -X main.commit=${{ github.sha }} -X main.buildDate=${{ steps.version.outputs.iso }}" \
+            -o build/bin/hashpoint.exe ./cmd/timetracker
+
+      - name: Locate WiX Toolset 3
+        shell: pwsh
+        run: |
+          function Find-WixBin {
+            if ($env:WIX) {
+              $p = Join-Path $env:WIX "bin"
+              if (Test-Path (Join-Path $p "candle.exe")) { return $p }
+            }
+            $candidates = Get-ChildItem -Directory "C:\Program Files (x86)" `
+              -Filter "WiX Toolset v3*" -ErrorAction SilentlyContinue
+            foreach ($c in $candidates) {
+              $p = Join-Path $c.FullName "bin"
+              if (Test-Path (Join-Path $p "candle.exe")) { return $p }
+            }
+            return $null
+          }
+          $wixBin = Find-WixBin
+          if (-not $wixBin) {
+            choco install -y wixtoolset --no-progress
+            $wixBin = Find-WixBin
+          }
+          if (-not $wixBin) {
+            Write-Error "WiX 3 candle.exe not found after install attempt."
+            exit 1
+          }
+          Write-Host "Using WiX bin at $wixBin"
+          "$wixBin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Download bundled hashpoint-plugin-manager
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $seedRoot = "build/bin/plugins-seed"
+          New-Item -ItemType Directory -Force $seedRoot | Out-Null
+          $tmpZip = Join-Path $env:RUNNER_TEMP "plugin-manager.zip"
+          gh release download --repo DustHoff/hashpoint-plugin-manager `
+            --pattern "plugin-manager_*_windows_amd64.zip" `
+            --output $tmpZip --clobber
+          Expand-Archive -Path $tmpZip -DestinationPath $seedRoot -Force
+          Remove-Item $tmpZip
+          $exe = "$seedRoot/plugin-manager/plugin-manager.exe"
+          $manifest = "$seedRoot/plugin-manager/manifest.toml"
+          if (-not (Test-Path $exe)) {
+            Write-Error "plugin-manager.exe nicht im Release-Asset gefunden"
+            exit 1
+          }
+          if (-not (Test-Path $manifest)) {
+            Write-Error "manifest.toml nicht im Release-Asset gefunden"
+            exit 1
+          }
+
+      - name: Build MSI installer
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.numeric }}"
+          $msiPath = "build/bin/hashpoint-$version.msi"
+          candle.exe -nologo `
+            -arch x64 `
+            -ext WixUtilExtension `
+            -dProductVersion="$version" `
+            -dExeFile="build/bin/hashpoint.exe" `
+            -dIconFile="build/windows/icon.ico" `
+            -dSeedPluginManagerExe="build/bin/plugins-seed/plugin-manager/plugin-manager.exe" `
+            -dSeedPluginManagerManifest="build/bin/plugins-seed/plugin-manager/manifest.toml" `
+            -out "build/bin/hashpoint.wixobj" `
+            "build/wix/hashpoint.wxs"
+          light.exe -nologo `
+            -spdb `
+            -ext WixUtilExtension `
+            -sice:ICE57 `
+            -out $msiPath `
+            "build/bin/hashpoint.wixobj"
+          if (-not (Test-Path $msiPath)) {
+            Write-Error "MSI build failed: $msiPath not produced"
+            exit 1
+          }
+          Remove-Item "build/bin/hashpoint.wixobj"
+          "MSI_NAME=hashpoint-$version.msi" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Compute SHA-256 checksums
+        shell: pwsh
+        run: |
+          $files = @("hashpoint.exe", "$env:MSI_NAME")
+          $lines = foreach ($f in $files) {
+            $hash = (Get-FileHash -Algorithm SHA256 "build/bin/$f").Hash.ToLower()
+            "$hash  $f"
+          }
+          $lines | Set-Content build/bin/checksums.txt
+
+      - name: Publish prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Prerelease ${{ steps.version.outputs.numeric }} (${{ steps.version.outputs.short }})
+          prerelease: true
+          make_latest: "false"
+          generate_release_notes: true
+          files: |
+            build/bin/hashpoint.exe
+            build/bin/hashpoint-*.msi
+            build/bin/checksums.txt
