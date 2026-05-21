@@ -219,6 +219,116 @@ func (x *Event) GetJsonPayload() []byte {
 	return nil
 }
 
+type InvokeRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// method is the exported app.App method name (e.g. "ProcessTracksByDay").
+	Method string `protobuf:"bytes,1,opt,name=method,proto3" json:"method,omitempty"`
+	// args is a JSON array whose elements decode into the method's parameters
+	// in order. Empty/absent means a no-argument call.
+	Args          []byte `protobuf:"bytes,2,opt,name=args,proto3" json:"args,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InvokeRequest) Reset() {
+	*x = InvokeRequest{}
+	mi := &file_collector_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InvokeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InvokeRequest) ProtoMessage() {}
+
+func (x *InvokeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InvokeRequest.ProtoReflect.Descriptor instead.
+func (*InvokeRequest) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *InvokeRequest) GetMethod() string {
+	if x != nil {
+		return x.Method
+	}
+	return ""
+}
+
+func (x *InvokeRequest) GetArgs() []byte {
+	if x != nil {
+		return x.Args
+	}
+	return nil
+}
+
+type InvokeResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// result is the JSON of the method's non-error return value, or null/empty
+	// when it returns nothing or only an error.
+	Result []byte `protobuf:"bytes,1,opt,name=result,proto3" json:"result,omitempty"`
+	// error is the domain error message, empty on success.
+	Error         string `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InvokeResponse) Reset() {
+	*x = InvokeResponse{}
+	mi := &file_collector_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InvokeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InvokeResponse) ProtoMessage() {}
+
+func (x *InvokeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InvokeResponse.ProtoReflect.Descriptor instead.
+func (*InvokeResponse) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *InvokeResponse) GetResult() []byte {
+	if x != nil {
+		return x.Result
+	}
+	return nil
+}
+
+func (x *InvokeResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_collector_proto protoreflect.FileDescriptor
 
 const file_collector_proto_rawDesc = "" +
@@ -234,11 +344,18 @@ const file_collector_proto_rawDesc = "" +
 	"\rEventsRequest\">\n" +
 	"\x05Event\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
-	"\fjson_payload\x18\x02 \x01(\fR\vjsonPayload2\xc9\x01\n" +
+	"\fjson_payload\x18\x02 \x01(\fR\vjsonPayload\";\n" +
+	"\rInvokeRequest\x12\x16\n" +
+	"\x06method\x18\x01 \x01(\tR\x06method\x12\x12\n" +
+	"\x04args\x18\x02 \x01(\fR\x04args\">\n" +
+	"\x0eInvokeResponse\x12\x16\n" +
+	"\x06result\x18\x01 \x01(\fR\x06result\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error2\xa2\x02\n" +
 	"\x10CollectorService\x12c\n" +
 	"\n" +
 	"GetVersion\x12).hashpoint.collector.v1.GetVersionRequest\x1a*.hashpoint.collector.v1.GetVersionResponse\x12P\n" +
-	"\x06Events\x12%.hashpoint.collector.v1.EventsRequest\x1a\x1d.hashpoint.collector.v1.Event0\x01BDZBgithub.com/dusthoff/hashpoint/internal/ipc/collectorpb;collectorpbb\x06proto3"
+	"\x06Events\x12%.hashpoint.collector.v1.EventsRequest\x1a\x1d.hashpoint.collector.v1.Event0\x01\x12W\n" +
+	"\x06Invoke\x12%.hashpoint.collector.v1.InvokeRequest\x1a&.hashpoint.collector.v1.InvokeResponseBDZBgithub.com/dusthoff/hashpoint/internal/ipc/collectorpb;collectorpbb\x06proto3"
 
 var (
 	file_collector_proto_rawDescOnce sync.Once
@@ -252,20 +369,24 @@ func file_collector_proto_rawDescGZIP() []byte {
 	return file_collector_proto_rawDescData
 }
 
-var file_collector_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_collector_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_collector_proto_goTypes = []any{
 	(*GetVersionRequest)(nil),  // 0: hashpoint.collector.v1.GetVersionRequest
 	(*GetVersionResponse)(nil), // 1: hashpoint.collector.v1.GetVersionResponse
 	(*EventsRequest)(nil),      // 2: hashpoint.collector.v1.EventsRequest
 	(*Event)(nil),              // 3: hashpoint.collector.v1.Event
+	(*InvokeRequest)(nil),      // 4: hashpoint.collector.v1.InvokeRequest
+	(*InvokeResponse)(nil),     // 5: hashpoint.collector.v1.InvokeResponse
 }
 var file_collector_proto_depIdxs = []int32{
 	0, // 0: hashpoint.collector.v1.CollectorService.GetVersion:input_type -> hashpoint.collector.v1.GetVersionRequest
 	2, // 1: hashpoint.collector.v1.CollectorService.Events:input_type -> hashpoint.collector.v1.EventsRequest
-	1, // 2: hashpoint.collector.v1.CollectorService.GetVersion:output_type -> hashpoint.collector.v1.GetVersionResponse
-	3, // 3: hashpoint.collector.v1.CollectorService.Events:output_type -> hashpoint.collector.v1.Event
-	2, // [2:4] is the sub-list for method output_type
-	0, // [0:2] is the sub-list for method input_type
+	4, // 2: hashpoint.collector.v1.CollectorService.Invoke:input_type -> hashpoint.collector.v1.InvokeRequest
+	1, // 3: hashpoint.collector.v1.CollectorService.GetVersion:output_type -> hashpoint.collector.v1.GetVersionResponse
+	3, // 4: hashpoint.collector.v1.CollectorService.Events:output_type -> hashpoint.collector.v1.Event
+	5, // 5: hashpoint.collector.v1.CollectorService.Invoke:output_type -> hashpoint.collector.v1.InvokeResponse
+	3, // [3:6] is the sub-list for method output_type
+	0, // [0:3] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -282,7 +403,7 @@ func file_collector_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_collector_proto_rawDesc), len(file_collector_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

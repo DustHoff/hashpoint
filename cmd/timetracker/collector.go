@@ -54,7 +54,7 @@ func runCollector() error {
 
 	hub := collector.NewEventHub(0)
 	svc := collector.NewService(
-		collector.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate}, hub)
+		collector.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate}, hub, nil)
 
 	srv, err := ipc.NewServer(pipeName, svc)
 	if err != nil {

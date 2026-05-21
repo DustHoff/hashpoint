@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion7
 const (
 	CollectorService_GetVersion_FullMethodName = "/hashpoint.collector.v1.CollectorService/GetVersion"
 	CollectorService_Events_FullMethodName     = "/hashpoint.collector.v1.CollectorService/Events"
+	CollectorService_Invoke_FullMethodName     = "/hashpoint.collector.v1.CollectorService/Invoke"
 )
 
 // CollectorServiceClient is the client API for CollectorService service.
@@ -36,6 +37,13 @@ type CollectorServiceClient interface {
 	// The UI re-emits each Event onto its local wails runtime so the frontend's
 	// EventsOn handlers stay unchanged (ADR Anhang B).
 	Events(ctx context.Context, in *EventsRequest, opts ...grpc.CallOption) (CollectorService_EventsClient, error)
+	// Invoke dispatches one of the app.App domain methods (ADR Anhang A) by
+	// name. args is a JSON array of the method's arguments and result the JSON
+	// of its return value — the same encoding the methods already use across the
+	// Wails boundary, so no per-method gRPC contract is needed. A domain-level
+	// error travels in the response's error field (not as a gRPC status) so the
+	// UI surfaces it to the frontend exactly as the in-process app did.
+	Invoke(ctx context.Context, in *InvokeRequest, opts ...grpc.CallOption) (*InvokeResponse, error)
 }
 
 type collectorServiceClient struct {
@@ -87,6 +95,15 @@ func (x *collectorServiceEventsClient) Recv() (*Event, error) {
 	return m, nil
 }
 
+func (c *collectorServiceClient) Invoke(ctx context.Context, in *InvokeRequest, opts ...grpc.CallOption) (*InvokeResponse, error) {
+	out := new(InvokeResponse)
+	err := c.cc.Invoke(ctx, CollectorService_Invoke_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CollectorServiceServer is the server API for CollectorService service.
 // All implementations must embed UnimplementedCollectorServiceServer
 // for forward compatibility
@@ -100,6 +117,13 @@ type CollectorServiceServer interface {
 	// The UI re-emits each Event onto its local wails runtime so the frontend's
 	// EventsOn handlers stay unchanged (ADR Anhang B).
 	Events(*EventsRequest, CollectorService_EventsServer) error
+	// Invoke dispatches one of the app.App domain methods (ADR Anhang A) by
+	// name. args is a JSON array of the method's arguments and result the JSON
+	// of its return value — the same encoding the methods already use across the
+	// Wails boundary, so no per-method gRPC contract is needed. A domain-level
+	// error travels in the response's error field (not as a gRPC status) so the
+	// UI surfaces it to the frontend exactly as the in-process app did.
+	Invoke(context.Context, *InvokeRequest) (*InvokeResponse, error)
 	mustEmbedUnimplementedCollectorServiceServer()
 }
 
@@ -112,6 +136,9 @@ func (UnimplementedCollectorServiceServer) GetVersion(context.Context, *GetVersi
 }
 func (UnimplementedCollectorServiceServer) Events(*EventsRequest, CollectorService_EventsServer) error {
 	return status.Errorf(codes.Unimplemented, "method Events not implemented")
+}
+func (UnimplementedCollectorServiceServer) Invoke(context.Context, *InvokeRequest) (*InvokeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Invoke not implemented")
 }
 func (UnimplementedCollectorServiceServer) mustEmbedUnimplementedCollectorServiceServer() {}
 
@@ -165,6 +192,24 @@ func (x *collectorServiceEventsServer) Send(m *Event) error {
 	return x.ServerStream.SendMsg(m)
 }
 
+func _CollectorService_Invoke_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InvokeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CollectorServiceServer).Invoke(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CollectorService_Invoke_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CollectorServiceServer).Invoke(ctx, req.(*InvokeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CollectorService_ServiceDesc is the grpc.ServiceDesc for CollectorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -175,6 +220,10 @@ var CollectorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetVersion",
 			Handler:    _CollectorService_GetVersion_Handler,
+		},
+		{
+			MethodName: "Invoke",
+			Handler:    _CollectorService_Invoke_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

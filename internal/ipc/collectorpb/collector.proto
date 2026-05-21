@@ -19,6 +19,14 @@ service CollectorService {
   // The UI re-emits each Event onto its local wails runtime so the frontend's
   // EventsOn handlers stay unchanged (ADR Anhang B).
   rpc Events(EventsRequest) returns (stream Event);
+
+  // Invoke dispatches one of the app.App domain methods (ADR Anhang A) by
+  // name. args is a JSON array of the method's arguments and result the JSON
+  // of its return value — the same encoding the methods already use across the
+  // Wails boundary, so no per-method gRPC contract is needed. A domain-level
+  // error travels in the response's error field (not as a gRPC status) so the
+  // UI surfaces it to the frontend exactly as the in-process app did.
+  rpc Invoke(InvokeRequest) returns (InvokeResponse);
 }
 
 message GetVersionRequest {}
@@ -41,4 +49,20 @@ message EventsRequest {}
 message Event {
   string name = 1;
   bytes json_payload = 2;
+}
+
+message InvokeRequest {
+  // method is the exported app.App method name (e.g. "ProcessTracksByDay").
+  string method = 1;
+  // args is a JSON array whose elements decode into the method's parameters
+  // in order. Empty/absent means a no-argument call.
+  bytes args = 2;
+}
+
+message InvokeResponse {
+  // result is the JSON of the method's non-error return value, or null/empty
+  // when it returns nothing or only an error.
+  bytes result = 1;
+  // error is the domain error message, empty on success.
+  string error = 2;
 }

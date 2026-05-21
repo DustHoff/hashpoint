@@ -61,7 +61,7 @@ func TestEventHub_UnsubscribeClosesChannel(t *testing.T) {
 
 func TestService_GetVersion(t *testing.T) {
 	t.Parallel()
-	s := NewService(VersionInfo{Version: "1.2.3", Commit: "abc123"}, NewEventHub(0))
+	s := NewService(VersionInfo{Version: "1.2.3", Commit: "abc123"}, NewEventHub(0), nil)
 	resp, err := s.GetVersion(context.Background(), &collectorpb.GetVersionRequest{})
 	if err != nil {
 		t.Fatalf("GetVersion: %v", err)
