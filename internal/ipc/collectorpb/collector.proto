@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package hashpoint.collector.v1;
+
+option go_package = "github.com/dusthoff/hashpoint/internal/ipc/collectorpb;collectorpb";
+
+// CollectorService is the local API the headless collector exposes to the
+// on-demand Wails UI process over a per-user named pipe (ADR 0001). Phase 1
+// ships only the handshake/health surface; the ~69 domain methods from
+// Anhang A and the full event catalogue follow in later phases.
+service CollectorService {
+  // GetVersion returns the collector's build metadata and protocol version so
+  // the UI can verify compatibility before issuing any domain calls. Both
+  // binaries ship from one executable, but a stale UI spawned across an
+  // in-place update must still detect a contract mismatch.
+  rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
+
+  // Events is the collector→UI push stream that replaces wails EventsEmit.
+  // The UI re-emits each Event onto its local wails runtime so the frontend's
+  // EventsOn handlers stay unchanged (ADR Anhang B).
+  rpc Events(EventsRequest) returns (stream Event);
+}
+
+message GetVersionRequest {}
+
+message GetVersionResponse {
+  string version = 1;
+  string commit = 2;
+  string build_date = 3;
+  // protocol_version is bumped on every incompatible change to this service;
+  // the UI refuses to attach when it differs from its own compiled-in value.
+  uint32 protocol_version = 4;
+}
+
+message EventsRequest {}
+
+// Event mirrors a wails runtime event: a name plus an opaque JSON payload.
+// Carrying the payload as JSON avoids a dedicated proto message per event
+// type during the migration — the existing events are already JSON-serialised
+// across the wails boundary — and can be tightened to typed messages later.
+message Event {
+  string name = 1;
+  bytes json_payload = 2;
+}
