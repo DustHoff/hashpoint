@@ -19,6 +19,7 @@ func NewEventSink(hub *EventHub) app.EventSink {
 	return eventSink{hub: hub}
 }
 
+// Emit marshals the payload to JSON and publishes it on the hub for the UI.
 func (s eventSink) Emit(_ context.Context, name string, payload ...any) {
 	var data []byte
 	if len(payload) > 0 && payload[0] != nil {

@@ -105,7 +105,7 @@ func runCollector() error {
 		return fmt.Errorf("locate executable: %w", err)
 	}
 	sup := uisupervisor.New(func(c context.Context) *exec.Cmd {
-		cmd := exec.CommandContext(c, exe, "--ui", "--pipe="+pipeName)
+		cmd := exec.CommandContext(c, exe, "--ui", "--pipe="+pipeName) //nolint:gosec // own resolved executable, internal args only
 		// Surface the UI child's logs while developing the split.
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		return cmd

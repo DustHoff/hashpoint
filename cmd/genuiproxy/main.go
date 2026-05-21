@@ -67,7 +67,7 @@ func run() error {
 	}
 	named, ok := obj.Type().(*types.Named)
 	if !ok {
-		return fmt.Errorf("App is not a named type")
+		return fmt.Errorf("type App is not a *types.Named")
 	}
 
 	errIface := types.Universe.Lookup("error").Type()
@@ -88,7 +88,10 @@ func run() error {
 		if !ok || !fn.Exported() || special[fn.Name()] {
 			continue
 		}
-		sig := fn.Type().(*types.Signature)
+		sig, ok := fn.Type().(*types.Signature)
+		if !ok {
+			continue
+		}
 		gen, ok := genMethod(fn.Name(), sig, errIface, qual)
 		if !ok {
 			log.Printf("skip %s: unsupported signature", fn.Name())
@@ -103,7 +106,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("format generated source: %w\n%s", err, src)
 	}
-	if err := os.WriteFile(outFile, formatted, 0o644); err != nil {
+	if err := os.WriteFile(outFile, formatted, 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", outFile, err)
 	}
 	log.Printf("genuiproxy: wrote %d proxy methods to %s", len(methods), outFile)

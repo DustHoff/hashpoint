@@ -20,6 +20,7 @@ type EventSink interface {
 // split, including the no-payload events (variadic payload).
 type wailsSink struct{}
 
+// Emit forwards the event to the Wails runtime.
 func (wailsSink) Emit(ctx context.Context, name string, payload ...any) {
 	wailsruntime.EventsEmit(ctx, name, payload...)
 }

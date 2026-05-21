@@ -90,7 +90,8 @@ func (inv *Invoker) Invoke(ctx context.Context, method string, argsJSON []byte) 
 	for _, rv := range out {
 		if rv.Type() == errorType {
 			if !rv.IsNil() {
-				return nil, rv.Interface().(error)
+				err, _ := rv.Interface().(error)
+				return nil, err
 			}
 			continue
 		}
