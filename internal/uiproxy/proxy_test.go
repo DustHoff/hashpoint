@@ -27,6 +27,10 @@ func (f *fakeClient) Events(context.Context, *collectorpb.EventsRequest, ...grpc
 	panic("unused")
 }
 
+func (f *fakeClient) ShowUI(context.Context, *collectorpb.ShowUIRequest, ...grpc.CallOption) (*collectorpb.ShowUIResponse, error) {
+	panic("unused")
+}
+
 func (f *fakeClient) Invoke(_ context.Context, req *collectorpb.InvokeRequest, _ ...grpc.CallOption) (*collectorpb.InvokeResponse, error) {
 	f.method, f.args = req.Method, req.Args
 	return &collectorpb.InvokeResponse{Result: f.result, Error: f.errMsg}, nil

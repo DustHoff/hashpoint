@@ -22,6 +22,7 @@ const (
 	CollectorService_GetVersion_FullMethodName = "/hashpoint.collector.v1.CollectorService/GetVersion"
 	CollectorService_Events_FullMethodName     = "/hashpoint.collector.v1.CollectorService/Events"
 	CollectorService_Invoke_FullMethodName     = "/hashpoint.collector.v1.CollectorService/Invoke"
+	CollectorService_ShowUI_FullMethodName     = "/hashpoint.collector.v1.CollectorService/ShowUI"
 )
 
 // CollectorServiceClient is the client API for CollectorService service.
@@ -44,6 +45,10 @@ type CollectorServiceClient interface {
 	// error travels in the response's error field (not as a gRPC status) so the
 	// UI surfaces it to the frontend exactly as the in-process app did.
 	Invoke(ctx context.Context, in *InvokeRequest, opts ...grpc.CallOption) (*InvokeResponse, error)
+	// ShowUI asks the collector to bring the UI window to the foreground. A
+	// second app launch (the Start-menu shortcut while the collector is already
+	// running) calls this instead of starting a duplicate process.
+	ShowUI(ctx context.Context, in *ShowUIRequest, opts ...grpc.CallOption) (*ShowUIResponse, error)
 }
 
 type collectorServiceClient struct {
@@ -104,6 +109,15 @@ func (c *collectorServiceClient) Invoke(ctx context.Context, in *InvokeRequest, 
 	return out, nil
 }
 
+func (c *collectorServiceClient) ShowUI(ctx context.Context, in *ShowUIRequest, opts ...grpc.CallOption) (*ShowUIResponse, error) {
+	out := new(ShowUIResponse)
+	err := c.cc.Invoke(ctx, CollectorService_ShowUI_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CollectorServiceServer is the server API for CollectorService service.
 // All implementations must embed UnimplementedCollectorServiceServer
 // for forward compatibility
@@ -124,6 +138,10 @@ type CollectorServiceServer interface {
 	// error travels in the response's error field (not as a gRPC status) so the
 	// UI surfaces it to the frontend exactly as the in-process app did.
 	Invoke(context.Context, *InvokeRequest) (*InvokeResponse, error)
+	// ShowUI asks the collector to bring the UI window to the foreground. A
+	// second app launch (the Start-menu shortcut while the collector is already
+	// running) calls this instead of starting a duplicate process.
+	ShowUI(context.Context, *ShowUIRequest) (*ShowUIResponse, error)
 	mustEmbedUnimplementedCollectorServiceServer()
 }
 
@@ -139,6 +157,9 @@ func (UnimplementedCollectorServiceServer) Events(*EventsRequest, CollectorServi
 }
 func (UnimplementedCollectorServiceServer) Invoke(context.Context, *InvokeRequest) (*InvokeResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Invoke not implemented")
+}
+func (UnimplementedCollectorServiceServer) ShowUI(context.Context, *ShowUIRequest) (*ShowUIResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ShowUI not implemented")
 }
 func (UnimplementedCollectorServiceServer) mustEmbedUnimplementedCollectorServiceServer() {}
 
@@ -210,6 +231,24 @@ func _CollectorService_Invoke_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CollectorService_ShowUI_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ShowUIRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CollectorServiceServer).ShowUI(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CollectorService_ShowUI_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CollectorServiceServer).ShowUI(ctx, req.(*ShowUIRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CollectorService_ServiceDesc is the grpc.ServiceDesc for CollectorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -224,6 +263,10 @@ var CollectorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Invoke",
 			Handler:    _CollectorService_Invoke_Handler,
+		},
+		{
+			MethodName: "ShowUI",
+			Handler:    _CollectorService_ShowUI_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

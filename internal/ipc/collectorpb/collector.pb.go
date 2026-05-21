@@ -329,6 +329,78 @@ func (x *InvokeResponse) GetError() string {
 	return ""
 }
 
+type ShowUIRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShowUIRequest) Reset() {
+	*x = ShowUIRequest{}
+	mi := &file_collector_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShowUIRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShowUIRequest) ProtoMessage() {}
+
+func (x *ShowUIRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShowUIRequest.ProtoReflect.Descriptor instead.
+func (*ShowUIRequest) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{6}
+}
+
+type ShowUIResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShowUIResponse) Reset() {
+	*x = ShowUIResponse{}
+	mi := &file_collector_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShowUIResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShowUIResponse) ProtoMessage() {}
+
+func (x *ShowUIResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShowUIResponse.ProtoReflect.Descriptor instead.
+func (*ShowUIResponse) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{7}
+}
+
 var File_collector_proto protoreflect.FileDescriptor
 
 const file_collector_proto_rawDesc = "" +
@@ -350,12 +422,15 @@ const file_collector_proto_rawDesc = "" +
 	"\x04args\x18\x02 \x01(\fR\x04args\">\n" +
 	"\x0eInvokeResponse\x12\x16\n" +
 	"\x06result\x18\x01 \x01(\fR\x06result\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error2\xa2\x02\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\x0f\n" +
+	"\rShowUIRequest\"\x10\n" +
+	"\x0eShowUIResponse2\xfb\x02\n" +
 	"\x10CollectorService\x12c\n" +
 	"\n" +
 	"GetVersion\x12).hashpoint.collector.v1.GetVersionRequest\x1a*.hashpoint.collector.v1.GetVersionResponse\x12P\n" +
 	"\x06Events\x12%.hashpoint.collector.v1.EventsRequest\x1a\x1d.hashpoint.collector.v1.Event0\x01\x12W\n" +
-	"\x06Invoke\x12%.hashpoint.collector.v1.InvokeRequest\x1a&.hashpoint.collector.v1.InvokeResponseBDZBgithub.com/dusthoff/hashpoint/internal/ipc/collectorpb;collectorpbb\x06proto3"
+	"\x06Invoke\x12%.hashpoint.collector.v1.InvokeRequest\x1a&.hashpoint.collector.v1.InvokeResponse\x12W\n" +
+	"\x06ShowUI\x12%.hashpoint.collector.v1.ShowUIRequest\x1a&.hashpoint.collector.v1.ShowUIResponseBDZBgithub.com/dusthoff/hashpoint/internal/ipc/collectorpb;collectorpbb\x06proto3"
 
 var (
 	file_collector_proto_rawDescOnce sync.Once
@@ -369,7 +444,7 @@ func file_collector_proto_rawDescGZIP() []byte {
 	return file_collector_proto_rawDescData
 }
 
-var file_collector_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_collector_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_collector_proto_goTypes = []any{
 	(*GetVersionRequest)(nil),  // 0: hashpoint.collector.v1.GetVersionRequest
 	(*GetVersionResponse)(nil), // 1: hashpoint.collector.v1.GetVersionResponse
@@ -377,16 +452,20 @@ var file_collector_proto_goTypes = []any{
 	(*Event)(nil),              // 3: hashpoint.collector.v1.Event
 	(*InvokeRequest)(nil),      // 4: hashpoint.collector.v1.InvokeRequest
 	(*InvokeResponse)(nil),     // 5: hashpoint.collector.v1.InvokeResponse
+	(*ShowUIRequest)(nil),      // 6: hashpoint.collector.v1.ShowUIRequest
+	(*ShowUIResponse)(nil),     // 7: hashpoint.collector.v1.ShowUIResponse
 }
 var file_collector_proto_depIdxs = []int32{
 	0, // 0: hashpoint.collector.v1.CollectorService.GetVersion:input_type -> hashpoint.collector.v1.GetVersionRequest
 	2, // 1: hashpoint.collector.v1.CollectorService.Events:input_type -> hashpoint.collector.v1.EventsRequest
 	4, // 2: hashpoint.collector.v1.CollectorService.Invoke:input_type -> hashpoint.collector.v1.InvokeRequest
-	1, // 3: hashpoint.collector.v1.CollectorService.GetVersion:output_type -> hashpoint.collector.v1.GetVersionResponse
-	3, // 4: hashpoint.collector.v1.CollectorService.Events:output_type -> hashpoint.collector.v1.Event
-	5, // 5: hashpoint.collector.v1.CollectorService.Invoke:output_type -> hashpoint.collector.v1.InvokeResponse
-	3, // [3:6] is the sub-list for method output_type
-	0, // [0:3] is the sub-list for method input_type
+	6, // 3: hashpoint.collector.v1.CollectorService.ShowUI:input_type -> hashpoint.collector.v1.ShowUIRequest
+	1, // 4: hashpoint.collector.v1.CollectorService.GetVersion:output_type -> hashpoint.collector.v1.GetVersionResponse
+	3, // 5: hashpoint.collector.v1.CollectorService.Events:output_type -> hashpoint.collector.v1.Event
+	5, // 6: hashpoint.collector.v1.CollectorService.Invoke:output_type -> hashpoint.collector.v1.InvokeResponse
+	7, // 7: hashpoint.collector.v1.CollectorService.ShowUI:output_type -> hashpoint.collector.v1.ShowUIResponse
+	4, // [4:8] is the sub-list for method output_type
+	0, // [0:4] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -403,7 +482,7 @@ func file_collector_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_collector_proto_rawDesc), len(file_collector_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

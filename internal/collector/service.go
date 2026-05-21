@@ -10,6 +10,11 @@ import (
 	"github.com/dusthoff/hashpoint/internal/ipc/collectorpb"
 )
 
+// EventShowUI is the control event the collector publishes to ask the UI to
+// foreground its window. The UI's event pump acts on it locally rather than
+// forwarding it to the frontend.
+const EventShowUI = "ui:show"
+
 // VersionInfo is the collector build metadata reported to the UI via
 // GetVersion for the compatibility handshake.
 type VersionInfo struct {
@@ -83,4 +88,12 @@ func (s *Service) Invoke(ctx context.Context, req *collectorpb.InvokeRequest) (*
 		resp.Error = err.Error()
 	}
 	return resp, nil
+}
+
+// ShowUI publishes the show-window control event so the connected UI brings
+// itself to the foreground. Called by a second app launch that found the
+// collector already running.
+func (s *Service) ShowUI(context.Context, *collectorpb.ShowUIRequest) (*collectorpb.ShowUIResponse, error) {
+	s.hub.Publish(EventShowUI, nil)
+	return &collectorpb.ShowUIResponse{}, nil
 }

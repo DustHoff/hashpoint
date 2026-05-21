@@ -1,16 +1,10 @@
 package main
 
-// Control-event names the collector publishes onto the IPC hub for the UI
-// process to act on (vs. domain events that the UI re-emits to the frontend).
-const (
-	// uiShowEvent tells the UI to bring its window to the foreground. It is
-	// handled by the UI (window op), not forwarded to the frontend.
-	uiShowEvent = "ui:show"
-	// uiHelpEvent must match app.helpOpenEvent ("help:open") — the frontend
-	// switches to the Help tab on it. Published by the collector's tray "Hilfe"
-	// since it cannot call the window-bound app.OpenHelpTab itself.
-	uiHelpEvent = "help:open"
-)
+// uiHelpEvent must match app.helpOpenEvent ("help:open") — the frontend
+// switches to the Help tab on it. Published by the collector's tray "Hilfe"
+// since it cannot call the window-bound app.OpenHelpTab itself. The
+// show-window control event is collector.EventShowUI.
+const uiHelpEvent = "help:open"
 
 // trayActions are the window/lifecycle callbacks the tray triggers, which
 // differ between the monolith (drive the in-process Wails window) and the

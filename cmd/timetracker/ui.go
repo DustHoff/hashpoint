@@ -8,6 +8,7 @@ import (
 	"time"
 
 	hashpoint "github.com/dusthoff/hashpoint"
+	"github.com/dusthoff/hashpoint/internal/collector"
 	"github.com/dusthoff/hashpoint/internal/ipc"
 	"github.com/dusthoff/hashpoint/internal/ipc/collectorpb"
 	"github.com/dusthoff/hashpoint/internal/uiproxy"
@@ -94,13 +95,17 @@ func pumpEvents(ctx context.Context, cli *ipc.Client, uiCtx context.Context) {
 		ev, err := stream.Recv()
 		if err != nil {
 			if ctx.Err() == nil {
-				slog.Warn("ui: collector event stream ended", "err", err)
+				// The collector went away (not our own shutdown). Don't linger
+				// as a zombie talking to a dead collector — quit; the collector
+				// spawns a fresh UI when it next starts.
+				slog.Warn("ui: collector event stream ended — quitting", "err", err)
+				wailsruntime.Quit(uiCtx)
 			}
 			return
 		}
 		// Control events act on the UI's own window rather than being
 		// forwarded to the frontend.
-		if ev.Name == uiShowEvent {
+		if ev.Name == collector.EventShowUI {
 			wailsruntime.WindowShow(uiCtx)
 			wailsruntime.WindowUnminimise(uiCtx)
 			continue

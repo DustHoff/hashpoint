@@ -59,6 +59,26 @@ func TestEventHub_UnsubscribeClosesChannel(t *testing.T) {
 	h.Publish("x", nil)
 }
 
+func TestService_ShowUI(t *testing.T) {
+	t.Parallel()
+	hub := NewEventHub(4)
+	ch, cancel := hub.Subscribe()
+	defer cancel()
+	svc := NewService(VersionInfo{}, hub, nil)
+
+	if _, err := svc.ShowUI(context.Background(), &collectorpb.ShowUIRequest{}); err != nil {
+		t.Fatalf("ShowUI: %v", err)
+	}
+	select {
+	case ev := <-ch:
+		if ev.Name != EventShowUI {
+			t.Errorf("published %q, want %q", ev.Name, EventShowUI)
+		}
+	default:
+		t.Error("ShowUI did not publish the show-window event")
+	}
+}
+
 func TestService_GetVersion(t *testing.T) {
 	t.Parallel()
 	s := NewService(VersionInfo{Version: "1.2.3", Commit: "abc123"}, NewEventHub(0), nil)

@@ -27,6 +27,11 @@ service CollectorService {
   // error travels in the response's error field (not as a gRPC status) so the
   // UI surfaces it to the frontend exactly as the in-process app did.
   rpc Invoke(InvokeRequest) returns (InvokeResponse);
+
+  // ShowUI asks the collector to bring the UI window to the foreground. A
+  // second app launch (the Start-menu shortcut while the collector is already
+  // running) calls this instead of starting a duplicate process.
+  rpc ShowUI(ShowUIRequest) returns (ShowUIResponse);
 }
 
 message GetVersionRequest {}
@@ -66,3 +71,7 @@ message InvokeResponse {
   // error is the domain error message, empty on success.
   string error = 2;
 }
+
+message ShowUIRequest {}
+
+message ShowUIResponse {}
