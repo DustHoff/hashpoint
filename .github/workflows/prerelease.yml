@@ -3,14 +3,21 @@ name: prerelease
 # Every push to the `release` branch publishes a GitHub *prerelease* carrying
 # the same artifacts as a normal release (hashpoint.exe, the MSI installer and
 # checksums.txt). It mirrors release.yml's build, but instead of bumping a
-# semver tag it derives a throwaway version 0.0.<run_number>:
-#   - purely numeric, so WiX/VERSIONINFO accept it;
-#   - deliberately below any real release (which start higher) so a prerelease
-#     never outranks/blocks a real install via MSI MajorUpgrade;
-#   - run_number is monotonic, so successive prereleases upgrade each other.
-# The displayed version carries a -pre suffix + short SHA. A tester who has a
-# real release installed must uninstall it before installing a prerelease
-# (lower version), which is the safe direction.
+# semver tag it derives a SemVer release-candidate version from the latest tag:
+#
+#   <major>.<minor>.<patch+1>-rc.<x>
+#
+# i.e. the release candidate for the *next* patch release (release.yml bumps
+# patch by default), so per SemVer the rc sorts before that final release.
+# `x` is the number of commits since the latest tag — a chronological build
+# count that resets when a new tag is cut, giving rc.1, rc.2, … per version.
+#
+# WiX/VERSIONINFO need a purely numeric version, so the MSI/EXE carry
+# <major>.<minor>.<patch+1>.<x> (the -rc.<x> maps to the 4th/revision field).
+# MSI only compares the first three fields, so every rc for a given target
+# shares <major>.<minor>.<patch+1>; AllowSameVersionUpgrades (see
+# build/wix/hashpoint.wxs) lets successive rc MSIs — and the final release —
+# replace each other cleanly.
 #
 # Note: this duplicates release.yml's build steps rather than sharing a
 # reusable workflow, to keep the production release pipeline untouched.
@@ -29,6 +36,10 @@ jobs:
     if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history + tags so we can find the latest tag and count the
+          # commits since it.
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
@@ -46,15 +57,38 @@ jobs:
         id: version
         shell: bash
         run: |
-          run="${{ github.run_number }}"
+          # No pipefail: `git tag | head` would SIGPIPE-fail git under it.
+          set -eu
+          # Latest semver tag (descending). Default to v0.0.0 when none exist.
+          latest="$(git tag -l 'v*' --sort=-v:refname | head -n1)"
+          if [ -z "$latest" ]; then
+            base="0.0.0"
+            range="HEAD"
+          else
+            base="${latest#v}"
+            range="${latest}..HEAD"
+          fi
+          # Strip any pre-release/build suffix the tag might carry.
+          base="${base%%-*}"
+          IFS=. read -r maj min pat <<< "$base"
+          maj="${maj:-0}"; min="${min:-0}"; pat="${pat:-0}"
+          next_pat=$((pat + 1))
+          # x = commits since the latest tag (this rc series' build count).
+          x="$(git rev-list --count "$range")"
+          [ "$x" -ge 1 ] || x=1
+
+          semver="${maj}.${min}.${next_pat}-rc.${x}"   # SemVer (tag + display)
+          numeric="${maj}.${min}.${next_pat}.${x}"     # WiX/VERSIONINFO (4-part)
           short="$(git rev-parse --short HEAD)"
-          numeric="0.0.${run}"
-          echo "numeric=${numeric}" >> "$GITHUB_OUTPUT"
-          echo "display=${numeric}-pre+${short}" >> "$GITHUB_OUTPUT"
-          echo "tag=prerelease-${run}" >> "$GITHUB_OUTPUT"
-          echo "short=${short}" >> "$GITHUB_OUTPUT"
-          # Commit committer date → embedded buildDate is a function of source.
-          echo "iso=$(git show -s --format=%cI HEAD)" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "semver=${semver}"
+            echo "numeric=${numeric}"
+            echo "tag=v${semver}"
+            echo "short=${short}"
+            echo "iso=$(git show -s --format=%cI HEAD)"
+          } >> "$GITHUB_OUTPUT"
+          echo "Prerelease version: ${semver} (MSI ${numeric})"
 
       - name: Frontend install
         working-directory: frontend
@@ -67,8 +101,9 @@ jobs:
       - name: Sync winres.json identity.version
         shell: pwsh
         run: |
-          $v = "${{ steps.version.outputs.numeric }}"
-          $parts = $v.Split(".")
+          # Numeric is already 4-part (major.minor.build.revision); pad just in
+          # case a future scheme yields fewer parts.
+          $parts = "${{ steps.version.outputs.numeric }}".Split(".")
           while ($parts.Length -lt 4) { $parts += "0" }
           $full = $parts -join "."
           $jsonPath = "winres/winres.json"
@@ -95,8 +130,10 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           mkdir -p build/bin
+          # main.version carries the SemVer string (with -rc.x) for display;
+          # the embedded VERSIONINFO carries the numeric form via the .syso.
           go build -trimpath -tags desktop,production \
-            -ldflags "-s -w -buildid= -H windowsgui -X main.version=${{ steps.version.outputs.display }} -X main.commit=${{ github.sha }} -X main.buildDate=${{ steps.version.outputs.iso }}" \
+            -ldflags "-s -w -buildid= -H windowsgui -X main.version=${{ steps.version.outputs.semver }} -X main.commit=${{ github.sha }} -X main.buildDate=${{ steps.version.outputs.iso }}" \
             -o build/bin/hashpoint.exe ./cmd/timetracker
 
       - name: Locate WiX Toolset 3
@@ -154,22 +191,27 @@ jobs:
       - name: Build MSI installer
         shell: pwsh
         run: |
-          $version = "${{ steps.version.outputs.numeric }}"
-          $msiPath = "build/bin/hashpoint-$version.msi"
+          $numeric = "${{ steps.version.outputs.numeric }}"
+          $semver  = "${{ steps.version.outputs.semver }}"
+          $msiPath = "build/bin/hashpoint-$semver.msi"
           candle.exe -nologo `
             -arch x64 `
             -ext WixUtilExtension `
-            -dProductVersion="$version" `
+            -dProductVersion="$numeric" `
             -dExeFile="build/bin/hashpoint.exe" `
             -dIconFile="build/windows/icon.ico" `
             -dSeedPluginManagerExe="build/bin/plugins-seed/plugin-manager/plugin-manager.exe" `
             -dSeedPluginManagerManifest="build/bin/plugins-seed/plugin-manager/manifest.toml" `
             -out "build/bin/hashpoint.wixobj" `
             "build/wix/hashpoint.wxs"
+          # ICE57: HKCU under per-machine install (autostart). ICE61: emitted
+          # because AllowSameVersionUpgrades is enabled in the .wxs so rc MSIs
+          # sharing major.minor.build can upgrade each other. Both accepted.
           light.exe -nologo `
             -spdb `
             -ext WixUtilExtension `
             -sice:ICE57 `
+            -sice:ICE61 `
             -out $msiPath `
             "build/bin/hashpoint.wixobj"
           if (-not (Test-Path $msiPath)) {
@@ -177,7 +219,7 @@ jobs:
             exit 1
           }
           Remove-Item "build/bin/hashpoint.wixobj"
-          "MSI_NAME=hashpoint-$version.msi" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "MSI_NAME=hashpoint-$semver.msi" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Compute SHA-256 checksums
         shell: pwsh
@@ -193,7 +235,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: Prerelease ${{ steps.version.outputs.numeric }} (${{ steps.version.outputs.short }})
+          name: Prerelease ${{ steps.version.outputs.semver }} (${{ steps.version.outputs.short }})
           prerelease: true
           make_latest: "false"
           generate_release_notes: true
