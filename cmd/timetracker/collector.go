@@ -62,6 +62,11 @@ func runCollector() error {
 		defer func() { _ = d.power.Close() }()
 	}
 
+	// Domain init — orchestrator recovery, plugin host start, previous-day
+	// Personio sync — runs in the collector now, not the UI. It also sets the
+	// app's started flag so event emission to the hub is enabled.
+	d.app.Startup(ctx)
+
 	token, err := sessionToken()
 	if err != nil {
 		return err

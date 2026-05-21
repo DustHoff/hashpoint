@@ -82,7 +82,11 @@ func (inv *Invoker) Invoke(ctx context.Context, method string, argsJSON []byte) 
 
 	out := fn.Call(in)
 
-	var result any
+	// Split returns into data values and an optional error. A single data
+	// value is marshalled directly (matching Wails' single-return semantics);
+	// two or more are marshalled as a JSON array, which the UI proxy decodes
+	// element-by-element into the corresponding return variables.
+	var data []any
 	for _, rv := range out {
 		if rv.Type() == errorType {
 			if !rv.IsNil() {
@@ -90,14 +94,20 @@ func (inv *Invoker) Invoke(ctx context.Context, method string, argsJSON []byte) 
 			}
 			continue
 		}
-		result = rv.Interface()
+		data = append(data, rv.Interface())
 	}
-	if result == nil {
+	var result any
+	switch len(data) {
+	case 0:
 		return nil, nil
+	case 1:
+		result = data[0]
+	default:
+		result = data
 	}
-	data, err := json.Marshal(result)
+	encoded, err := json.Marshal(result)
 	if err != nil {
 		return nil, fmt.Errorf("encode result of %s: %w", method, err)
 	}
-	return data, nil
+	return encoded, nil
 }
