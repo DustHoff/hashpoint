@@ -38,6 +38,11 @@ type ProcessTrack struct {
 	DurationSec     int64      `json:"duration_sec"`
 	IsIdle          bool       `json:"is_idle"`
 	IsCommunication bool       `json:"is_communication"`
+	// LastSeen is the heartbeat written on every poll tick the track is
+	// confirmed active. Nil until the first tick (or for rows predating the
+	// 0010 migration). Crash recovery closes a still-open track at LastSeen
+	// when set, falling back to start+idle_threshold otherwise.
+	LastSeen *time.Time `json:"last_seen,omitempty"`
 }
 
 // IsOpen returns true while the track is still being recorded.

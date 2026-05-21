@@ -325,10 +325,11 @@ func (t *Tracker) shutdown(ctx context.Context) {
 	}
 }
 
-// recover finalizes every track left open by a previous crash. Focused tracks
-// chain together so each is bounded by the next one's start; comm tracks
-// recover independently because they overlap freely with each other and with
-// focused tracks.
+// recover finalizes every track left open by a previous crash, closing each at
+// its last_seen heartbeat when present (else the start+idle_threshold
+// fallback). Focused tracks additionally chain so each is bounded by the next
+// one's start; comm tracks recover independently because they overlap freely
+// with each other and with focused tracks.
 func (t *Tracker) recover(ctx context.Context) error {
 	opens, err := t.tracks.ListOpen(ctx)
 	if err != nil {
@@ -336,10 +337,7 @@ func (t *Tracker) recover(ctx context.Context) error {
 	}
 	now := t.clock.Now()
 	for i, open := range opens {
-		end := open.StartTime.Add(t.cfg.IdleThreshold)
-		if end.After(now) {
-			end = now
-		}
+		end := recoveredEnd(open, t.cfg.IdleThreshold, now)
 		// If a later open exists, this one ends no later than its start.
 		if i+1 < len(opens) && opens[i+1].StartTime.Before(end) {
 			end = opens[i+1].StartTime
@@ -348,6 +346,7 @@ func (t *Tracker) recover(ctx context.Context) error {
 			"id", open.ID, "process", open.ProcessName,
 			"start", open.StartTime.Format(time.RFC3339),
 			"recovered_end", end.Format(time.RFC3339),
+			"from_heartbeat", open.LastSeen != nil,
 		)
 		if err := t.tracks.Close(ctx, open.ID, end); err != nil {
 			return fmt.Errorf("close open track %d: %w", open.ID, err)
@@ -358,20 +357,34 @@ func (t *Tracker) recover(ctx context.Context) error {
 		return fmt.Errorf("list open comm tracks: %w", err)
 	}
 	for _, open := range commOpens {
-		end := open.StartTime.Add(t.cfg.IdleThreshold)
-		if end.After(now) {
-			end = now
-		}
+		end := recoveredEnd(open, t.cfg.IdleThreshold, now)
 		t.logger.Info("recovering open communication track from previous run",
 			"id", open.ID, "process", open.ProcessName,
 			"start", open.StartTime.Format(time.RFC3339),
 			"recovered_end", end.Format(time.RFC3339),
+			"from_heartbeat", open.LastSeen != nil,
 		)
 		if err := t.tracks.Close(ctx, open.ID, end); err != nil {
 			return fmt.Errorf("close open comm track %d: %w", open.ID, err)
 		}
 	}
 	return nil
+}
+
+// recoveredEnd computes the close time for a track left open by a crash.
+// A last_seen heartbeat (persisted on every active poll tick) bounds the loss
+// to one poll interval; without it we fall back to the legacy start+idle
+// heuristic. The result is always clamped to now so a future-dated heartbeat
+// from a clock change can never produce an end past recovery time.
+func recoveredEnd(open storage.ProcessTrack, idle time.Duration, now time.Time) time.Time {
+	end := open.StartTime.Add(idle)
+	if open.LastSeen != nil {
+		end = *open.LastSeen
+	}
+	if end.After(now) {
+		end = now
+	}
+	return end
 }
 
 func (t *Tracker) tick(ctx context.Context) {
@@ -471,6 +484,9 @@ func (t *Tracker) tickComm(ctx context.Context) {
 			continue
 		}
 		if existing.title == w.Title {
+			// Window still alive and unchanged — advance its heartbeat so a
+			// crash recovers this comm track to ~now, not start+idle_threshold.
+			t.touchLocked(ctx, existing.track.ID, now)
 			continue
 		}
 		// Title change: close the old row and open a fresh one so the
@@ -600,14 +616,17 @@ func (t *Tracker) handleFocus(ctx context.Context, info winapi.FocusInfo) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Same focus → keep current track open.
+	now := t.clock.Now()
+
+	// Same focus → keep current track open and advance its heartbeat so a
+	// crash mid-session recovers to ~now instead of start+idle_threshold.
 	if t.current != nil &&
 		t.current.ProcessName == info.ProcessName &&
 		t.current.WindowTitle == info.Title {
+		t.touchLocked(ctx, t.current.ID, now)
 		return
 	}
 
-	now := t.clock.Now()
 	if t.current != nil {
 		if err := t.tracks.Close(ctx, t.current.ID, now); err != nil {
 			t.logger.Warn("close on switch failed", "err", err)
@@ -633,6 +652,16 @@ func (t *Tracker) handleFocus(ctx context.Context, info winapi.FocusInfo) {
 		"id", p.ID, "process", p.ProcessName, "title", p.WindowTitle)
 
 	t.notifyChanged(ctx, info.ProcessName, info.Title, now)
+}
+
+// touchLocked advances the heartbeat of an open track. Caller must hold t.mu.
+// Failures are debug-only: a missed heartbeat merely widens the worst-case
+// recovery window back toward the idle-threshold fallback; it is never fatal,
+// so it must not interrupt the poll loop.
+func (t *Tracker) touchLocked(ctx context.Context, id int64, now time.Time) {
+	if err := t.tracks.Touch(ctx, id, now); err != nil {
+		t.logger.Debug("touch last_seen failed", "id", id, "err", err)
+	}
 }
 
 func (t *Tracker) notifyChanged(ctx context.Context, name, title string, at time.Time) {
