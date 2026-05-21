@@ -122,12 +122,91 @@ func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	paths, cfg, closeLog, err := bootstrap()
+	if err != nil {
+		return err
+	}
+	defer closeLog()
+
+	// nil sink ⇒ the app emits via the Wails runtime (the monolith default).
+	d, err := buildDomain(ctx, paths, cfg, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.dbClose() }()
+	if d.power != nil {
+		defer func() { _ = d.power.Close() }()
+	}
+	a := d.app
+
+	// OS signals → graceful shutdown via Wails so OnShutdown's flush runs.
+	// If Wails has not finished Startup yet, fall back to cancelling the
+	// root context directly.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		if !a.Quit() {
+			cancel()
+		}
+	}()
+
+	// Tray runs on Windows only (no-op on other GOOS via build tag).
+	go runTray(ctx, a, version)
+
+	// onShutdownCompleted distinguishes a clean Wails shutdown (OnShutdown
+	// ran) from an abnormal exit where Wails returns without invoking the
+	// callback. The latter is the production symptom in issue #21:
+	// WebView2 is killed during Modern Standby, wails.Run returns, no log
+	// of shutdown, open tracks left behind. When that happens we run the
+	// same cleanup OnShutdown would have run so DB state stays consistent.
+	var onShutdownCompleted atomic.Bool
+	runErr := wails.Run(&options.App{
+		Title:            "Hashpoint TimeTracker",
+		Width:            1200,
+		Height:           800,
+		MinWidth:         800,
+		MinHeight:        600,
+		WindowStartState: options.Maximised,
+		AssetServer:      &assetserver.Options{Assets: hashpoint.Frontend},
+		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
+		OnStartup:        a.Startup,
+		OnShutdown: func(c context.Context) {
+			d.shutdown(c)
+			cancel()
+			onShutdownCompleted.Store(true)
+		},
+		HideWindowOnClose: true,
+		OnBeforeClose:     a.OnWindowBeforeClose,
+		Bind:              []any{a},
+	})
+
+	switch {
+	case !onShutdownCompleted.Load():
+		slog.Warn("wails.Run returned without OnShutdown — running fallback cleanup",
+			"err", runErr)
+		d.shutdown(context.Background())
+		cancel()
+	case runErr != nil:
+		slog.Warn("wails.Run returned an error after OnShutdown", "err", runErr)
+	default:
+		slog.Info("wails.Run returned cleanly")
+	}
+
+	return runErr
+}
+
+// bootstrap resolves paths, configures file logging, seeds bundled plugins and
+// loads config. Shared by the monolith and the collector; returns a closer for
+// the log writer. On error after the log is open, the closer is invoked before
+// returning so the caller never has to.
+func bootstrap() (config.Paths, *config.Config, func(), error) {
 	paths, err := config.ResolvePaths()
 	if err != nil {
-		return fmt.Errorf("resolve paths: %w", err)
+		return config.Paths{}, nil, nil, fmt.Errorf("resolve paths: %w", err)
 	}
 	if err := os.MkdirAll(paths.DataDir, 0o700); err != nil {
-		return fmt.Errorf("create data dir: %w", err)
+		return config.Paths{}, nil, nil, fmt.Errorf("create data dir: %w", err)
 	}
 
 	logLevel := slog.LevelInfo
@@ -146,13 +225,13 @@ func run() error {
 		Console: false,
 	})
 	if err != nil {
-		return fmt.Errorf("setup logging: %w", err)
+		return config.Paths{}, nil, nil, fmt.Errorf("setup logging: %w", err)
 	}
-	defer func() {
+	closeLog := func() {
 		if logCloser != nil {
 			_ = logCloser.Close()
 		}
-	}()
+	}
 
 	// Seed bundled plugins from the install directory into the per-user
 	// PluginsDir. The MSI drops plugin bundles under
@@ -170,14 +249,42 @@ func run() error {
 
 	cfg, err := config.Load(paths.ConfigFile)
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		closeLog()
+		return config.Paths{}, nil, nil, fmt.Errorf("load config: %w", err)
 	}
+	return paths, cfg, closeLog, nil
+}
 
+// domainHandles bundles the long-lived backend that the collector owns and the
+// monolith also runs in-process. Built by buildDomain.
+type domainHandles struct {
+	app     *app.App
+	tracker *tracker.Tracker
+	hotkey  *winapi.HotkeyManager
+	power   *winapi.PowerMonitor // nil when registration failed
+	dbClose func() error
+}
+
+// shutdown runs the clean-exit sequence: stop the plugin host + frontend
+// bookkeeping, unregister the hotkey, and flush open tracks/blocks to the DB.
+func (d *domainHandles) shutdown(ctx context.Context) {
+	d.app.Shutdown(ctx)
+	d.hotkey.Stop()
+	flushOnShutdown(d.tracker, slog.Default())
+}
+
+// buildDomain wires storage, tracker, orchestrator, sessions, hotkey and the
+// app facade from config — the shared backend for both the monolith (run) and
+// the headless collector (runCollector). sink routes app events (nil ⇒ the
+// Wails runtime in the monolith/UI; the collector passes an IPC-hub sink). It
+// also honours the persisted tracking-enabled flag, starts the tracker
+// goroutine and registers the suspend/resume power monitor; ctx governs their
+// lifetime.
+func buildDomain(ctx context.Context, paths config.Paths, cfg *config.Config, sink app.EventSink) (*domainHandles, error) {
 	db, err := storage.Open(ctx, paths.DBFile)
 	if err != nil {
-		return fmt.Errorf("open db: %w", err)
+		return nil, fmt.Errorf("open db: %w", err)
 	}
-	defer func() { _ = db.Close() }()
 
 	tracks := storage.NewProcessTrackRepo(db)
 	tagBlocks := storage.NewTagBlockRepo(db)
@@ -205,8 +312,7 @@ func run() error {
 
 	// Entra ID is opt-in: build the manager lazily, only when client_id
 	// and tenant_id are filled in. The closure is also wired into the
-	// app so SaveConfig can rebuild the manager on every config change
-	// without touching main.go again.
+	// app so SaveConfig can rebuild the manager on every config change.
 	entraFor := func(c config.EntraConfig) (entra.Manager, error) {
 		if !c.Configured() {
 			return nil, nil
@@ -254,6 +360,7 @@ func run() error {
 		ConfigPath:     paths.ConfigFile,
 		Config:         cfg,
 		LogDir:         paths.LogDir,
+		Sink:           sink,
 		OnConfigSet: func(c *config.Config) error {
 			trkMu.Lock()
 			defer trkMu.Unlock()
@@ -331,69 +438,10 @@ func run() error {
 	)
 	if powerErr != nil {
 		slog.Warn("power: monitor registration failed — suspend/resume edges will not be observed", "err", powerErr)
-	} else {
-		defer func() { _ = power.Close() }()
+		power = nil
 	}
 
-	// OS signals → graceful shutdown via Wails so OnShutdown's flush runs.
-	// If Wails has not finished Startup yet, fall back to cancelling the
-	// root context directly.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		if !a.Quit() {
-			cancel()
-		}
-	}()
-
-	// Tray runs on Windows only (no-op on other GOOS via build tag).
-	go runTray(ctx, a, version)
-
-	// onShutdownCompleted distinguishes a clean Wails shutdown (OnShutdown
-	// ran) from an abnormal exit where Wails returns without invoking the
-	// callback. The latter is the production symptom in issue #21:
-	// WebView2 is killed during Modern Standby, wails.Run returns, no log
-	// of shutdown, open tracks left behind. When that happens we run the
-	// same cleanup OnShutdown would have run so DB state stays consistent.
-	var onShutdownCompleted atomic.Bool
-	runErr := wails.Run(&options.App{
-		Title:            "Hashpoint TimeTracker",
-		Width:            1200,
-		Height:           800,
-		MinWidth:         800,
-		MinHeight:        600,
-		WindowStartState: options.Maximised,
-		AssetServer:      &assetserver.Options{Assets: hashpoint.Frontend},
-		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
-		OnStartup:        a.Startup,
-		OnShutdown: func(c context.Context) {
-			a.Shutdown(c)
-			hotkeyMgr.Stop()
-			flushOnShutdown(trk, slog.Default())
-			cancel()
-			onShutdownCompleted.Store(true)
-		},
-		HideWindowOnClose: true,
-		OnBeforeClose:     a.OnWindowBeforeClose,
-		Bind:              []any{a},
-	})
-
-	switch {
-	case !onShutdownCompleted.Load():
-		slog.Warn("wails.Run returned without OnShutdown — running fallback cleanup",
-			"err", runErr)
-		a.Shutdown(context.Background())
-		hotkeyMgr.Stop()
-		flushOnShutdown(trk, slog.Default())
-		cancel()
-	case runErr != nil:
-		slog.Warn("wails.Run returned an error after OnShutdown", "err", runErr)
-	default:
-		slog.Info("wails.Run returned cleanly")
-	}
-
-	return runErr
+	return &domainHandles{app: a, tracker: trk, hotkey: hotkeyMgr, power: power, dbClose: db.Close}, nil
 }
 
 // applyHotkey reconciles the configured quick-tag hotkey with the

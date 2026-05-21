@@ -24,14 +24,12 @@ import (
 const collectorInstanceMutexName = "Hashpoint.Collector"
 
 // runCollector runs the headless collector half of the split (ADR 0001): it
-// serves CollectorService over a per-user named pipe and owns the UI process
-// lifecycle, spawning and respawning it on demand.
+// owns the full domain (storage, tracker, orchestrator, sessions, hotkey,
+// power monitor, config) headless, serves it to the UI through the generic
+// Invoke RPC over a per-user named pipe, and owns the UI process lifecycle.
 //
-// WIP (Phase 1b): this wires the single-instance lock, the IPC server and the
-// UI supervisor with a clean shutdown path. The domain — DB, tracker,
-// orchestrator, tray, hotkey, power monitor, config — still lives in the
-// monolith path (run) and moves here in the domain-ownership cut, together with
-// the UI's method proxy (Phase 2). Until then, run() stays the shipped default.
+// Tray ownership and on-demand UI spawning (vs. the always-on supervision used
+// here) land in the lifecycle step; the shipped default remains run().
 func runCollector() error {
 	lock, err := winapi.AcquireSingleInstanceLock(collectorInstanceMutexName)
 	if err != nil {
@@ -46,15 +44,32 @@ func runCollector() error {
 	ctx, cancel := signalContext()
 	defer cancel()
 
+	paths, cfg, closeLog, err := bootstrap()
+	if err != nil {
+		return err
+	}
+	defer closeLog()
+
+	// The collector has no Wails runtime, so the domain emits events onto the
+	// IPC hub for the UI to re-emit.
+	hub := collector.NewEventHub(0)
+	d, err := buildDomain(ctx, paths, cfg, collector.NewEventSink(hub))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.dbClose() }()
+	if d.power != nil {
+		defer func() { _ = d.power.Close() }()
+	}
+
 	token, err := sessionToken()
 	if err != nil {
 		return err
 	}
 	pipeName := ipc.PipeName(token)
-
-	hub := collector.NewEventHub(0)
 	svc := collector.NewService(
-		collector.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate}, hub, nil)
+		collector.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate},
+		hub, collector.NewInvoker(d.app))
 
 	srv, err := ipc.NewServer(pipeName, svc)
 	if err != nil {
@@ -74,8 +89,7 @@ func runCollector() error {
 	}
 	sup := uisupervisor.New(func(c context.Context) *exec.Cmd {
 		cmd := exec.CommandContext(c, exe, "--ui", "--pipe="+pipeName)
-		// Surface the UI child's logs while developing the split. Production
-		// logging becomes file-based with the domain move (Phase 2).
+		// Surface the UI child's logs while developing the split.
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		return cmd
 	}, slog.Default())
@@ -88,14 +102,16 @@ func runCollector() error {
 	case err := <-serveErr:
 		cancel()
 		<-supDone
+		d.shutdown(context.Background())
 		return fmt.Errorf("ipc server stopped unexpectedly: %w", err)
 	}
 
 	// Signalled shutdown: ctx is already cancelled, so the supervised UI is
-	// being terminated; wait for it, then drain the server.
+	// being terminated; wait for it, drain the server, then flush the domain.
 	<-supDone
 	srv.Stop()
 	<-serveErr
+	d.shutdown(context.Background())
 	return nil
 }
 
