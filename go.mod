@@ -2,6 +2,8 @@ module github.com/dusthoff/hashpoint
 
 go 1.26
 
+toolchain go1.26.2
+
 require (
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.7.1
 	github.com/BurntSushi/toml v1.4.0
