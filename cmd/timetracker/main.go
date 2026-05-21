@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -47,10 +48,56 @@ var (
 )
 
 func main() {
-	if err := run(); err != nil {
+	if err := dispatch(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "fatal:", err)
 		os.Exit(1)
 	}
+}
+
+// procMode selects which half of the application a process runs as.
+type procMode int
+
+const (
+	// modeMonolith is the legacy single-process app (the shipped default).
+	modeMonolith procMode = iota
+	// modeCollector is the headless collector half of the split (ADR 0001).
+	modeCollector
+	// modeUI is the throwaway Wails shell the collector spawns.
+	modeUI
+)
+
+// dispatch routes to the selected process mode. With no mode flag the legacy
+// single-process app runs; --collector and --ui select the two halves of the
+// collector/UI split (ADR 0001). The split modes are under construction and
+// not yet the shipped default — run() remains the production path.
+func dispatch(args []string) error {
+	switch mode, pipe := parseArgs(args); mode {
+	case modeCollector:
+		return runCollector()
+	case modeUI:
+		return runUI(pipe)
+	default:
+		return run()
+	}
+}
+
+// parseArgs does a minimal scan for the mode and pipe flags. It is deliberately
+// tolerant of any other arguments the launcher or OS may append (e.g. on
+// single-instance hand-off) rather than using flag.Parse, which would reject
+// unknown flags.
+func parseArgs(args []string) (procMode, string) {
+	mode, pipe := modeMonolith, ""
+	for _, a := range args {
+		switch {
+		case a == "--collector":
+			mode = modeCollector
+		case a == "--ui":
+			mode = modeUI
+		case strings.HasPrefix(a, "--pipe="):
+			pipe = strings.TrimPrefix(a, "--pipe=")
+		}
+	}
+	return mode, pipe
 }
 
 func run() error {
