@@ -20,7 +20,7 @@ func NewProcessTrackRepo(db *sql.DB) *ProcessTrackRepo {
 
 const (
 	processColumns = `id, process_name, process_path, window_title, start_time, end_time,
-		duration_sec, is_idle, is_communication`
+		duration_sec, is_idle, is_communication, last_seen`
 
 	insertProcess = `INSERT INTO process_tracks (
 		process_name, process_path, window_title, start_time, end_time,
@@ -64,6 +64,13 @@ const (
 	selectProcessLastEnd = `SELECT end_time FROM process_tracks
 		WHERE end_time IS NOT NULL
 		ORDER BY end_time DESC LIMIT 1`
+
+	// touchProcess advances last_seen on an open track. The end_time IS NULL
+	// guard prevents resurrecting a closed row; the last_seen comparison keeps
+	// the heartbeat strictly monotonic so a stale clock can never move it back.
+	touchProcess = `UPDATE process_tracks
+		SET last_seen = ?
+		WHERE id = ? AND end_time IS NULL AND (last_seen IS NULL OR last_seen < ?)`
 )
 
 // Open starts a new process track.
@@ -97,6 +104,19 @@ func (r *ProcessTrackRepo) Close(ctx context.Context, id int64, end time.Time) e
 // MarkIdle finalizes the track as idle.
 func (r *ProcessTrackRepo) MarkIdle(ctx context.Context, id int64, end time.Time) error {
 	return r.finalize(ctx, markIdleProcess, id, end)
+}
+
+// Touch advances the open track's last_seen heartbeat to ts. It is a no-op
+// when the track is already closed or when ts is not strictly newer than the
+// stored value, keeping the heartbeat monotonic. Recovery uses last_seen as
+// the close time of a track left open by a crash, bounding data loss to one
+// poll interval instead of the idle-threshold fallback.
+func (r *ProcessTrackRepo) Touch(ctx context.Context, id int64, ts time.Time) error {
+	ts = ts.UTC()
+	if _, err := r.db.ExecContext(ctx, touchProcess, ts, id, ts); err != nil {
+		return fmt.Errorf("touch process track: %w", err)
+	}
+	return nil
 }
 
 func (r *ProcessTrackRepo) finalize(ctx context.Context, query string, id int64, end time.Time) error {
@@ -228,12 +248,13 @@ func scanProcessRow(row *sql.Row) (*ProcessTrack, error) {
 		end             sql.NullTime
 		isIdle          int64
 		isCommunication int64
+		lastSeen        sql.NullTime
 	)
 	if err := row.Scan(&p.ID, &p.ProcessName, &processPath, &p.WindowTitle, &p.StartTime, &end,
-		&p.DurationSec, &isIdle, &isCommunication); err != nil {
+		&p.DurationSec, &isIdle, &isCommunication, &lastSeen); err != nil {
 		return nil, err
 	}
-	hydrateProcess(&p, processPath, end, isIdle, isCommunication)
+	hydrateProcess(&p, processPath, end, isIdle, isCommunication, lastSeen)
 	return &p, nil
 }
 
@@ -244,22 +265,27 @@ func scanProcessRows(rows *sql.Rows) (*ProcessTrack, error) {
 		end             sql.NullTime
 		isIdle          int64
 		isCommunication int64
+		lastSeen        sql.NullTime
 	)
 	if err := rows.Scan(&p.ID, &p.ProcessName, &processPath, &p.WindowTitle, &p.StartTime, &end,
-		&p.DurationSec, &isIdle, &isCommunication); err != nil {
+		&p.DurationSec, &isIdle, &isCommunication, &lastSeen); err != nil {
 		return nil, err
 	}
-	hydrateProcess(&p, processPath, end, isIdle, isCommunication)
+	hydrateProcess(&p, processPath, end, isIdle, isCommunication, lastSeen)
 	return &p, nil
 }
 
-func hydrateProcess(p *ProcessTrack, processPath sql.NullString, end sql.NullTime, isIdle, isCommunication int64) {
+func hydrateProcess(p *ProcessTrack, processPath sql.NullString, end sql.NullTime, isIdle, isCommunication int64, lastSeen sql.NullTime) {
 	if processPath.Valid {
 		p.ProcessPath = processPath.String
 	}
 	if end.Valid {
 		t := end.Time.UTC()
 		p.EndTime = &t
+	}
+	if lastSeen.Valid {
+		t := lastSeen.Time.UTC()
+		p.LastSeen = &t
 	}
 	p.IsIdle = isIdle != 0
 	p.IsCommunication = isCommunication != 0

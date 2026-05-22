@@ -90,6 +90,18 @@ func (r *fakeRepo) Close(_ context.Context, id int64, end time.Time) error {
 }
 
 func (r *fakeRepo) MarkIdle(context.Context, int64, time.Time) error { panic("not used") }
+
+func (r *fakeRepo) Touch(_ context.Context, id int64, ts time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if t, ok := r.tracks[id]; ok && t.EndTime == nil {
+		if t.LastSeen == nil || t.LastSeen.Before(ts) {
+			cp := ts
+			t.LastSeen = &cp
+		}
+	}
+	return nil
+}
 func (r *fakeRepo) LastOpen(context.Context) (*storage.ProcessTrack, error) {
 	panic("not used")
 }
@@ -239,5 +251,185 @@ func TestTickComm_HotReloadExcludes(t *testing.T) {
 	trk.tickComm(ctx)
 	if len(repo.closeLog) != 1 {
 		t.Fatalf("tick 2 (after exclude added): closed=%d, want 1", len(repo.closeLog))
+	}
+}
+
+// fixedClock returns the same instant on every call.
+type fixedClock struct{ now time.Time }
+
+func (c fixedClock) Now() time.Time { return c.now }
+
+// manualClock is a test clock the caller advances explicitly.
+type manualClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *manualClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *manualClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+// stubFocusSource feeds a fixed foreground window and idle duration to tick().
+type stubFocusSource struct {
+	info winapi.FocusInfo
+	idle time.Duration
+}
+
+func (s stubFocusSource) Foreground() (winapi.FocusInfo, error) { return s.info, nil }
+func (s stubFocusSource) IdleDuration() (time.Duration, error)  { return s.idle, nil }
+
+// TestRecoveredEnd covers the heartbeat-vs-fallback clamping in isolation:
+// last_seen wins when present, otherwise start+idle_threshold; either result
+// is clamped to now (the next-open chaining clamp is applied by recover, not
+// here). This is the core of the issue-#21 data-loss fix (ADR 0001 §9).
+func TestRecoveredEnd(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+	idle := 5 * time.Minute
+	at := func(d time.Duration) *time.Time { tt := base.Add(d); return &tt }
+
+	cases := []struct {
+		name     string
+		start    time.Duration // offset from base
+		lastSeen *time.Time
+		want     time.Duration // expected end offset from base
+	}{
+		{"heartbeat wins over idle fallback", -60 * time.Minute, at(-10 * time.Minute), -10 * time.Minute},
+		{"nil heartbeat falls back to start+idle", -60 * time.Minute, nil, -55 * time.Minute},
+		{"idle fallback clamped to now", -2 * time.Minute, nil, 0},
+		{"future heartbeat clamped to now", -10 * time.Minute, at(1 * time.Minute), 0},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			open := storage.ProcessTrack{StartTime: base.Add(tc.start), LastSeen: tc.lastSeen}
+			got := recoveredEnd(open, idle, base)
+			want := base.Add(tc.want)
+			if got.Unix() != want.Unix() {
+				t.Errorf("recoveredEnd = %s, want %s",
+					got.Format(time.RFC3339), want.Format(time.RFC3339))
+			}
+		})
+	}
+}
+
+// TestRecover_ClosesOpenTracksViaSQLite drives the full recover() path through
+// a real in-memory database so the last_seen column round-trip, the focused
+// next-start chaining clamp, the nil fallback, and the independent comm-track
+// recovery are all exercised together.
+func TestRecover_ClosesOpenTracksViaSQLite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := storage.OpenInMemory(ctx)
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	repo := storage.NewProcessTrackRepo(db)
+
+	base := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+	idle := 5 * time.Minute
+
+	// Focused A: started 60m ago, heartbeat 5m ago. Its heartbeat is later
+	// than B's start, so the chaining clamp must pull A's end back to B.start.
+	a := &storage.ProcessTrack{ProcessName: "firefox.exe", StartTime: base.Add(-60 * time.Minute)}
+	mustOpen(t, ctx, repo, a)
+	mustTouch(t, ctx, repo, a.ID, base.Add(-5*time.Minute))
+	// Focused B: started 30m ago, no heartbeat → start+idle fallback.
+	b := &storage.ProcessTrack{ProcessName: "code.exe", StartTime: base.Add(-30 * time.Minute)}
+	mustOpen(t, ctx, repo, b)
+	// Comm C: started 60m ago, heartbeat 15m ago. Comm tracks do not chain.
+	c := &storage.ProcessTrack{ProcessName: "teams.exe", StartTime: base.Add(-60 * time.Minute), IsCommunication: true}
+	mustOpen(t, ctx, repo, c)
+	mustTouch(t, ctx, repo, c.ID, base.Add(-15*time.Minute))
+
+	trk := New(Config{PollInterval: time.Second, IdleThreshold: idle}, repo, nil,
+		WithClock(fixedClock{now: base}))
+	if err := trk.recover(ctx); err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+
+	assertEnd(t, ctx, repo, "A (heartbeat clamped to B.start)", a.ID, base.Add(-30*time.Minute))
+	assertEnd(t, ctx, repo, "B (idle fallback)", b.ID, base.Add(-25*time.Minute))
+	assertEnd(t, ctx, repo, "C (comm heartbeat)", c.ID, base.Add(-15*time.Minute))
+}
+
+// TestTick_WritesHeartbeat verifies the write side: an active poll tick on an
+// unchanged foreground window advances last_seen on the open track, so a crash
+// mid-session recovers to the last tick rather than start+idle_threshold.
+func TestTick_WritesHeartbeat(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := storage.OpenInMemory(ctx)
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	repo := storage.NewProcessTrackRepo(db)
+
+	base := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+	clk := &manualClock{now: base}
+	src := stubFocusSource{info: winapi.FocusInfo{HWND: 1, PID: 10, ProcessName: "firefox.exe", Title: "Hashpoint"}}
+
+	trk := New(Config{PollInterval: time.Second, IdleThreshold: 5 * time.Minute}, repo, nil,
+		WithFocusSource(src), WithClock(clk))
+
+	// Tick 1 opens the focused track at base (no heartbeat yet on open).
+	trk.tick(ctx)
+	// Tick 2, 30s later: same focus → heartbeat advances to base+30s.
+	clk.advance(30 * time.Second)
+	trk.tick(ctx)
+
+	open, err := repo.LastOpen(ctx)
+	if err != nil {
+		t.Fatalf("last open: %v", err)
+	}
+	if open == nil {
+		t.Fatal("expected an open focused track after two active ticks")
+	}
+	if open.LastSeen == nil {
+		t.Fatal("last_seen not written by an active tick")
+	}
+	if open.LastSeen.Unix() != base.Add(30*time.Second).Unix() {
+		t.Errorf("last_seen = %s, want %s",
+			open.LastSeen.Format(time.RFC3339), base.Add(30*time.Second).Format(time.RFC3339))
+	}
+}
+
+func mustOpen(t *testing.T, ctx context.Context, repo storage.ProcessTrackRepository, p *storage.ProcessTrack) {
+	t.Helper()
+	if err := repo.Open(ctx, p); err != nil {
+		t.Fatalf("open %s: %v", p.ProcessName, err)
+	}
+}
+
+func mustTouch(t *testing.T, ctx context.Context, repo storage.ProcessTrackRepository, id int64, ts time.Time) {
+	t.Helper()
+	if err := repo.Touch(ctx, id, ts); err != nil {
+		t.Fatalf("touch %d: %v", id, err)
+	}
+}
+
+func assertEnd(t *testing.T, ctx context.Context, repo storage.ProcessTrackRepository, name string, id int64, want time.Time) {
+	t.Helper()
+	got, err := repo.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("%s: get: %v", name, err)
+	}
+	if got == nil || got.EndTime == nil {
+		t.Fatalf("%s: track still open after recover", name)
+	}
+	if got.EndTime.Unix() != want.Unix() {
+		t.Errorf("%s: end = %s, want %s",
+			name, got.EndTime.Format(time.RFC3339), want.Format(time.RFC3339))
 	}
 }

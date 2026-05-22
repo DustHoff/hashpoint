@@ -16,6 +16,10 @@ type ProcessTrackRepository interface {
 	Close(ctx context.Context, id int64, end time.Time) error
 	// MarkIdle finalizes the track as idle.
 	MarkIdle(ctx context.Context, id int64, end time.Time) error
+	// Touch advances the open track's last_seen heartbeat to ts (monotonic;
+	// no-op once closed or when ts is not newer). Recovery uses last_seen to
+	// close crash-orphaned tracks at their last confirmed-active instant.
+	Touch(ctx context.Context, id int64, ts time.Time) error
 	// LastOpen returns the most recently started open track, or nil.
 	LastOpen(ctx context.Context) (*ProcessTrack, error)
 	// ListOpen returns every focused track whose end_time is NULL, ascending.

@@ -255,6 +255,7 @@ jobs:
             -spdb `
             -ext WixUtilExtension `
             -sice:ICE57 `
+            -sice:ICE61 `
             -out $msiPath `
             "build/bin/hashpoint.wixobj"
           if (-not (Test-Path $msiPath)) {

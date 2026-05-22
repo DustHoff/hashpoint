@@ -6,7 +6,12 @@
   `%ProgramFiles%\Hashpoint`. Installs:
     1. `hashpoint.exe` — the Wails-bundled binary (single-file).
     2. Start-menu shortcut "Hashpoint TimeTracker".
-    3. HKCU\...\Run autostart entry for the user running the installer.
+    3. HKCU\...\Run autostart entry launching hashpoint.exe in collector mode,
+       for the user running the installer. The app runs as a headless
+       collector that owns the domain + tray and spawns a Wails UI on demand
+       (ADR 0001); the Start-menu shortcut and post-install launch also use
+       collector mode, which is idempotent (a second launch signals the
+       running collector to show the UI rather than starting a duplicate).
     4. `plugins-seed\plugin-manager\` — bundled hashpoint-plugin-manager
        plugin. The running app copies this into the per-user PluginsDir on
        first launch (see internal/plugin/seed.go); the MSI cannot reach
@@ -17,7 +22,8 @@
       `hashpoint.exe` before `InstallValidate`, then force-terminates after
       5 seconds. Required so upgrades do not fail with sharing violations.
     - `LaunchHashpoint` custom action runs after `InstallFinalize` so the
-      newly installed binary launches without waiting for the next login.
+      newly installed collector launches (in collector mode) without waiting
+      for the next login.
 
   Silent IT roll-out:  msiexec /i hashpoint-<version>.msi /quiet
 
@@ -47,7 +53,18 @@
              Description="Hashpoint TimeTracker $(var.ProductVersion)"
              Comments="Windows-Zeiterfassung mit Personio-Sync" />
 
-    <MajorUpgrade DowngradeErrorMessage="Eine neuere Version von Hashpoint TimeTracker ist bereits installiert." />
+    <!--
+      AllowSameVersionUpgrades lets a build replace an installed product that
+      shares the same major.minor.build (Windows Installer ignores the 4th
+      revision field). Prereleases use that revision for the rc number
+      (x.y.z.<rc>), so successive rc MSIs upgrade each other and the final
+      release (x.y.z) cleanly replaces any rc of the same target. Harmless for
+      normal releases, whose versions always differ. Triggers ICE61 → both
+      release.yml and prerelease.yml suppress it (-sice:ICE61).
+    -->
+    <MajorUpgrade
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="Eine neuere Version von Hashpoint TimeTracker ist bereits installiert." />
     <MediaTemplate EmbedCab="yes" />
 
     <Icon Id="HashpointIcon.ico" SourceFile="$(var.IconFile)" />
@@ -137,6 +154,7 @@
                   Name="Hashpoint TimeTracker"
                   Description="Windows-Zeiterfassung mit Personio-Sync"
                   Target="[#HashpointExe]"
+                  Arguments="--collector"
                   WorkingDirectory="INSTALLDIR"
                   Icon="HashpointIcon.ico" />
         <RemoveFolder Id="RemoveProgramMenuFolder"
@@ -163,7 +181,7 @@
                        Key="Software\Microsoft\Windows\CurrentVersion\Run"
                        Name="HashpointTimeTracker"
                        Type="string"
-                       Value="&quot;[#HashpointExe]&quot;"
+                       Value="&quot;[#HashpointExe]&quot; --collector"
                        KeyPath="yes" />
       </Component>
     </DirectoryRef>
@@ -195,7 +213,7 @@
     -->
     <CustomAction Id="LaunchHashpoint"
                   FileKey="HashpointExe"
-                  ExeCommand=""
+                  ExeCommand="--collector"
                   Execute="immediate"
                   Impersonate="yes"
                   Return="asyncNoWait" />

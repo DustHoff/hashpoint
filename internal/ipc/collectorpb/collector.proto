@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+package hashpoint.collector.v1;
+
+option go_package = "github.com/dusthoff/hashpoint/internal/ipc/collectorpb;collectorpb";
+
+// CollectorService is the local API the headless collector exposes to the
+// on-demand Wails UI process over a per-user named pipe (ADR 0001). Phase 1
+// ships only the handshake/health surface; the ~69 domain methods from
+// Anhang A and the full event catalogue follow in later phases.
+service CollectorService {
+  // GetVersion returns the collector's build metadata and protocol version so
+  // the UI can verify compatibility before issuing any domain calls. Both
+  // binaries ship from one executable, but a stale UI spawned across an
+  // in-place update must still detect a contract mismatch.
+  rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
+
+  // Events is the collector→UI push stream that replaces wails EventsEmit.
+  // The UI re-emits each Event onto its local wails runtime so the frontend's
+  // EventsOn handlers stay unchanged (ADR Anhang B).
+  rpc Events(EventsRequest) returns (stream Event);
+
+  // Invoke dispatches one of the app.App domain methods (ADR Anhang A) by
+  // name. args is a JSON array of the method's arguments and result the JSON
+  // of its return value — the same encoding the methods already use across the
+  // Wails boundary, so no per-method gRPC contract is needed. A domain-level
+  // error travels in the response's error field (not as a gRPC status) so the
+  // UI surfaces it to the frontend exactly as the in-process app did.
+  rpc Invoke(InvokeRequest) returns (InvokeResponse);
+
+  // ShowUI asks the collector to bring the UI window to the foreground. A
+  // second app launch (the Start-menu shortcut while the collector is already
+  // running) calls this instead of starting a duplicate process.
+  rpc ShowUI(ShowUIRequest) returns (ShowUIResponse);
+}
+
+message GetVersionRequest {}
+
+message GetVersionResponse {
+  string version = 1;
+  string commit = 2;
+  string build_date = 3;
+  // protocol_version is bumped on every incompatible change to this service;
+  // the UI refuses to attach when it differs from its own compiled-in value.
+  uint32 protocol_version = 4;
+}
+
+message EventsRequest {}
+
+// Event mirrors a wails runtime event: a name plus an opaque JSON payload.
+// Carrying the payload as JSON avoids a dedicated proto message per event
+// type during the migration — the existing events are already JSON-serialised
+// across the wails boundary — and can be tightened to typed messages later.
+message Event {
+  string name = 1;
+  bytes json_payload = 2;
+}
+
+message InvokeRequest {
+  // method is the exported app.App method name (e.g. "ProcessTracksByDay").
+  string method = 1;
+  // args is a JSON array whose elements decode into the method's parameters
+  // in order. Empty/absent means a no-argument call.
+  bytes args = 2;
+}
+
+message InvokeResponse {
+  // result is the JSON of the method's non-error return value, or null/empty
+  // when it returns nothing or only an error.
+  bytes result = 1;
+  // error is the domain error message, empty on success.
+  string error = 2;
+}
+
+message ShowUIRequest {}
+
+message ShowUIResponse {}

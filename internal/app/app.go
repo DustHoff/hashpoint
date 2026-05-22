@@ -151,6 +151,10 @@ type Deps struct {
 	// (feedback.NewDefaultTokenStore) is used; tests inject an
 	// in-memory store so wincred isn't hit.
 	FeedbackTokens feedback.TokenStore
+	// Sink receives backend events for delivery to the frontend. Nil ⇒ the
+	// default Wails-runtime sink (monolith and UI process). The collector
+	// injects a sink that publishes onto the IPC event stream instead.
+	Sink EventSink
 }
 
 // App is the Wails-bound facade. Methods on *App must be safe to call from
@@ -159,6 +163,7 @@ type App struct {
 	ctx    context.Context
 	deps   Deps
 	logger *slog.Logger
+	sink   EventSink
 
 	mu            sync.Mutex
 	cfg           *config.Config
@@ -221,6 +226,10 @@ func New(deps Deps) *App {
 		ctx:              context.Background(),
 		windowVisible:    true,
 		validatePersonio: personio.Validate,
+		sink:             deps.Sink,
+	}
+	if a.sink == nil {
+		a.sink = wailsSink{}
 	}
 	if deps.EntraFor != nil && deps.Config != nil && deps.Config.Entra.Configured() {
 		mgr, err := deps.EntraFor(deps.Config.Entra)
@@ -257,7 +266,7 @@ func New(deps Deps) *App {
 				if a.ctx == nil {
 					return
 				}
-				wailsruntime.EventsEmit(a.ctx, PluginDiscoveredEvent, info)
+				a.sink.Emit(a.ctx, PluginDiscoveredEvent, info)
 			},
 			OnStateChanged: func(info pluginhost.Info) {
 				// Same a.ctx caveat as OnDiscovered: the watcher only
@@ -267,7 +276,7 @@ func New(deps Deps) *App {
 				if a.ctx == nil {
 					return
 				}
-				wailsruntime.EventsEmit(a.ctx, PluginStateChangedEvent, info)
+				a.sink.Emit(a.ctx, PluginStateChangedEvent, info)
 			},
 			// Hand running plugins access to the current Entra ID
 			// manager via the host's bound HostAPI. Re-evaluated on
@@ -471,7 +480,7 @@ func (a *App) emitStartupSync(ev StartupSyncEvent) {
 	if !ready || ctx == nil {
 		return
 	}
-	wailsruntime.EventsEmit(ctx, startupSyncEvent, ev)
+	a.sink.Emit(ctx, startupSyncEvent, ev)
 }
 
 func (a *App) emitStartupConflict(pre *personio.SyncPreflight) {
@@ -481,7 +490,7 @@ func (a *App) emitStartupConflict(pre *personio.SyncPreflight) {
 	if !ready || ctx == nil {
 		return
 	}
-	wailsruntime.EventsEmit(ctx, startupSyncConflictEvent, pre)
+	a.sink.Emit(ctx, startupSyncConflictEvent, pre)
 }
 
 // Shutdown is invoked by Wails on window close. Tracker shutdown is handled
@@ -519,7 +528,7 @@ func (a *App) OpenHelpTab() {
 		a.logger.Warn("OpenHelpTab: window not ready — event dropped")
 		return
 	}
-	wailsruntime.EventsEmit(ctx, helpOpenEvent)
+	a.sink.Emit(ctx, helpOpenEvent)
 }
 
 // ListUserDocs returns the embedded user-manual pages in sidebar order.
@@ -1576,7 +1585,7 @@ func (a *App) QuickTagOpen() error {
 	wailsruntime.WindowSetAlwaysOnTop(ctx, true)
 	wailsruntime.WindowShow(ctx)
 	wailsruntime.WindowUnminimise(ctx)
-	wailsruntime.EventsEmit(ctx, quickTagOpenEvent)
+	a.sink.Emit(ctx, quickTagOpenEvent)
 	a.logger.Debug("quick tag: opened", "already", already)
 	return nil
 }
@@ -1620,7 +1629,7 @@ func (a *App) closeQuickTagWindow() {
 	if !ready || ctx == nil {
 		return
 	}
-	wailsruntime.EventsEmit(ctx, quickTagCloseEvent)
+	a.sink.Emit(ctx, quickTagCloseEvent)
 	wailsruntime.WindowSetAlwaysOnTop(ctx, false)
 	if state.saved {
 		wailsruntime.WindowSetSize(ctx, state.width, state.height)

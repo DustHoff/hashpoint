@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/getlantern/systray"
 	"github.com/dusthoff/hashpoint/internal/app"
 	"github.com/dusthoff/hashpoint/internal/personio"
 	"github.com/dusthoff/hashpoint/internal/storage"
+	"github.com/getlantern/systray"
 )
 
 // manualTagSlotCount caps how many tags we can show in the manual-tag
@@ -32,11 +32,18 @@ func defaultSessionStore() personio.SessionStore {
 	return personio.NewWinCredSessionStore()
 }
 
-func runTray(ctx context.Context, a *app.App, version string) {
-	systray.Run(func() { onTrayReady(ctx, a, version) }, func() {})
+func runTray(ctx context.Context, a *app.App, act trayActions, version string) {
+	// systray.Run blocks until systray.Quit is called. If it returns for
+	// any other reason — e.g. the underlying message-only window is
+	// destroyed by an OS event we don't yet handle — the tray icon
+	// disappears silently. Logging the return makes that case visible in
+	// the production log instead of being a missing log line. See #21.
+	systray.Run(func() { onTrayReady(ctx, a, act, version) }, func() {
+		slog.Info("tray: systray.Run returned")
+	})
 }
 
-func onTrayReady(ctx context.Context, a *app.App, version string) {
+func onTrayReady(ctx context.Context, a *app.App, act trayActions, version string) {
 	systray.SetIcon(trayIcon())
 	systray.SetTitle("Hashpoint")
 	systray.SetTooltip("Hashpoint TimeTracker " + version)
@@ -79,7 +86,7 @@ func onTrayReady(ctx context.Context, a *app.App, version string) {
 		case <-mOpen.ClickedCh:
 			// HideWindowOnClose means the close button only hides the
 			// window — the tray is the only path back without restarting.
-			a.ShowWindow()
+			act.open()
 		case <-mPause.ClickedCh:
 			if a.IsTrackingPaused() {
 				a.ResumeTracking()
@@ -96,11 +103,12 @@ func onTrayReady(ctx context.Context, a *app.App, version string) {
 		case <-mAbout.ClickedCh:
 			slog.Info("about clicked", "version", version)
 		case <-mHelp.ClickedCh:
-			a.OpenHelpTab()
+			act.openHelp()
 		case <-mQuit.ClickedCh:
-			// Route through Wails OnShutdown so today's tag blocks get
-			// flushed and synced to Personio before the process exits.
-			if !a.Quit() {
+			// act.quit drives the graceful path (monolith: Wails OnShutdown;
+			// collector: cancel its context). It returns true only when no
+			// graceful path took over, in which case we hard-stop the tray.
+			if act.quit() {
 				systray.Quit()
 				os.Exit(0)
 			}

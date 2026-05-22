@@ -2,9 +2,12 @@ module github.com/dusthoff/hashpoint
 
 go 1.26
 
+toolchain go1.26.2
+
 require (
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.7.1
 	github.com/BurntSushi/toml v1.4.0
+	github.com/Microsoft/go-winio v0.6.1
 	github.com/chromedp/cdproto v0.0.0-20260321001828-e3e3800016bc
 	github.com/chromedp/chromedp v0.15.1
 	github.com/danieljoos/wincred v1.2.2
@@ -13,6 +16,9 @@ require (
 	github.com/hashicorp/go-plugin v1.8.0
 	github.com/wailsapp/wails/v2 v2.10.1
 	golang.org/x/sys v0.42.0
+	golang.org/x/tools v0.30.0
+	google.golang.org/grpc v1.61.0
+	google.golang.org/protobuf v1.36.6
 	modernc.org/sqlite v1.34.1
 )
 
@@ -63,11 +69,11 @@ require (
 	github.com/wailsapp/go-webview2 v1.0.19 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
 	golang.org/x/crypto v0.36.0 // indirect
+	golang.org/x/mod v0.23.0 // indirect
 	golang.org/x/net v0.38.0 // indirect
+	golang.org/x/sync v0.12.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20231106174013-bbf56f31fb17 // indirect
-	google.golang.org/grpc v1.61.0 // indirect
-	google.golang.org/protobuf v1.36.6 // indirect
 	modernc.org/gc/v3 v3.0.0-20240107210532-573471604cb6 // indirect
 	modernc.org/libc v1.55.3 // indirect
 	modernc.org/mathutil v1.6.0 // indirect

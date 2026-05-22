@@ -11,7 +11,6 @@ import (
 	"github.com/dusthoff/hashpoint/internal/plugin/oncall"
 	"github.com/dusthoff/hashpoint/internal/storage"
 	"github.com/dusthoff/hashpoint/plugin/sdk"
-	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // Wails event names. The frontend subscribes via api.onEventPayload.
@@ -631,12 +630,12 @@ func (a *App) emitOnCallDocChanged(docID int64) {
 	if a.ctx == nil {
 		return
 	}
-	wailsruntime.EventsEmit(a.ctx, OnCallDocChangedEvent, OnCallDocChangedPayload{DocID: docID})
+	a.sink.Emit(a.ctx, OnCallDocChangedEvent, OnCallDocChangedPayload{DocID: docID})
 }
 
 func (a *App) emitOnCallSubmitResult(p OnCallSubmitResultPayload) {
 	if a.ctx == nil {
 		return
 	}
-	wailsruntime.EventsEmit(a.ctx, OnCallSubmitResultEvent, p)
+	a.sink.Emit(a.ctx, OnCallSubmitResultEvent, p)
 }
