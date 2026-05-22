@@ -161,6 +161,9 @@ export const api = {
 
   // Entra ID ------------------------------------------------------------
   entraStatus: () => bridge().EntraStatus() as Promise<EntraStatus>,
+  // Live silent-token probe (cache-first) used by the header badge; the
+  // Settings tab keeps using the cheaper entraStatus.
+  entraProbe: () => bridge().EntraProbe() as Promise<EntraStatus>,
   entraLogin: () => bridge().EntraLogin() as Promise<void>,
   entraLogout: () => bridge().EntraLogout() as Promise<void>,
 

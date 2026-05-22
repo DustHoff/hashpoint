@@ -52,6 +52,12 @@ func (a *App) EntraLogout() error {
 	return a.call("EntraLogout", nil, nil)
 }
 
+func (a *App) EntraProbe() appdom.EntraStatusResponse {
+	var r0 appdom.EntraStatusResponse
+	_ = a.call("EntraProbe", nil, &r0)
+	return r0
+}
+
 func (a *App) EntraStatus() appdom.EntraStatusResponse {
 	var r0 appdom.EntraStatusResponse
 	_ = a.call("EntraStatus", nil, &r0)

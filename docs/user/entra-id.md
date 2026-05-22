@@ -144,6 +144,26 @@ Im Status-Kasten unter den ID-Feldern stehen drei mögliche Zustände:
 | *„Konfiguration vorhanden, aber noch nicht angemeldet"* | IDs gespeichert, es liegt aber keine gültige Session vor. Klick auf **Bei Entra ID anmelden**, um den Browser-Flow zu starten. |
 | *„Eingeloggt als …"* | Aktive Session vorhanden. Token werden im Hintergrund still erneuert. |
 
+## Badge im Programmkopf
+
+Sobald Entra ID konfiguriert ist (Client- und Tenant-ID gespeichert),
+erscheint oben rechts im Programmkopf — direkt neben dem Personio-Badge — ein
+**Entra-ID-Badge**. Es verhält sich genauso wie das Personio-Badge:
+
+| Farbe | Bedeutung | Klick |
+| --- | --- | --- |
+| 🟢 Grün | Angemeldet, das zwischengespeicherte Token lässt sich still erneuern. | Status erneut prüfen. |
+| 🔴 Rot | Konfiguriert, aber nicht angemeldet bzw. erneute Anmeldung nötig. | Browser-Login starten. |
+
+Im Hintergrund prüft der TimeTracker den Zustand etwa **alle 60 Sekunden**
+„still" — ohne Browser und in aller Regel ohne Netz-Zugriff, da das Token aus
+dem verschlüsselten lokalen Cache kommt. Läuft die Sitzung mitten am Tag ab
+(z. B. durch eine Conditional-Access-Policy), schaltet das Badge ohne Zutun auf
+Rot und ein Klick führt durch den erneuten Login.
+
+Ist Entra ID **nicht** konfiguriert, erscheint **kein** Badge — der
+Programmkopf sieht aus wie zuvor.
+
 ## Erneut anmelden / Abmelden
 
 - **Erneut anmelden:** klickt sich durch denselben Browser-Flow noch

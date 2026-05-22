@@ -1,20 +1,26 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
-import type { PersonioStatus } from "../types";
+import type { EntraStatus } from "../types";
 
-// PersonioBadge sits in the top header and reflects whether the Personio
-// session cookies still authenticate. A green dot means "logged in", amber is
-// "logged in but unchecked / cookie missing tenant", red is "expired or never
-// logged in". Clicking the badge in any non-green state launches the
-// interactive CDP login. Background poll runs every 60s so a session that
-// expires mid-day surfaces without a manual refresh.
+// EntraBadge sits in the top header next to the Personio badge and mirrors its
+// behaviour for the optional Microsoft Entra ID sign-in. It renders nothing
+// until Entra is configured (client_id + tenant_id set); a tenant that never
+// enables the feature sees the header exactly as it was before Entra existed.
+//
+// Green means "signed in and the cached token still acquires silently", red is
+// "configured but not signed in / re-login required", slate is the brief
+// loading gap. Clicking a red badge launches the interactive browser login;
+// clicking a green one just re-checks. A 60s background poll surfaces a session
+// that lapses mid-day (CA-policy drift, password reset) without a manual
+// refresh — EntraProbe is cache-first, so it only touches the network once the
+// access token has actually expired.
 const POLL_INTERVAL_MS = 60_000;
 
-type State = "loading" | "ok" | "warn" | "error";
+type State = "loading" | "ok" | "error";
 
-function classify(s: PersonioStatus | null): State {
+function classify(s: EntraStatus | null): State {
   if (!s) return "loading";
-  if (!s.has_session) return "error";
+  if (!s.has_account) return "error";
   if (!s.valid) return "error";
   return "ok";
 }
@@ -23,8 +29,6 @@ function colorFor(state: State): string {
   switch (state) {
     case "ok":
       return "bg-emerald-500";
-    case "warn":
-      return "bg-amber-500";
     case "error":
       return "bg-red-500";
     default:
@@ -32,27 +36,30 @@ function colorFor(state: State): string {
   }
 }
 
-function labelFor(state: State, s: PersonioStatus | null): string {
-  if (!s) return "Personio prüfen…";
-  if (state === "ok") return `Personio: angemeldet${s.tenant ? ` · ${s.tenant}` : ""}`;
-  if (state === "error" && !s.has_session) return "Personio: nicht angemeldet";
-  if (state === "error") return `Personio: ${s.reason || "Session abgelaufen"}`;
-  return "Personio";
+function labelFor(state: State, s: EntraStatus | null): string {
+  if (!s) return "Entra ID prüfen…";
+  if (state === "ok")
+    return `Entra ID: angemeldet${s.username ? ` · ${s.username}` : ""}`;
+  if (state === "error" && !s.has_account) return "Entra ID: nicht angemeldet";
+  if (state === "error")
+    return `Entra ID: ${s.reason || "Anmeldung erforderlich"}`;
+  return "Entra ID";
 }
 
-export default function PersonioBadge() {
-  const [status, setStatus] = useState<PersonioStatus | null>(null);
+export default function EntraBadge() {
+  const [status, setStatus] = useState<EntraStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const s = await api.personioCheck();
+      const s = await api.entraProbe();
       setStatus(s);
     } catch (e) {
-      // Probe failed entirely (offline?) — fall back to local-only status.
+      // Probe call failed entirely (running outside Wails?) — fall back to the
+      // cheap local cache read so the badge can still classify.
       try {
-        const s = await api.personioStatus();
+        const s = await api.entraStatus();
         setStatus(s);
       } catch {
         setStatus(null);
@@ -70,6 +77,11 @@ export default function PersonioBadge() {
   const state = classify(status);
   const label = labelFor(state, status);
 
+  // Feature dormant or first probe still in flight: render nothing. Waiting for
+  // the first status (rather than showing a loading chip) keeps the header
+  // unchanged for the common case where Entra is never configured.
+  if (!status || !status.configured) return null;
+
   async function onClick() {
     if (busy) return;
     if (state === "ok") {
@@ -85,7 +97,7 @@ export default function PersonioBadge() {
     setBusy(true);
     setError(null);
     try {
-      await api.personioLogin();
+      await api.entraLogin();
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -104,7 +116,7 @@ export default function PersonioBadge() {
           ? `${label} — Klick: erneut anmelden\n${error}`
           : state === "ok"
             ? `${label} — Klick: Status erneut prüfen`
-            : `${label} — Klick: bei Personio anmelden`
+            : `${label} — Klick: bei Entra ID anmelden`
       }
       className="flex items-center gap-2 rounded bg-slate-800/60 px-3 py-1 text-xs text-slate-200 hover:bg-slate-700 disabled:opacity-60"
     >

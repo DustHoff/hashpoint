@@ -11,6 +11,7 @@ import About from "./components/About";
 import Feedback from "./components/Feedback";
 import Help from "./components/Help";
 import PersonioBadge from "./components/PersonioBadge";
+import EntraBadge from "./components/EntraBadge";
 import QuickTagPicker from "./components/QuickTagPicker";
 import SyncConflictModal from "./components/SyncConflictModal";
 import type { SyncPreflight } from "./types";
@@ -148,7 +149,13 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <PersonioBadge />
+        {/* Integration status badges, right-aligned. The container owns the
+            ml-auto so the group stays pinned right even when the Entra badge
+            renders nothing (feature not configured). */}
+        <div className="ml-auto flex items-center gap-2">
+          <EntraBadge />
+          <PersonioBadge />
+        </div>
       </header>
       {startupSync && (
         <div
