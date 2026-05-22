@@ -11,7 +11,12 @@ import (
 	"github.com/dusthoff/hashpoint/internal/collector"
 	"github.com/dusthoff/hashpoint/internal/ipc"
 	"github.com/dusthoff/hashpoint/internal/ipc/collectorpb"
-	"github.com/dusthoff/hashpoint/internal/uiproxy"
+
+	// The proxy package is declared `package app` (so Wails namespaces its
+	// bindings as window.go.app.App, matching the frontend); alias it to uiproxy
+	// here to read clearly and to avoid clashing with the real internal/app that
+	// main.go imports as app.
+	uiproxy "github.com/dusthoff/hashpoint/internal/uiproxy"
 	wails "github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -25,9 +30,10 @@ const handshakeTimeout = 10 * time.Second
 
 // runUI runs the Wails UI half of the split (ADR 0001): a throwaway shell the
 // collector spawns. It connects to the collector over the named pipe, verifies
-// protocol compatibility, then binds a thin proxy (uiproxy.App, whose methods
-// forward to the collector via Invoke) in place of the in-process app.App and
-// renders the unchanged frontend. The collector→UI event stream is re-emitted
+// protocol compatibility, then binds a thin proxy (uiproxy.App — declared
+// package app so Wails exposes it as window.go.app.App, whose methods forward to
+// the collector via Invoke) in place of the in-process app.App and renders the
+// unchanged frontend. The collector→UI event stream is re-emitted
 // onto the Wails runtime so the frontend's EventsOn handlers keep working.
 func runUI(pipeName string) error {
 	if pipeName == "" {

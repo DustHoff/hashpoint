@@ -1,4 +1,4 @@
-package uiproxy
+package app
 
 import (
 	"context"
