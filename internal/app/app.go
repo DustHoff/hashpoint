@@ -1224,17 +1224,21 @@ func (a *App) PersonioLogout() error {
 
 // ----- Entra ID -----------------------------------------------------------
 
-// EntraStatusResponse is the JSON shape the Settings tab consumes. The
-// "configured" flag drives whether the Login button is enabled at all;
-// "has_account" drives the badge between "nicht angemeldet" and the
-// signed-in info card.
+// EntraStatusResponse is the JSON shape the Settings tab and the header badge
+// consume. The "configured" flag drives whether the Login button is enabled at
+// all; "has_account" drives the badge between "nicht angemeldet" and the
+// signed-in info card. "valid" and "checked_at" are populated only by
+// EntraProbe (the live silent-token probe behind the header badge); the cheap
+// EntraStatus read leaves them at their zero value.
 type EntraStatusResponse struct {
 	Configured    bool   `json:"configured"`
 	HasAccount    bool   `json:"has_account"`
+	Valid         bool   `json:"valid"`
 	Username      string `json:"username,omitempty"`
 	HomeAccountID string `json:"home_account_id,omitempty"`
 	TenantID      string `json:"tenant_id,omitempty"`
 	ClientID      string `json:"client_id,omitempty"`
+	CheckedAt     string `json:"checked_at,omitempty"`
 	Reason        string `json:"reason,omitempty"`
 }
 
@@ -1255,6 +1259,51 @@ func (a *App) EntraStatus() EntraStatusResponse {
 		TenantID:      st.TenantID,
 		ClientID:      st.ClientID,
 	}
+}
+
+// EntraProbe reports the Entra ID auth state like EntraStatus, but additionally
+// verifies the cached token is still usable via a silent (cache-first) token
+// acquisition. It is the EntraStatus counterpart to PersonioCheck: EntraStatus
+// is the cheap local read the Settings tab uses, EntraProbe adds the live
+// "is the session still alive" signal the header badge polls.
+//
+// AcquireToken with allowInteractive=false never opens a browser, so this is
+// safe to call on a background poll; silent acquisition only touches the
+// network when the access token has actually expired, so a 60s badge poll is
+// mostly served from the encrypted local cache.
+func (a *App) EntraProbe() EntraStatusResponse {
+	mgr := a.currentEntra()
+	if mgr == nil || !mgr.Configured() {
+		return EntraStatusResponse{Reason: "Entra ID nicht konfiguriert"}
+	}
+	st := mgr.Status(a.ctx)
+	resp := EntraStatusResponse{
+		Configured:    true,
+		HasAccount:    st.HasAccount,
+		Username:      st.Username,
+		HomeAccountID: st.HomeAccountID,
+		TenantID:      st.TenantID,
+		ClientID:      st.ClientID,
+		CheckedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	if !st.HasAccount {
+		resp.Reason = "nicht angemeldet"
+		return resp
+	}
+	// Silent, cache-first: a cached account whose refresh token still works
+	// resolves without a network round-trip. A failure here means the user
+	// must re-authenticate (CA-policy drift, password reset, revoked token).
+	if _, _, err := mgr.AcquireToken(a.ctx, entra.DefaultLoginScopes, false); err != nil {
+		if errors.Is(err, entra.ErrInteractiveRequired) || errors.Is(err, entra.ErrSignedOut) {
+			resp.Reason = "Anmeldung erforderlich"
+		} else {
+			resp.Reason = "Token-Prüfung fehlgeschlagen"
+		}
+		a.logger.Info("app: EntraProbe — silent token unavailable", "err", err)
+		return resp
+	}
+	resp.Valid = true
+	return resp
 }
 
 // EntraLogin runs an interactive browser login with the default Graph

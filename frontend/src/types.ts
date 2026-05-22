@@ -196,10 +196,15 @@ export interface PersonioStatus {
 export interface EntraStatus {
   configured: boolean;
   has_account: boolean;
+  // Populated only by entraProbe (the live silent-token check the header badge
+  // polls): true when the cached token still acquires silently. The cheap
+  // entraStatus read leaves it false.
+  valid: boolean;
   username?: string;
   home_account_id?: string;
   tenant_id?: string;
   client_id?: string;
+  checked_at?: string;
   reason?: string;
 }
 
