@@ -1,10 +1,19 @@
-// Package uiproxy is the UI-side stand-in for the in-process app.App. In the
-// collector/UI split (ADR 0001) the UI process binds *uiproxy.App into Wails
-// instead of the real app.App; each method (generated in proxy_gen.go from
-// app.App's signatures) forwards to the collector over the generic Invoke RPC.
-// Because the signatures are identical, the Wails bindings and the frontend
-// api layer are unchanged.
-package uiproxy
+// Package app is the UI-side stand-in for the in-process app.App. In the
+// collector/UI split (ADR 0001) the UI process binds *App into Wails instead of
+// the real app.App; each method (generated in proxy_gen.go from app.App's
+// signatures) forwards to the collector over the generic Invoke RPC.
+//
+// The package is named app — not uiproxy, after its directory — on purpose:
+// Wails derives the JS binding namespace (window.go.<pkg>.<Type>.<method>) from
+// the bound struct's Go package name via reflect.Type.String(), not from the
+// method signatures. Matching the monolith's internal/app keeps the bindings at
+// window.go.app.App.*, so the embedded frontend works byte-for-byte in both the
+// monolith and the split. Renaming this package back to uiproxy would move the
+// bindings to window.go.uiproxy.App and silently break the UI — the frontend's
+// api layer would find window.go.app undefined ("Wails bindings not available").
+// The directory stays uiproxy so the import path does not collide with the real
+// internal/app; the generated proxy_gen.go aliases that import as appdom.
+package app
 
 import (
 	"context"
