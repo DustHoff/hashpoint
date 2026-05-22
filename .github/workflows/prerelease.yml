@@ -2,22 +2,28 @@ name: prerelease
 
 # Every push to the `release` branch publishes a GitHub *prerelease* carrying
 # the same artifacts as a normal release (hashpoint.exe, the MSI installer and
-# checksums.txt). It mirrors release.yml's build, but instead of bumping a
-# semver tag it derives a SemVer release-candidate version from the latest tag:
+# checksums.txt). It mirrors release.yml's build, but derives a SemVer
+# release-candidate version for the *next* release instead of cutting a final
+# tag.
 #
-#   <major>.<minor>.<patch+1>-rc.<x>
-#
-# i.e. the release candidate for the *next* patch release (release.yml bumps
-# patch by default), so per SemVer the rc sorts before that final release.
-# `x` is the number of commits since the latest tag — a chronological build
-# count that resets when a new tag is cut, giving rc.1, rc.2, … per version.
+# Versioning (see "Resolve prerelease version"):
+#   - base   = the latest FINAL release tag (vX.Y.Z); rc tags are ignored, so
+#              the target does not creep with every prerelease.
+#   - target = base with the MINOR bumped once per release cycle (X.(Y+1).0),
+#              or the MAJOR bumped ((X+1).0.0) when a breaking change
+#              (Conventional `type!:` or a `BREAKING CHANGE` footer) landed
+#              since base. Patch is always 0.
+#   - rc.<x> = a per-build counter: the highest existing v<target>-rc.<n> plus
+#              one, so successive builds for the same target give rc.1, rc.2, …
+# => <target>-rc.<x>, e.g. 1.12.0-rc.3. The whole cycle shares one target;
+# only x advances. Merging release→main promotes the highest rc to the final
+# v<target> (see release.yml).
 #
 # WiX/VERSIONINFO need a purely numeric version, so the MSI/EXE carry
-# <major>.<minor>.<patch+1>.<x> (the -rc.<x> maps to the 4th/revision field).
-# MSI only compares the first three fields, so every rc for a given target
-# shares <major>.<minor>.<patch+1>; AllowSameVersionUpgrades (see
-# build/wix/hashpoint.wxs) lets successive rc MSIs — and the final release —
-# replace each other cleanly.
+# <target>.<x> (the -rc.<x> maps to the 4th/revision field). MSI only compares
+# the first three fields, so every rc for a target shares <target>;
+# AllowSameVersionUpgrades (see build/wix/hashpoint.wxs) lets successive rc MSIs
+# — and the final release — replace each other cleanly.
 #
 # Note: this duplicates release.yml's build steps rather than sharing a
 # reusable workflow, to keep the production release pipeline untouched.
@@ -59,26 +65,46 @@ jobs:
         run: |
           # No pipefail: `git tag | head` would SIGPIPE-fail git under it.
           set -eu
-          # Latest semver tag (descending). Default to v0.0.0 when none exist.
-          latest="$(git tag -l 'v*' --sort=-v:refname | head -n1)"
-          if [ -z "$latest" ]; then
+          # Base = latest FINAL release tag (pure vX.Y.Z). rc / pre-release tags
+          # are ignored so the target does not creep with every prerelease.
+          # Default to v0.0.0 when no final release exists yet.
+          latest_final="$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)"
+          if [ -z "$latest_final" ]; then
             base="0.0.0"
             range="HEAD"
           else
-            base="${latest#v}"
-            range="${latest}..HEAD"
+            base="${latest_final#v}"
+            range="${latest_final}..HEAD"
           fi
-          # Strip any pre-release/build suffix the tag might carry.
-          base="${base%%-*}"
-          IFS=. read -r maj min pat <<< "$base"
-          maj="${maj:-0}"; min="${min:-0}"; pat="${pat:-0}"
-          next_pat=$((pat + 1))
-          # x = commits since the latest tag (this rc series' build count).
-          x="$(git rev-list --count "$range")"
-          [ "$x" -ge 1 ] || x=1
+          IFS=. read -r maj min _ <<< "$base"
+          maj="${maj:-0}"; min="${min:-0}"
 
-          semver="${maj}.${min}.${next_pat}-rc.${x}"   # SemVer (tag + display)
-          numeric="${maj}.${min}.${next_pat}.${x}"     # WiX/VERSIONINFO (4-part)
+          # Bump the minor once per release cycle; bump the major instead when a
+          # breaking change landed since the base release (Conventional
+          # `type!:` subject or a `BREAKING CHANGE` footer). Patch resets to 0.
+          breaking=0
+          if git log --format='%s' "$range" | grep -qE '^[a-zA-Z]+(\([^)]*\))?!:'; then breaking=1; fi
+          if git log --format='%B' "$range" | grep -qE 'BREAKING[ -]CHANGE'; then breaking=1; fi
+          if [ "$breaking" -eq 1 ]; then
+            maj=$((maj + 1)); min=0
+          else
+            min=$((min + 1))
+          fi
+          target="${maj}.${min}.0"
+
+          # x = per-build counter for this target: highest existing
+          # v<target>-rc.<n> plus one (rc.1 when none exist yet).
+          maxn=0
+          while read -r t; do
+            [ -n "$t" ] || continue
+            n="${t##*-rc.}"
+            case "$n" in (*[!0-9]*) continue ;; esac
+            [ "$n" -gt "$maxn" ] && maxn="$n"
+          done < <(git tag -l "v${target}-rc.*")
+          x=$((maxn + 1))
+
+          semver="${target}-rc.${x}"   # SemVer (tag + display)
+          numeric="${target}.${x}"     # WiX/VERSIONINFO (4-part)
           short="$(git rev-parse --short HEAD)"
 
           {
@@ -88,7 +114,7 @@ jobs:
             echo "short=${short}"
             echo "iso=$(git show -s --format=%cI HEAD)"
           } >> "$GITHUB_OUTPUT"
-          echo "Prerelease version: ${semver} (MSI ${numeric})"
+          echo "Prerelease version: ${semver} (MSI ${numeric}); base=${latest_final:-none} breaking=${breaking}"
 
       - name: Frontend install
         working-directory: frontend
