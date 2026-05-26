@@ -3,8 +3,11 @@
 package uisupervisor
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os/exec"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -50,5 +53,49 @@ func TestSupervisor_RespawnsAndStops(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after cancel")
+	}
+}
+
+// TestSupervisor_LogsUICrashOnNonZeroExit checks that an unexpected non-zero
+// child exit is recorded as a ui_crash with the exit code — the path that lets
+// the surviving collector capture a UI crash in the log.
+func TestSupervisor_LogsUICrashOnNonZeroExit(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	spawned := make(chan struct{}, 4)
+	first := true
+	sup := New(func(ctx context.Context) *exec.Cmd {
+		select {
+		case spawned <- struct{}{}:
+		default:
+		}
+		if first {
+			first = false
+			return exec.CommandContext(ctx, "cmd", "/c", "exit", "3")
+		}
+		// Later spawns block until cancel so the loop does not crash-loop.
+		return exec.CommandContext(ctx, "cmd", "/c", "ping", "-n", "60", "127.0.0.1")
+	}, logger, WithBackoff(5*time.Millisecond, 5*time.Millisecond))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- sup.Run(ctx) }()
+
+	// First (crashing) spawn, then the respawn — by which point the crash has
+	// been logged.
+	<-spawned
+	select {
+	case <-spawned:
+	case <-time.After(5 * time.Second):
+	}
+	cancel()
+	<-done
+
+	out := buf.String()
+	if !strings.Contains(out, "ui_crash") {
+		t.Errorf("expected ui_crash log, got: %q", out)
+	}
+	if !strings.Contains(out, `"exit_code":3`) {
+		t.Errorf("expected exit_code 3, got: %q", out)
 	}
 }

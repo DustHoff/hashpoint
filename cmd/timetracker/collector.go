@@ -16,6 +16,7 @@ import (
 
 	"github.com/dusthoff/hashpoint/internal/collector"
 	"github.com/dusthoff/hashpoint/internal/config"
+	"github.com/dusthoff/hashpoint/internal/crashguard"
 	"github.com/dusthoff/hashpoint/internal/ipc"
 	"github.com/dusthoff/hashpoint/internal/ipc/collectorpb"
 	"github.com/dusthoff/hashpoint/internal/uisupervisor"
@@ -55,6 +56,17 @@ func runCollector() error {
 	}
 	defer closeLog()
 
+	// Crash sentinel for the collector — the long-lived survivor of the split,
+	// so its silent death is exactly the data-loss case worth catching. Disarm
+	// runs on the clean teardown below; an abrupt kill leaves the marker for the
+	// next collector start to report.
+	mk, err := crashguard.Start(ctx, paths.DataDir, crashguard.RoleCollector,
+		crashguard.Info{Version: version, Commit: commit}, slog.Default())
+	if err != nil {
+		slog.Warn("crashguard: arm failed — crash detection disabled", "err", err)
+	}
+	defer mk.Disarm()
+
 	// The collector has no Wails runtime, so the domain emits events onto the
 	// IPC hub for the UI to re-emit.
 	hub := collector.NewEventHub(0)
@@ -93,7 +105,10 @@ func runCollector() error {
 		defer removePipeFile(paths)
 	}
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- srv.Serve() }()
+	go func() {
+		defer crashguard.Recover(slog.Default(), "ipc-serve")
+		serveErr <- srv.Serve()
+	}()
 	slog.Info("collector: serving", "pipe", pipeName)
 
 	// Own the UI lifecycle: spawn ourselves as the UI shell pointed at our
@@ -111,7 +126,11 @@ func runCollector() error {
 		return cmd
 	}, slog.Default())
 	supDone := make(chan struct{})
-	go func() { _ = sup.Run(ctx); close(supDone) }()
+	go func() {
+		defer crashguard.Recover(slog.Default(), "ui-supervisor")
+		defer close(supDone)
+		_ = sup.Run(ctx)
+	}()
 
 	// The tray lives in the collector (ADR): domain actions (pause, sync,
 	// manual-tag) run in-process on d.app; "Öffnen"/"Hilfe" signal the UI
@@ -121,7 +140,10 @@ func runCollector() error {
 		openHelp: func() { hub.Publish(collector.EventShowUI, nil); hub.Publish(uiHelpEvent, nil) },
 		quit:     func() bool { cancel(); return false },
 	}
-	go runTray(ctx, d.app, trayAct, version)
+	go func() {
+		defer crashguard.Recover(slog.Default(), "tray")
+		runTray(ctx, d.app, trayAct, version)
+	}()
 
 	select {
 	case <-ctx.Done():

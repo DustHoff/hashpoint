@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dusthoff/hashpoint/internal/crashguard"
 	"github.com/dusthoff/hashpoint/internal/storage"
 	"github.com/dusthoff/hashpoint/internal/winapi"
 )
@@ -298,7 +299,9 @@ func (t *Tracker) Run(ctx context.Context) error {
 			t.logger.Info("tracker stopped")
 			return ctx.Err()
 		case <-ticker.C:
-			t.tick(ctx)
+			// Guard each tick so a panic in a single poll (e.g. a Win32
+			// edge case) is logged and skipped instead of ending the loop.
+			crashguard.Safe(t.logger, "tracker-tick", func() { t.tick(ctx) })
 		}
 	}
 }

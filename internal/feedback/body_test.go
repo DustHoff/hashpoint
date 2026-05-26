@@ -3,6 +3,9 @@ package feedback
 import (
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/dusthoff/hashpoint/internal/crashguard"
 )
 
 func TestRender_FullPayload(t *testing.T) {
@@ -84,6 +87,46 @@ func TestCategoryAndSeverityLabel_Fallbacks(t *testing.T) {
 	}
 	if got := SeverityLabel(Severity("urgent")); got != "severity:medium" {
 		t.Errorf("SeverityLabel fallback=%q want severity:medium", got)
+	}
+}
+
+func TestRender_CrashesSection(t *testing.T) {
+	in := Input{
+		Title:    "x",
+		Category: CategoryBug,
+		Severity: SeverityMedium,
+		About:    AboutInfo{Version: "v1"},
+		Crashes: []CrashRecord{
+			{
+				Time:   time.Date(2026, 5, 16, 11, 30, 0, 0, time.UTC),
+				Event:  crashguard.EventPanic,
+				Cause:  "boom",
+				Stack:  "goroutine 1 [running]:\nmain.x()",
+				Detail: map[string]any{"goroutine": "tracker-tick"},
+			},
+			{
+				Time:   time.Date(2026, 5, 16, 11, 55, 0, 0, time.UTC),
+				Event:  crashguard.EventUncleanShutdown,
+				Detail: map[string]any{"prev_pid": 99, "downtime_sec": 42},
+			},
+		},
+	}
+	mustContainAll(t, Render(in),
+		"### Erkannte Abstürze (2)",
+		"**Panic** · 2026-05-16T11:30:00Z · boom",
+		"goroutine: tracker-tick",
+		"<summary>Stacktrace</summary>",
+		"main.x()",
+		"**Unerwartetes Beenden** · 2026-05-16T11:55:00Z",
+		"downtime_sec: 42",
+		"prev_pid: 99",
+	)
+}
+
+func TestRender_NoCrashesOmitsSection(t *testing.T) {
+	in := Input{Category: CategoryBug, Severity: SeverityLow, About: AboutInfo{Version: "v1"}}
+	if strings.Contains(Render(in), "Erkannte Abstürze") {
+		t.Error("crash section present with no crashes")
 	}
 }
 

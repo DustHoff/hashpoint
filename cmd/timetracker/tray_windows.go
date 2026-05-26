@@ -109,6 +109,11 @@ func onTrayReady(ctx context.Context, a *app.App, act trayActions, version strin
 			// collector: cancel its context). It returns true only when no
 			// graceful path took over, in which case we hard-stop the tray.
 			if act.quit() {
+				// Clean exit: drop the crash marker first, since os.Exit
+				// skips the deferred Disarm.
+				if act.disarm != nil {
+					act.disarm()
+				}
 				systray.Quit()
 				os.Exit(0)
 			}

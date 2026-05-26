@@ -263,6 +263,7 @@ func (a *App) toFeedbackInput(in FeedbackInputDTO) (feedback.Input, error) {
 	}
 	var window feedback.LogWindow
 	var logTail []byte
+	var crashes []feedback.CrashRecord
 	if in.IncludeLog {
 		w, err := parseFeedbackWindow(in.LogWindow)
 		if err != nil {
@@ -274,6 +275,15 @@ func (a *App) toFeedbackInput(in FeedbackInputDTO) (feedback.Input, error) {
 			a.logger.Warn("feedback: log tail failed — submitting without log", "err", err)
 		} else {
 			logTail = tail
+		}
+		// Detected crashes ride along with the log attachment so a report
+		// captures abnormal terminations even when the windowed tail would
+		// truncate or miss them.
+		found, err := a.readFeedbackCrashes(window)
+		if err != nil {
+			a.logger.Warn("feedback: crash scan failed — submitting without crashes", "err", err)
+		} else {
+			crashes = found
 		}
 	}
 	return feedback.Input{
@@ -291,6 +301,7 @@ func (a *App) toFeedbackInput(in FeedbackInputDTO) (feedback.Input, error) {
 		},
 		LogTail:   logTail,
 		LogWindow: window,
+		Crashes:   crashes,
 	}, nil
 }
 
@@ -300,6 +311,14 @@ func (a *App) readFeedbackLog(window feedback.LogWindow) ([]byte, error) {
 	}
 	path := filepath.Join(a.deps.LogDir, feedback.LogFileName)
 	return feedback.ReadLogTail(a.ctx, path, window, time.Now())
+}
+
+func (a *App) readFeedbackCrashes(window feedback.LogWindow) ([]feedback.CrashRecord, error) {
+	if a.deps.LogDir == "" {
+		return nil, errors.New("kein LogDir konfiguriert")
+	}
+	path := filepath.Join(a.deps.LogDir, feedback.LogFileName)
+	return feedback.ReadRecentCrashes(a.ctx, path, window, time.Now())
 }
 
 func parseFeedbackCategory(s string) (feedback.Category, error) {

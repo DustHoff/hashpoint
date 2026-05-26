@@ -2,7 +2,11 @@ package feedback
 
 import (
 	"fmt"
+	"sort"
 	"strings"
+	"time"
+
+	"github.com/dusthoff/hashpoint/internal/crashguard"
 )
 
 // Category names a high-level issue type. The frontend dropdown maps
@@ -60,6 +64,11 @@ type Input struct {
 	// summary so reviewers know what range to expect. Ignored when
 	// LogTail is empty.
 	LogWindow LogWindow
+	// Crashes lists abnormal-termination records detected in the log
+	// (panics, unclean shutdowns, UI crashes). Rendered as their own
+	// section so they survive log-tail truncation. Empty when none were
+	// found or the user did not attach the log.
+	Crashes []CrashRecord
 }
 
 // CategoryLabel maps a category to its GitHub label name. Falls back
@@ -121,6 +130,8 @@ func Render(in Input) string {
 	fmt.Fprintf(&b, "- **Commit:** %s\n", fallbackDash(in.About.Commit))
 	fmt.Fprintf(&b, "- **Build:** %s\n", fallbackDash(in.About.BuildDate))
 
+	writeCrashes(&b, in.Crashes)
+
 	if len(in.LogTail) > 0 {
 		b.WriteString("\n<details>\n")
 		fmt.Fprintf(&b, "<summary>Anwendungslog — %s (gekürzt, ohne Debug-Level und Fenstertitel)</summary>\n\n",
@@ -134,6 +145,61 @@ func Render(in Input) string {
 		b.WriteString("</details>\n")
 	}
 	return b.String()
+}
+
+// writeCrashes renders the "Erkannte Abstürze" section. No-op when the slice is
+// empty, so a report without detected crashes is unchanged.
+func writeCrashes(b *strings.Builder, crashes []CrashRecord) {
+	if len(crashes) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\n### Erkannte Abstürze (%d)\n", len(crashes))
+	b.WriteString("_Automatisch aus dem Anwendungslog erfasst._\n\n")
+	for _, c := range crashes {
+		writeCrash(b, c)
+	}
+}
+
+func writeCrash(b *strings.Builder, c CrashRecord) {
+	when := "—"
+	if !c.Time.IsZero() {
+		when = c.Time.UTC().Format(time.RFC3339)
+	}
+	fmt.Fprintf(b, "- **%s** · %s", crashKindLabel(c.Event), when)
+	if cause := strings.TrimSpace(c.Cause); cause != "" {
+		fmt.Fprintf(b, " · %s", cause)
+	}
+	b.WriteByte('\n')
+	// Remaining structured fields, sorted for a stable body.
+	if len(c.Detail) > 0 {
+		keys := make([]string, 0, len(c.Detail))
+		for k := range c.Detail {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(b, "  - %s: %v\n", k, c.Detail[k])
+		}
+	}
+	if stack := strings.TrimRight(c.Stack, "\n"); strings.TrimSpace(stack) != "" {
+		b.WriteString("\n<details>\n<summary>Stacktrace</summary>\n\n```\n")
+		b.WriteString(stack)
+		b.WriteString("\n```\n\n</details>\n")
+	}
+}
+
+// crashKindLabel maps a crash event value to a German section label.
+func crashKindLabel(event string) string {
+	switch event {
+	case crashguard.EventPanic:
+		return "Panic"
+	case crashguard.EventUncleanShutdown:
+		return "Unerwartetes Beenden"
+	case crashguard.EventUICrash:
+		return "UI-Absturz"
+	default:
+		return event
+	}
 }
 
 func writeSection(b *strings.Builder, heading, body string) {
