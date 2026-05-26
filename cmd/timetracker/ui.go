@@ -9,6 +9,7 @@ import (
 
 	hashpoint "github.com/dusthoff/hashpoint"
 	"github.com/dusthoff/hashpoint/internal/collector"
+	"github.com/dusthoff/hashpoint/internal/crashguard"
 	"github.com/dusthoff/hashpoint/internal/ipc"
 	"github.com/dusthoff/hashpoint/internal/ipc/collectorpb"
 
@@ -77,7 +78,10 @@ func runUI(pipeName string) error {
 		AssetServer:      &assetserver.Options{Assets: hashpoint.Frontend},
 		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
 		OnStartup: func(ctx context.Context) {
-			go pumpEvents(eventCtx, cli, ctx)
+			go func() {
+				defer crashguard.Recover(slog.Default(), "ui-event-pump")
+				pumpEvents(eventCtx, cli, ctx)
+			}()
 		},
 		OnShutdown: func(context.Context) {
 			eventCancel()

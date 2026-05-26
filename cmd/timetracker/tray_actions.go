@@ -22,4 +22,9 @@ type trayActions struct {
 	// collector cancels its context and returns false (its run loop tears
 	// down).
 	quit func() bool
+	// disarm removes the crash-sentinel marker before a hard os.Exit, which
+	// would otherwise bypass the deferred Disarm and leave the marker behind —
+	// making the next start misreport a clean quit as an unclean shutdown. May
+	// be nil (e.g. the collector, which never hard-exits from the tray).
+	disarm func()
 }

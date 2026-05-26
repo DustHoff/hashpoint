@@ -20,6 +20,7 @@ import (
 	hashpoint "github.com/dusthoff/hashpoint"
 	"github.com/dusthoff/hashpoint/internal/app"
 	"github.com/dusthoff/hashpoint/internal/config"
+	"github.com/dusthoff/hashpoint/internal/crashguard"
 	"github.com/dusthoff/hashpoint/internal/entra"
 	"github.com/dusthoff/hashpoint/internal/logging"
 	"github.com/dusthoff/hashpoint/internal/personio"
@@ -48,10 +49,21 @@ var (
 )
 
 func main() {
+	os.Exit(appMain())
+}
+
+// appMain runs the app and returns the process exit code. Keeping os.Exit out
+// of the same frame as the deferred RecoverFatal is deliberate: os.Exit would
+// skip the defer, so the panic guard lives here (returning a code) while the
+// single os.Exit stays in main. A panic that escapes every goroutine guard is
+// logged with its stack and re-raised, so the process still exits non-zero.
+func appMain() int {
+	defer crashguard.RecoverFatal()
 	if err := dispatch(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "fatal:", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // procMode selects which half of the application a process runs as.
@@ -128,6 +140,18 @@ func run() error {
 	}
 	defer closeLog()
 
+	// Crash sentinel: report a previous run that died without disarming, then
+	// arm this run's marker. Disarm runs on every clean exit (including a panic
+	// unwinding through this defer); an abrupt kill leaves the marker for the
+	// next start to detect. Best-effort — an arm failure only disables crash
+	// detection, it must not block startup.
+	mk, err := crashguard.Start(ctx, paths.DataDir, crashguard.RoleMonolith,
+		crashguard.Info{Version: version, Commit: commit}, slog.Default())
+	if err != nil {
+		slog.Warn("crashguard: arm failed — crash detection disabled", "err", err)
+	}
+	defer mk.Disarm()
+
 	// nil sink ⇒ the app emits via the Wails runtime (the monolith default).
 	d, err := buildDomain(ctx, paths, cfg, nil)
 	if err != nil {
@@ -145,6 +169,7 @@ func run() error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
+		defer crashguard.Recover(slog.Default(), "signal-handler")
 		<-sigCh
 		if !a.Quit() {
 			cancel()
@@ -157,8 +182,14 @@ func run() error {
 		open:     a.ShowWindow,
 		openHelp: a.OpenHelpTab,
 		quit:     func() bool { return !a.Quit() },
+		// The tray's hard-stop path (systray.Quit + os.Exit) bypasses the
+		// deferred Disarm above, so it must remove the marker itself.
+		disarm: mk.Disarm,
 	}
-	go runTray(ctx, a, trayAct, version)
+	go func() {
+		defer crashguard.Recover(slog.Default(), "tray")
+		runTray(ctx, a, trayAct, version)
+	}()
 
 	// onShutdownCompleted distinguishes a clean Wails shutdown (OnShutdown
 	// ran) from an abnormal exit where Wails returns without invoking the
@@ -410,6 +441,7 @@ func buildDomain(ctx context.Context, paths config.Paths, cfg *config.Config, si
 
 	// Tracker goroutine.
 	go func() {
+		defer crashguard.Recover(slog.Default(), "tracker-run")
 		if err := trk.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("tracker run failed", "err", err)
 		}
@@ -425,21 +457,28 @@ func buildDomain(ctx context.Context, paths config.Paths, cfg *config.Config, si
 	var pausedBySuspend atomic.Bool
 	power, powerErr := winapi.NewPowerMonitor(slog.Default(),
 		func() {
-			if trk.Paused() {
-				slog.Debug("power: suspend — tracker already paused")
-				return
-			}
-			slog.Info("power: suspend — pausing tracker")
-			pausedBySuspend.Store(true)
-			trk.Pause(ctx)
+			// Power callbacks run on an OS callback thread, so guard them: an
+			// unrecovered panic here would abort the process from outside any
+			// goroutine guard.
+			crashguard.Safe(slog.Default(), "power-suspend", func() {
+				if trk.Paused() {
+					slog.Debug("power: suspend — tracker already paused")
+					return
+				}
+				slog.Info("power: suspend — pausing tracker")
+				pausedBySuspend.Store(true)
+				trk.Pause(ctx)
+			})
 		},
 		func() {
-			if pausedBySuspend.Swap(false) {
-				slog.Info("power: resume — resuming tracker")
-				trk.Resume()
-			} else {
-				slog.Debug("power: resume — tracker was not suspend-paused")
-			}
+			crashguard.Safe(slog.Default(), "power-resume", func() {
+				if pausedBySuspend.Swap(false) {
+					slog.Info("power: resume — resuming tracker")
+					trk.Resume()
+				} else {
+					slog.Debug("power: resume — tracker was not suspend-paused")
+				}
+			})
 		},
 	)
 	if powerErr != nil {

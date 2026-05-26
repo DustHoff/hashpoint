@@ -387,8 +387,9 @@ function FeedbackForm({ form, onChange, disabled, onPreview, error }: FormProps)
           </div>
         )}
         <p className="mt-2 pl-6 text-xs text-slate-500">
-          Debug-Einträge und Fenstertitel werden vor dem Upload entfernt. Im
-          Vorschau-Schritt kannst du den fertigen Inhalt prüfen.
+          Erkannte Abstürze werden ebenfalls angehängt. Debug-Einträge und
+          Fenstertitel werden vor dem Upload entfernt. Im Vorschau-Schritt
+          kannst du den fertigen Inhalt prüfen.
         </p>
       </div>
 

@@ -7,9 +7,12 @@ package uisupervisor
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os/exec"
 	"time"
+
+	"github.com/dusthoff/hashpoint/internal/crashguard"
 )
 
 const (
@@ -88,15 +91,35 @@ func (s *Supervisor) Run(ctx context.Context) error {
 
 // runOnce starts the child and waits for it to exit. A cancelled ctx
 // terminates the child via the command's context, so Wait returns promptly on
-// shutdown; that exit is expected and not logged as an error.
+// shutdown; that exit is expected and not logged. An unexpected exit (ctx still
+// live) is recorded as a UI crash with the exit code and how long the child ran,
+// so the surviving collector captures it in the log even though the UI process
+// has no log file of its own.
 func (s *Supervisor) runOnce(ctx context.Context) {
 	cmd := s.newCmd(ctx)
+	started := time.Now()
 	if err := cmd.Start(); err != nil {
 		s.logger.Warn("ui: start failed", "err", err)
 		return
 	}
 	s.logger.Info("ui: started", "pid", cmd.Process.Pid)
-	if err := cmd.Wait(); err != nil && ctx.Err() == nil {
-		s.logger.Warn("ui: exited with error", "err", err)
+	err := cmd.Wait()
+	if ctx.Err() != nil {
+		return // expected: our own shutdown terminated the child
 	}
+	runtimeSec := int(time.Since(started).Seconds())
+	if err == nil {
+		s.logger.Warn("ui: process exited cleanly but unexpectedly", "runtime_sec", runtimeSec)
+		return
+	}
+	exitCode := -1
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		exitCode = ee.ExitCode()
+	}
+	s.logger.Error("ui process crashed",
+		"event", crashguard.EventUICrash,
+		"exit_code", exitCode,
+		"runtime_sec", runtimeSec,
+		"err", err)
 }
