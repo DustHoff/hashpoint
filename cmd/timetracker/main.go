@@ -49,14 +49,21 @@ var (
 )
 
 func main() {
-	// Last-resort guard: a panic that escapes every goroutine guard is logged
-	// (with stack) before the process dies, then re-raised so the exit code
-	// still reflects the crash.
+	os.Exit(appMain())
+}
+
+// appMain runs the app and returns the process exit code. Keeping os.Exit out
+// of the same frame as the deferred RecoverFatal is deliberate: os.Exit would
+// skip the defer, so the panic guard lives here (returning a code) while the
+// single os.Exit stays in main. A panic that escapes every goroutine guard is
+// logged with its stack and re-raised, so the process still exits non-zero.
+func appMain() int {
 	defer crashguard.RecoverFatal()
 	if err := dispatch(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "fatal:", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // procMode selects which half of the application a process runs as.
