@@ -70,7 +70,11 @@ func runCollector() error {
 	// The collector has no Wails runtime, so the domain emits events onto the
 	// IPC hub for the UI to re-emit.
 	hub := collector.NewEventHub(0)
-	d, err := buildDomain(ctx, paths, cfg, collector.NewEventSink(hub))
+	// The collector owns no Wails window; window intents from the domain are
+	// forwarded to the UI process as control events, and a Quit intent cancels
+	// the collector (issue #28).
+	winCtl := collector.NewHeadlessWindowController(hub, cancel)
+	d, err := buildDomain(ctx, paths, cfg, collector.NewEventSink(hub), winCtl)
 	if err != nil {
 		return err
 	}

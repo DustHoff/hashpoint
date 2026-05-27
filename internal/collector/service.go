@@ -15,6 +15,16 @@ import (
 // forwarding it to the frontend.
 const EventShowUI = "ui:show"
 
+// EventQuickTagEnter and EventQuickTagLeave are control events the collector
+// publishes to drive the UI's quick-tag popup window: enter shrinks the UI
+// window into the popup (saving its placement), leave restores it. Like
+// EventShowUI the UI's event pump acts on them locally against its own Wails
+// context rather than forwarding them to the frontend (issue #28).
+const (
+	EventQuickTagEnter = "ui:quicktag-enter"
+	EventQuickTagLeave = "ui:quicktag-leave"
+)
+
 // VersionInfo is the collector build metadata reported to the UI via
 // GetVersion for the compatibility handshake.
 type VersionInfo struct {

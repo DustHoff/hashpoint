@@ -21,22 +21,18 @@ import (
 	"github.com/dusthoff/hashpoint/internal/storage"
 	"github.com/dusthoff/hashpoint/internal/tagging"
 	"github.com/dusthoff/hashpoint/internal/tracker"
-	"github.com/dusthoff/hashpoint/internal/winapi"
-	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// Quick-tag-picker geometry (physical pixels). Intentionally compact —
-// the popup is keyboard-driven and lists at most 10 entries.
+// Quick-tag-picker tuning: how far back "recent" tags reach and how many
+// slots the popup lists. The popup window geometry lives with the window
+// controller in package main — the App no longer drives the window directly.
 const (
-	quickTagPickerWidth  = 340
-	quickTagPickerHeight = 420
-	quickTagPickerMargin = 12
-	quickTagRecentDays   = 30
-	quickTagSlotCount    = 10
-	quickTagOpenEvent    = "quick-tag-picker:open"
-	quickTagCloseEvent   = "quick-tag-picker:close"
-	helpOpenEvent        = "help:open"
-	startupSyncEvent     = "startup-sync:result"
+	quickTagRecentDays = 30
+	quickTagSlotCount  = 10
+	quickTagOpenEvent  = "quick-tag-picker:open"
+	quickTagCloseEvent = "quick-tag-picker:close"
+	helpOpenEvent      = "help:open"
+	startupSyncEvent   = "startup-sync:result"
 	// startupSyncConflictEvent fires when the startup-sync's preflight finds
 	// existing periods on the day it was about to push. The frontend
 	// listens and surfaces the same Override/Import modal as the manual
@@ -155,6 +151,11 @@ type Deps struct {
 	// default Wails-runtime sink (monolith and UI process). The collector
 	// injects a sink that publishes onto the IPC event stream instead.
 	Sink EventSink
+	// Window performs window-level actions (show, quit, quick-tag popup).
+	// Nil ⇒ a no-op controller (tests). The monolith injects a Wails-runtime
+	// controller; the collector injects one that forwards intents to the UI
+	// process, since the collector owns no Wails window (issue #28).
+	Window WindowController
 }
 
 // App is the Wails-bound facade. Methods on *App must be safe to call from
@@ -164,18 +165,21 @@ type App struct {
 	deps   Deps
 	logger *slog.Logger
 	sink   EventSink
+	window WindowController
 
-	mu            sync.Mutex
-	cfg           *config.Config
-	started       bool
-	windowVisible bool
+	mu      sync.Mutex
+	cfg     *config.Config
+	started bool
 	// entraMgr is the live Entra ID auth manager, or nil while the
 	// feature is dormant. SaveConfig swaps it under entraMu when the
 	// user updates client_id / tenant_id; readers must take the lock.
 	entraMu  sync.Mutex
 	entraMgr entra.Manager
 
-	quickTagState quickTagWindowState
+	// quickTagOpen tracks whether the quick-tag popup is currently showing so
+	// the hotkey toggles it (open ⇄ close). The window placement itself lives
+	// in the window controller, not here.
+	quickTagOpen bool
 
 	// pluginHost is the live plugin manager — constructed in New() iff
 	// deps.PluginsDir is non-empty. nil otherwise so the OnCall* methods
@@ -198,18 +202,6 @@ type App struct {
 	feedback feedbackState
 }
 
-// quickTagWindowState captures the main-window placement before the
-// quick-tag-picker took over. Restored on dismiss so the user's normal
-// layout returns intact.
-type quickTagWindowState struct {
-	saved      bool
-	wasVisible bool
-	width      int
-	height     int
-	x          int
-	y          int
-}
-
 // New constructs the app from its dependencies. If the bundled config
 // already has client_id/tenant_id filled in (i.e. the user configured
 // Entra ID in a previous session), the manager is built up-front so the
@@ -224,12 +216,15 @@ func New(deps Deps) *App {
 		logger:           deps.Logger,
 		cfg:              deps.Config,
 		ctx:              context.Background(),
-		windowVisible:    true,
 		validatePersonio: personio.Validate,
 		sink:             deps.Sink,
+		window:           deps.Window,
 	}
 	if a.sink == nil {
 		a.sink = wailsSink{}
+	}
+	if a.window == nil {
+		a.window = nopWindowController{}
 	}
 	if deps.EntraFor != nil && deps.Config != nil && deps.Config.Entra.Configured() {
 		mgr, err := deps.EntraFor(deps.Config.Entra)
@@ -334,7 +329,6 @@ func (a *App) Startup(ctx context.Context) {
 	a.mu.Lock()
 	a.ctx = ctx
 	a.started = true
-	a.windowVisible = true
 	cfg := a.cfg
 	a.mu.Unlock()
 	a.logger.Info("frontend started")
@@ -507,14 +501,12 @@ func (a *App) Shutdown(ctx context.Context) {
 func (a *App) ShowWindow() {
 	a.mu.Lock()
 	ctx, ready := a.ctx, a.started
-	a.windowVisible = true
 	a.mu.Unlock()
 	if !ready || ctx == nil {
 		a.logger.Warn("app: ShowWindow called before Wails Startup — ignoring")
 		return
 	}
-	wailsruntime.WindowShow(ctx)
-	wailsruntime.WindowUnminimise(ctx)
+	a.window.ShowMain(ctx)
 }
 
 // OpenHelpTab brings the main window forward and tells the frontend to
@@ -593,9 +585,7 @@ func extractDocTitle(md, fallback string) string {
 // Returns false (do not prevent close) so Wails proceeds with its normal
 // hide-on-close behaviour.
 func (a *App) OnWindowBeforeClose(_ context.Context) bool {
-	a.mu.Lock()
-	a.windowVisible = false
-	a.mu.Unlock()
+	a.window.NoteMainHidden()
 	return false
 }
 
@@ -609,7 +599,7 @@ func (a *App) Quit() bool {
 	if !ready || ctx == nil {
 		return false
 	}
-	wailsruntime.Quit(ctx)
+	a.window.Quit(ctx)
 	return true
 }
 
@@ -1594,11 +1584,12 @@ func orderedTagsForFill(tags []storage.Tag) []storage.Tag {
 	return out
 }
 
-// QuickTagOpen surfaces the quick-tag-picker. Triggered by the global
-// hotkey handler. Saves the current main-window placement, resizes the
-// window into a small popup at the cursor monitor's bottom-right, and
-// emits a frontend event so the picker UI mounts. Idempotent: a second
-// open while the picker is already up just brings it back to front.
+// QuickTagOpen surfaces the quick-tag-picker. Triggered by the global hotkey
+// handler. It asks the window controller to shrink the window into a small
+// popup at the cursor monitor's corner (saving the prior placement) and emits
+// a frontend event so the picker UI mounts. The window work is delegated so
+// the collector — which has no Wails runtime — forwards it to the UI process
+// rather than calling wailsruntime with a non-Wails context (issue #28).
 func (a *App) QuickTagOpen() error {
 	a.mu.Lock()
 	ctx, ready := a.ctx, a.started
@@ -1606,36 +1597,12 @@ func (a *App) QuickTagOpen() error {
 		a.mu.Unlock()
 		return errors.New("frontend not ready")
 	}
-	already := a.quickTagState.saved
-	if !already {
-		w, h := wailsruntime.WindowGetSize(ctx)
-		x, y := wailsruntime.WindowGetPosition(ctx)
-		a.quickTagState = quickTagWindowState{
-			saved:      true,
-			wasVisible: a.windowVisible,
-			width:      w,
-			height:     h,
-			x:          x,
-			y:          y,
-		}
-	}
-	a.windowVisible = true
+	a.quickTagOpen = true
 	a.mu.Unlock()
 
-	if work, err := winapi.CursorMonitorWorkArea(); err == nil {
-		px := int(work.Right) - quickTagPickerWidth - quickTagPickerMargin
-		py := int(work.Bottom) - quickTagPickerHeight - quickTagPickerMargin
-		wailsruntime.WindowSetPosition(ctx, px, py)
-	} else {
-		a.logger.Warn("quick tag: cursor monitor lookup failed", "err", err)
-		wailsruntime.WindowCenter(ctx)
-	}
-	wailsruntime.WindowSetSize(ctx, quickTagPickerWidth, quickTagPickerHeight)
-	wailsruntime.WindowSetAlwaysOnTop(ctx, true)
-	wailsruntime.WindowShow(ctx)
-	wailsruntime.WindowUnminimise(ctx)
+	a.window.OpenQuickTag(ctx)
 	a.sink.Emit(ctx, quickTagOpenEvent)
-	a.logger.Debug("quick tag: opened", "already", already)
+	a.logger.Debug("quick tag: opened")
 	return nil
 }
 
@@ -1669,24 +1636,13 @@ func (a *App) QuickTagSelect(tagID int64) error {
 func (a *App) closeQuickTagWindow() {
 	a.mu.Lock()
 	ctx, ready := a.ctx, a.started
-	state := a.quickTagState
-	a.quickTagState = quickTagWindowState{}
-	if !state.wasVisible {
-		a.windowVisible = false
-	}
+	a.quickTagOpen = false
 	a.mu.Unlock()
 	if !ready || ctx == nil {
 		return
 	}
 	a.sink.Emit(ctx, quickTagCloseEvent)
-	wailsruntime.WindowSetAlwaysOnTop(ctx, false)
-	if state.saved {
-		wailsruntime.WindowSetSize(ctx, state.width, state.height)
-		wailsruntime.WindowSetPosition(ctx, state.x, state.y)
-	}
-	if !state.wasVisible {
-		wailsruntime.WindowHide(ctx)
-	}
+	a.window.CloseQuickTag(ctx)
 }
 
 // FireQuickTag is the application-internal entry the hotkey handler calls.
@@ -1694,7 +1650,7 @@ func (a *App) closeQuickTagWindow() {
 // matching the muscle-memory expectation users have from system pickers.
 func (a *App) FireQuickTag() {
 	a.mu.Lock()
-	open := a.quickTagState.saved
+	open := a.quickTagOpen
 	a.mu.Unlock()
 	if open {
 		a.closeQuickTagWindow()

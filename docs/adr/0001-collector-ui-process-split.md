@@ -94,7 +94,7 @@ Die collector↔UI-Verbindung wird als **schlichter Kindprozess + Named Pipe** r
 | **Tray-Icon** (`cmd/timetracker/tray_windows.go`) | → **Collector** — überlebt UI-Schließen, braucht kein WebView2 (systray = eigenes Message-Window). Heilt das „Tray verschwindet"-Symptom direkt |
 | Tray-Domänenaktionen (Pause, Sync, Manual-Tag, ListTags) | → in-process im Collector |
 | Tray „Öffnen" (`ShowWindow`) | → **UI-Prozess starten/fokussieren** statt eigenes Fenster zeigen |
-| `WindowShow/Hide/SetSize/SetPosition/AlwaysOnTop/Center` | → bleiben **UI-lokal** |
+| `WindowShow/Hide/SetSize/SetPosition/AlwaysOnTop/Center` | → bleiben **UI-lokal**. Die App ruft `wailsruntime` nie direkt, sondern delegiert an einen `WindowController` (Deps): Monolith = Wails-Runtime-Impl, Collector = Impl, die Fenster-Intents als Control-Events (`ui:show`, `ui:quicktag-enter/-leave`) publisht, die der UI-Prozess in `pumpEvents` gegen den eigenen Wails-Kontext ausführt. Ein Direktaufruf mit Nicht-Wails-Kontext crasht sonst via `getFrontend`→`log.Fatalf`→`os.Exit` (Issue #28) |
 | `EventsEmit(a.ctx, …)` (≈9 Stellen) | → über API-Event-Stream pushen, UI re-emittet an JS |
 | Config-Owner + `OnConfigSet`-Live-Reconfig (`main.go`) | → **Collector** |
 | Personio-CDP-Login (`chromedp`) | → **Collector** (startet eigenen Browser, braucht keine UI) |
