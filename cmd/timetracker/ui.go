@@ -68,6 +68,11 @@ func runUI(pipeName string) error {
 	eventCtx, eventCancel := context.WithCancel(context.Background())
 	defer eventCancel()
 
+	// The UI shell owns the Wails window in the split, so the quick-tag popup
+	// choreography runs here — driven by the collector's control events —
+	// rather than in the headless collector. See issue #28.
+	uiWindow := newPopupWindow(slog.Default())
+
 	return wails.Run(&options.App{
 		Title:            "Hashpoint TimeTracker",
 		Width:            1200,
@@ -80,14 +85,18 @@ func runUI(pipeName string) error {
 		OnStartup: func(ctx context.Context) {
 			go func() {
 				defer crashguard.Recover(slog.Default(), "ui-event-pump")
-				pumpEvents(eventCtx, cli, ctx)
+				pumpEvents(eventCtx, cli, ctx, uiWindow)
 			}()
 		},
 		OnShutdown: func(context.Context) {
 			eventCancel()
 		},
 		HideWindowOnClose: true,
-		Bind:              []any{proxy},
+		OnBeforeClose: func(context.Context) bool {
+			uiWindow.noteHidden()
+			return false
+		},
+		Bind: []any{proxy},
 	})
 }
 
@@ -95,7 +104,11 @@ func runUI(pipeName string) error {
 // onto the Wails runtime, so the frontend receives them exactly as it did in
 // the monolith. The JSON payload is forwarded verbatim (re-marshalled to the
 // original object by Wails); no-payload events are emitted without data.
-func pumpEvents(ctx context.Context, cli *ipc.Client, uiCtx context.Context) {
+//
+// Control events (window show, quick-tag popup enter/leave) act on the UI's own
+// window via win rather than being forwarded to the frontend — in the split the
+// UI shell, not the headless collector, owns the Wails window (issue #28).
+func pumpEvents(ctx context.Context, cli *ipc.Client, uiCtx context.Context, win *popupWindow) {
 	stream, err := cli.Events(ctx, &collectorpb.EventsRequest{})
 	if err != nil {
 		slog.Warn("ui: subscribe to collector events failed", "err", err)
@@ -115,9 +128,17 @@ func pumpEvents(ctx context.Context, cli *ipc.Client, uiCtx context.Context) {
 		}
 		// Control events act on the UI's own window rather than being
 		// forwarded to the frontend.
-		if ev.Name == collector.EventShowUI {
+		switch ev.Name {
+		case collector.EventShowUI:
 			wailsruntime.WindowShow(uiCtx)
 			wailsruntime.WindowUnminimise(uiCtx)
+			win.noteShown()
+			continue
+		case collector.EventQuickTagEnter:
+			win.enter(uiCtx)
+			continue
+		case collector.EventQuickTagLeave:
+			win.leave(uiCtx)
 			continue
 		}
 		if len(ev.JsonPayload) == 0 {

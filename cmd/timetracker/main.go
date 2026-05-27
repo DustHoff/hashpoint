@@ -153,7 +153,8 @@ func run() error {
 	defer mk.Disarm()
 
 	// nil sink ⇒ the app emits via the Wails runtime (the monolith default).
-	d, err := buildDomain(ctx, paths, cfg, nil)
+	// The monolith owns the in-process Wails window, so it drives it directly.
+	d, err := buildDomain(ctx, paths, cfg, nil, newWindowedWindowController(slog.Default()))
 	if err != nil {
 		return err
 	}
@@ -317,7 +318,7 @@ func (d *domainHandles) shutdown(ctx context.Context) {
 // also honours the persisted tracking-enabled flag, starts the tracker
 // goroutine and registers the suspend/resume power monitor; ctx governs their
 // lifetime.
-func buildDomain(ctx context.Context, paths config.Paths, cfg *config.Config, sink app.EventSink) (*domainHandles, error) {
+func buildDomain(ctx context.Context, paths config.Paths, cfg *config.Config, sink app.EventSink, window app.WindowController) (*domainHandles, error) {
 	db, err := storage.Open(ctx, paths.DBFile)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
@@ -398,6 +399,7 @@ func buildDomain(ctx context.Context, paths config.Paths, cfg *config.Config, si
 		Config:         cfg,
 		LogDir:         paths.LogDir,
 		Sink:           sink,
+		Window:         window,
 		OnConfigSet: func(c *config.Config) error {
 			trkMu.Lock()
 			defer trkMu.Unlock()
@@ -506,7 +508,12 @@ func applyHotkey(mgr *winapi.HotkeyManager, qt config.QuickTagConfig, a *app.App
 		_ = mgr.SetHotkey(false, 0, 0, nil)
 		return
 	}
-	if err := mgr.SetHotkey(true, parsed.Modifiers, parsed.VirtualKey, a.FireQuickTag); err != nil {
+	// The hotkey fires on the message-loop's own goroutine (winapi runs the
+	// callback as `go cb()`), which has no crashguard around it. Wrap it so a
+	// panic in the quick-tag handler is logged and contained instead of taking
+	// the process down (issue #28).
+	fire := func() { crashguard.Safe(logger, "hotkey-fire", a.FireQuickTag) }
+	if err := mgr.SetHotkey(true, parsed.Modifiers, parsed.VirtualKey, fire); err != nil {
 		logger.Warn("hotkey: register failed", "hotkey", parsed.Canonical, "err", err)
 	}
 }
