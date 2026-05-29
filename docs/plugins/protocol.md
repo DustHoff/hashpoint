@@ -189,12 +189,13 @@ deadline gets a context cancellation; its submission row stays in
 After the initial scan, the host re-reads `PluginsDir` every
 `HostDeps.DiscoveryInterval` (default 30 s, negative ⇒ disabled).
 Subdirectories absent from the in-memory registry are passed through
-the regular `launch()` path — manifest load, required-field gate,
-handshake — so a plugin dropped into the folder while the app is
-running starts on its own without an app restart. The default
-`plugin_state.enabled = 1` row means freshly-discovered plugins boot
-straight into `StateRunning` (or `needs_config`) without an explicit
-opt-in.
+the regular `launch()` path — name validation, manifest load,
+required-field gate, the approval gate, handshake. A plugin dropped
+into the folder while the app is running is therefore **not** started
+automatically: until it is approved (see
+[Name validation & approval gate](#name-validation--approval-gate)) it
+is parked in `state=pending_approval` with no subprocess. Once approved
+it boots on its own without an app restart.
 
 For each plugin the discovery loop picks up, the host invokes
 `HostDeps.OnDiscovered(Info)`. The App layer forwards this to the
@@ -202,9 +203,32 @@ Wails event `plugins:discovered` so both the **Plugins** and the
 **Verfügbare Plugins** tabs refresh live.
 
 Plugins already known to the host — including ones in `failed`,
-`disabled`, or `needs_config` — are left untouched on each tick.
-Manually-deleted plugin directories are intentionally **not** cleaned
-up; their entries stay in the list until the next app restart.
+`disabled`, `needs_config`, or `pending_approval` — are left untouched
+on each tick. Manually-deleted plugin directories are intentionally
+**not** cleaned up; their entries stay in the list until the next app
+restart.
+
+## Name validation & approval gate
+
+Two checks run at the very top of `launch()`, before any path is built
+or subprocess started:
+
+1. **Name validation** (`ValidatePluginName`) — the directory name must
+   be a single safe path component. A name containing a path separator,
+   `.`/`..`, a drive letter, or an absolute path is rejected with
+   `ErrInvalidPluginName` (the plugin is recorded `failed`). This stops
+   a `plugin_management` source from supplying a traversal name that
+   would write or launch outside `PluginsDir`.
+2. **Approval gate** — a plugin is launched only if it is in the
+   user-approved set; otherwise it is parked in `state=pending_approval`
+   (no subprocess). Approval is persisted in the `settings` table under
+   `plugins.approved` and is set by `Host.ApprovePlugin` (wired to the
+   Plugins-tab *„genehmigen"* action via `App.PluginApprove`). The MSI
+   auto-approves vendor-seeded plugins on startup, and `Host.InstallPlugin`
+   auto-approves on a catalog install — so only directories side-loaded
+   straight into `PluginsDir` require a manual approval. The gate is
+   disabled (every plugin treated as approved) when `HostDeps.ApprovalStore`
+   is nil, which keeps minimal hosts and tests unchanged.
 
 ## Install / Update / Uninstall flow
 
@@ -213,10 +237,11 @@ and `Host.UninstallPlugin(source, name)` dispatch to whichever running
 plugin advertises `plugin_management` under `source`. The host wraps
 each call so the handler never has to think about subprocess lifecycle:
 
-- **Install** — the host calls `handler.Install(name)`, then launches
-  the freshly-written plugin via the regular `launch()` path. The
-  install is rejected if `name` is already known to the host (use
-  Update instead).
+- **Install** — the host validates `name` (rejecting traversal names),
+  calls `handler.Install(name)`, **approves** the plugin (a catalog
+  install is a deliberate user action), then launches it via the
+  regular `launch()` path. The install is rejected if `name` is already
+  known to the host (use Update instead).
 - **Update** — the host stops the target subprocess via
   `stopAndForget(name)` (kill client, revoke `SecretHandle`s, drop
   the in-memory entry), then calls `handler.Update(name)`, then

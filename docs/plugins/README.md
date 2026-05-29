@@ -122,16 +122,43 @@ plugin. Disabled plugins are recorded in `state=disabled` and never
 launched; their configuration is preserved across the disable→enable
 cycle.
 
+## Approval (opt-in)
+
+Launching a plugin requires an explicit **user opt-in**, so a directory
+that merely appears under `PluginsDir` (a side-load, a malware drop)
+cannot auto-execute with the user's rights. An unapproved plugin is
+parked in `state=pending_approval`: no subprocess starts and capability
+fan-outs skip it, exactly as for `disabled`. The Plugins tab shows it
+with a *„Plugin genehmigen und starten"* button.
+
+Two paths are approved automatically, because they already represent a
+deliberate action:
+
+- **Vendor-seeded plugins** — the MSI-bundled set under `plugins-seed\`
+  (today: `plugin-manager`) is approved on startup.
+- **Catalog installs** — installing through the **Verfügbare Plugins**
+  tab approves the plugin as part of the install.
+
+Only directories copied straight into `PluginsDir` need a manual
+approval click. The approved set is persisted in the `settings` table
+under `plugins.approved`. This is a containment control, **not** a
+sandbox: an approved plugin runs with the user's full rights — approve
+only sources you trust. See [`api.md`](api.md#installation-discovery--approval)
+for the host-side contract.
+
 ## Lifecycle
 
 1. **Discovery** — at host startup, Hashpoint scans `PluginsDir` for
    subdirectories. A background goroutine re-scans every
    `HostDeps.DiscoveryInterval` (default 30 s) so plugins manually
    dropped into the directory are picked up without an app restart.
-   Newly discovered plugins are launched immediately (auto-enable;
-   the default `plugin_state.enabled = 1` means no opt-in is needed);
-   the host fires the Wails event `plugins:discovered` so the UI
-   refreshes live.
+   The directory name must be a single safe path component
+   (`ValidatePluginName`); a name with a path separator, `..`, or a
+   drive/absolute prefix is rejected before any path is built.
+   A discovered plugin is launched only once it has been **approved**
+   (see [Approval](#approval-opt-in) below) — otherwise it is parked in
+   `state=pending_approval` and no subprocess starts. The host fires the
+   Wails event `plugins:discovered` so the UI refreshes live.
 2. **Enable check** — for each directory the host reads
    `plugin_state.enabled`; rows with `enabled=0` are recorded as
    `state=disabled` and **skipped** (no subprocess).
