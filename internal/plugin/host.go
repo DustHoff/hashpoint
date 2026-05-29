@@ -45,6 +45,13 @@ const (
 	// skip it. The enable flag is persisted in plugin_state and survives
 	// an app restart.
 	StateDisabled State = "disabled"
+	// StatePending means the plugin's directory exists under PluginsDir
+	// but the user has not yet approved running it. No subprocess is
+	// started and capability fan-outs skip it; the settings UI shows the
+	// plugin with an "approve" affordance. The host parks newly-discovered
+	// / unapproved plugins here so a directory that merely appears under
+	// PluginsDir never auto-executes.
+	StatePending State = "pending_approval"
 )
 
 // Info is the read-model the settings UI sees. Returned from
@@ -81,11 +88,27 @@ type SettingsStore interface {
 	Clear(ctx context.Context, name string) error
 }
 
+// ApprovalStore persists the user's explicit opt-in to run a plugin. The
+// host parks any plugin that is not approved in StatePending instead of
+// launching it, so a directory that merely appears under PluginsDir cannot
+// auto-execute. Satisfied at runtime by *storage.PluginApprovalRepo; a nil
+// ApprovalStore on HostDeps disables the gate (every plugin is treated as
+// approved), which keeps minimal hosts and tests working unchanged.
+type ApprovalStore interface {
+	IsApproved(ctx context.Context, name string) (bool, error)
+	Approve(ctx context.Context, name string) error
+	ListApproved(ctx context.Context) ([]string, error)
+}
+
 // HostDeps wires the Host to its surrounding environment.
 type HostDeps struct {
 	Logger     *slog.Logger
 	PluginsDir string
 	Settings   SettingsStore
+	// ApprovalStore gates plugin launches behind an explicit user opt-in.
+	// Nil ⇒ the gate is disabled and every plugin is treated as approved
+	// (used by minimal hosts and tests).
+	ApprovalStore ApprovalStore
 	// SubmitTimeout caps each per-plugin Submit() call during
 	// SubmitOnCallDoc fan-out. Zero ⇒ defaultSubmitTimeout.
 	SubmitTimeout time.Duration
@@ -806,6 +829,21 @@ func (h *Host) launch(ctx context.Context, name string) error {
 		return nil
 	}
 
+	// Never build a filesystem path or launch a binary from a name that is
+	// not a single safe path component (defence-in-depth against a
+	// management-source plugin supplying a traversal name).
+	if err := ValidatePluginName(name); err != nil {
+		h.recordFailure(name, nil, err)
+		return err
+	}
+	// Honour the user opt-in: an unapproved plugin is parked pending rather
+	// than launched, so a directory that merely appears under PluginsDir
+	// (a side-load, a malware drop) never auto-executes.
+	if !h.isApproved(ctx, name) {
+		h.recordPending(name)
+		return nil
+	}
+
 	dir := filepath.Join(h.deps.PluginsDir, name)
 	man, err := LoadManifest(dir)
 	if err != nil {
@@ -1168,6 +1206,78 @@ func (h *Host) recordDisabled(name string) {
 	inst.mgmt = nil
 	inst.processAutoTag = nil
 	inst.autoTagNames = nil
+}
+
+// recordPending parks a plugin in StatePending: its directory exists under
+// PluginsDir but the user has not yet approved running it, so no subprocess
+// is started. The manifest is loaded best-effort so the settings UI can
+// render the plugin's name/version alongside an approve affordance.
+func (h *Host) recordPending(name string) {
+	dir := filepath.Join(h.deps.PluginsDir, name)
+	man, manErr := LoadManifest(dir)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	inst := h.plugins[name]
+	if inst == nil {
+		inst = &pluginInstance{name: name}
+		h.plugins[name] = inst
+	}
+	if manErr == nil {
+		inst.manifest = man
+		inst.lastErr = ""
+	} else {
+		inst.lastErr = fmt.Sprintf("manifest unreadable: %v", manErr)
+	}
+	inst.state = StatePending
+	inst.missing = nil
+	inst.client = nil
+	inst.rpcClient = nil
+	inst.core = nil
+	inst.onCall = nil
+	inst.offHours = nil
+	inst.offHoursCache = nil
+	inst.mgmt = nil
+	inst.processAutoTag = nil
+	inst.autoTagNames = nil
+}
+
+// isApproved reports whether the user has opted in to running the named
+// plugin. With no ApprovalStore wired every plugin is approved (keeps
+// minimal hosts and tests working). A store error fails safe to NOT
+// approved — the plugin is parked pending rather than launched.
+func (h *Host) isApproved(ctx context.Context, name string) bool {
+	if h.deps.ApprovalStore == nil {
+		return true
+	}
+	ok, err := h.deps.ApprovalStore.IsApproved(ctx, name)
+	if err != nil {
+		h.log.Warn("plugin approval check failed — parking pending",
+			"name", name, "err", err)
+		return false
+	}
+	return ok
+}
+
+// approve records the user's opt-in for name in the ApprovalStore, if one is
+// wired. A nil store is a no-op (the gate is disabled).
+func (h *Host) approve(ctx context.Context, name string) error {
+	if h.deps.ApprovalStore == nil {
+		return nil
+	}
+	return h.deps.ApprovalStore.Approve(ctx, name)
+}
+
+// ApprovePlugin records the user's explicit opt-in to run the named plugin
+// and then (re)launches it. Until a plugin is approved the host parks it in
+// StatePending instead of starting its subprocess.
+func (h *Host) ApprovePlugin(ctx context.Context, name string) error {
+	if err := ValidatePluginName(name); err != nil {
+		return err
+	}
+	if err := h.approve(ctx, name); err != nil {
+		return fmt.Errorf("approve plugin %q: %w", name, err)
+	}
+	return h.Reload(ctx, name)
 }
 
 // buildConfig assembles the PluginConfig delivered to Plugin.Configure

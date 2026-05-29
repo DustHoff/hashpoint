@@ -216,6 +216,13 @@ Wichtig zu wissen:
 - Sie kontrollieren, welche Plugins überhaupt laufen: In den
   Einstellungen unter **Plugins** können Sie jedes Plugin deaktivieren
   oder deinstallieren. Ein deaktiviertes Plugin bekommt keine Session.
+- Ein Plugin startet erst nach Ihrer **Freigabe**. Über den Installer
+  ausgelieferte und über **Verfügbare Plugins** installierte Plugins
+  sind automatisch freigegeben; ein nur manuell in den Plugin-Ordner
+  kopiertes Verzeichnis erscheint zunächst als **„Genehmigung
+  ausstehend"** und läuft — und erhält damit auch erst dann eine
+  Personio-Session —, sobald Sie es im **Plugins**-Tab ausdrücklich
+  genehmigen.
 
 ## Datenschutz
 

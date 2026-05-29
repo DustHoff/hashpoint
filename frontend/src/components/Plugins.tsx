@@ -16,6 +16,7 @@ const stateBadgeStyles: Record<PluginState, string> = {
   needs_config: "bg-amber-700/30 text-amber-200 border border-amber-700/50",
   failed: "bg-rose-700/30 text-rose-200 border border-rose-700/50",
   disabled: "bg-slate-700/40 text-slate-300 border border-slate-700/50",
+  pending_approval: "bg-sky-700/30 text-sky-200 border border-sky-700/50",
 };
 
 const stateLabels: Record<PluginState, string> = {
@@ -23,6 +24,7 @@ const stateLabels: Record<PluginState, string> = {
   needs_config: "Konfiguration fehlt",
   failed: "Fehler",
   disabled: "Deaktiviert",
+  pending_approval: "Genehmigung ausstehend",
 };
 
 // Pseudo-secret value the password input renders while the user hasn't
@@ -79,6 +81,15 @@ export default function Plugins() {
   async function toggleEnabled(name: string, enabled: boolean) {
     try {
       await api.pluginSetEnabled(name, enabled);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function approve(name: string) {
+    try {
+      await api.pluginApprove(name);
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -162,6 +173,23 @@ export default function Plugins() {
           <p className="text-sm text-slate-400">
             Wähle ein Plugin aus der Liste, um die Konfiguration anzuzeigen.
           </p>
+        ) : current.state === "pending_approval" ? (
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-slate-100">
+              {current.name}
+            </h3>
+            <p className="text-sm text-slate-400">
+              Dieses Plugin liegt im Plugin-Ordner, ist aber noch nicht zur
+              Ausführung freigegeben. Gib es nur frei, wenn du der Quelle
+              vertraust — ein Plugin läuft mit deinen Benutzerrechten.
+            </p>
+            <button
+              onClick={() => void approve(current.name)}
+              className="rounded bg-emerald-700 px-3 py-1.5 text-sm font-medium text-emerald-50 hover:bg-emerald-600"
+            >
+              Plugin genehmigen und starten
+            </button>
+          </div>
         ) : (
           <PluginDetail
             plugin={current}

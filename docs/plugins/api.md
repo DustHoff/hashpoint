@@ -356,9 +356,15 @@ Return values:
 ### `Log`
 
 Forwards a structured log line to the host's `slog` handler with the
-plugin's name prepended. Levels: `debug`, `info`, `warn`, `error`
-(unknown levels degrade to `info`). The host strips any `plugin` field
-the caller tries to set, to keep the attribution truthful.
+plugin's name prepended. Plugin-supplied records are treated as
+untrusted: the level is **capped at `info`** (`warn`/`error` are
+downgraded; `debug` stays `debug`), and every field key is **namespaced
+under `plugin.`** (e.g. a field `url` is logged as `plugin.url`). Both
+guard the feedback log-tail bundle, which can be uploaded to a public
+issue: the cap stops a plugin injecting alarming `error` entries, and the
+namespacing stops a plugin value from landing under a host field key the
+sanitizer allowlists. The host also strips any `plugin` field the caller
+tries to set, to keep the attribution truthful.
 
 ### `RequestEntraToken`
 
@@ -671,3 +677,37 @@ hplugin.Serve(&hplugin.ServeConfig{
 adds a capability-specific key for every interface `impl` satisfies.
 The host's matching `HostSidePluginMap()` is symmetric — both sides
 must agree on the keys for the handshake to succeed.
+
+## Installation, discovery & approval
+
+The host scans `%APPDATA%\TimeTracker\plugins\<name>\` and re-scans it
+periodically so a freshly-installed plugin is picked up without a
+restart. A plugin's directory **name** must be a single safe path
+component — names containing a path separator, `..`, a drive letter or
+an absolute path are rejected (`ErrInvalidPluginName`) before the host
+ever builds a path or launches a binary from them.
+
+Launching a plugin requires an explicit **user opt-in**. A plugin whose
+directory exists but has not been approved is parked in the
+`pending_approval` state (`plugin.StatePending`): its subprocess is not
+started and capability fan-outs skip it, exactly as for `disabled`. The
+settings UI surfaces it with a *„Plugin genehmigen und starten"* button,
+which calls `App.PluginApprove(name)` → `Host.ApprovePlugin`. This stops
+a directory that merely *appears* under the plugins folder (a side-load,
+a malware drop) from auto-executing with the user's rights.
+
+Two paths are auto-approved, because they already represent a deliberate
+user/vendor action:
+
+- **Vendor-seeded plugins** — the set bundled by the MSI under
+  `plugins-seed\` is approved automatically on startup.
+- **Catalog installs** — installing a plugin through the *„Verfügbare
+  Plugins"* tab (`App.PluginInstall`) approves it as part of the install.
+
+Only directories copied straight into the plugins folder require a
+manual approval click. The approved set is persisted in the `settings`
+table under the `plugins.approved` key.
+
+> The opt-in is a containment control, not a sandbox: an approved plugin
+> is a `hashicorp/go-plugin` subprocess running with the user's full
+> rights. Approve only plugins from sources you trust.

@@ -110,17 +110,20 @@ func parseCrashLine(line []byte, cutoff time.Time) (CrashRecord, bool) {
 	if ok && ts.Before(cutoff) {
 		return CrashRecord{}, false
 	}
-	for k := range sensitiveLogFields {
-		delete(record, k)
-	}
 	rec := CrashRecord{Time: ts, Event: ev, Detail: map[string]any{}}
 	rec.Msg, _ = record["msg"].(string)
 	if rec.Cause, _ = record["cause"].(string); rec.Cause == "" {
 		rec.Cause, _ = record["err"].(string)
 	}
 	rec.Stack, _ = record["stack"].(string)
+	// Detail carries only allowlisted, non-own keys: an allowlist keeps a
+	// PII-bearing field (tenant, employee_id, path, …) from riding into the
+	// public crash report just because it shared a log line with a crash.
 	for k, v := range record {
 		if _, own := crashOwnFields[k]; own {
+			continue
+		}
+		if _, ok := allowedLogFields[k]; !ok {
 			continue
 		}
 		rec.Detail[k] = v

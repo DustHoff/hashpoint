@@ -192,6 +192,12 @@ type FeedbackInputDTO struct {
 	Repro       string `json:"repro"`
 	IncludeLog  bool   `json:"include_log"`
 	LogWindow   string `json:"log_window"`
+	// Body is the exact Markdown the user reviewed in FeedbackPreview. When
+	// set it is posted verbatim instead of re-rendering on submit — re-render
+	// would re-read the live log and could upload lines the user never saw,
+	// defeating the preview as the privacy/consent surface. Empty falls back
+	// to a fresh render.
+	Body string `json:"body"`
 }
 
 // FeedbackSubmitResultDTO is returned to the UI on a successful
@@ -232,7 +238,12 @@ func (a *App) FeedbackSubmit(in FeedbackInputDTO) (*FeedbackSubmitResultDTO, err
 		a.logger.Warn("feedback: some labels were dropped (App installation lacks create perms)",
 			"requested", requested, "applied", labels)
 	}
-	body := feedback.Render(input)
+	// Post the body the user actually previewed (consent surface). Only
+	// re-render when the UI sent no snapshot, to keep older callers working.
+	body := strings.TrimSpace(in.Body)
+	if body == "" {
+		body = feedback.Render(input)
+	}
 	out, err := c.CreateIssue(a.ctx, strings.TrimSpace(input.Title), body, labels)
 	if err != nil {
 		a.logger.Warn("feedback: issue create failed", "err", err)

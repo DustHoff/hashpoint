@@ -146,8 +146,8 @@ func (p *personioSessionSource) EnsureSession(ctx context.Context) (pluginhost.P
 	loginCtx, cancel := context.WithTimeout(ctx, personioReauthTimeout)
 	defer cancel()
 
-	p.logger.Info("personio session source: stored session missing/stale — launching CDP login",
-		"tenant", tenant)
+	p.logger.Info("personio session source: stored session missing/stale — launching CDP login")
+	p.logger.Debug("personio session source: launching CDP login", "tenant", tenant)
 	res, err := p.loginFn(loginCtx, personio.LoginConfig{
 		Tenant:  tenant,
 		Logger:  p.logger,
@@ -175,7 +175,8 @@ func (p *personioSessionSource) EnsureSession(ctx context.Context) (pluginhost.P
 	if err := p.sessions.Set(res.Session); err != nil {
 		return pluginhost.PersonioSessionView{}, fmt.Errorf("%w: persist session: %w", sdk.ErrPersonioNotAvailable, err)
 	}
-	p.logger.Info("personio session source: reauth complete",
+	p.logger.Info("personio session source: reauth complete")
+	p.logger.Debug("personio session source: reauth complete",
 		"tenant", res.Session.Tenant,
 		"app_host", res.Session.AppHost,
 		"employee_id", res.Session.EmployeeID)

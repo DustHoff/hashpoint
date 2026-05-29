@@ -90,6 +90,25 @@ func Seed(seedDir, pluginsDir string, logger *slog.Logger) error {
 	return nil
 }
 
+// BundledPluginNames returns the names of plugin directories bundled under
+// seedDir (the MSI's plugins-seed). Callers use it to auto-approve the
+// vendor-shipped set so seeded plugins launch without a manual opt-in, while
+// directories side-loaded straight into PluginsDir still require approval. A
+// missing or unreadable seedDir yields nil.
+func BundledPluginNames(seedDir string) []string {
+	entries, err := os.ReadDir(seedDir)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	return names
+}
+
 type seedAction int
 
 const (

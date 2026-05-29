@@ -287,7 +287,8 @@ export type PluginState =
   | "running"
   | "needs_config"
   | "failed"
-  | "disabled";
+  | "disabled"
+  | "pending_approval";
 
 // Mirrors the host-side sdk.Capability constants. Plain string union so
 // the frontend stays decoupled from the wire enum; the backend serialises
@@ -405,6 +406,10 @@ export interface FeedbackInput {
   repro: string;
   include_log: boolean;
   log_window: FeedbackLogWindow;
+  // body is the exact previewed Markdown; when set the backend posts it
+  // verbatim instead of re-rendering (which would re-read the live log and
+  // could upload lines the user never saw in the preview).
+  body?: string;
 }
 
 export interface FeedbackSubmitResult {

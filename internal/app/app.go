@@ -121,6 +121,10 @@ type Deps struct {
 	// PluginSettings persists per-plugin config + the enable flag. Nil
 	// disables the plugin system (same effect as empty PluginsDir).
 	PluginSettings storage.PluginSettingsRepository
+	// PluginApprovals persists the user's opt-in to run each plugin. Nil ⇒
+	// the host's approval gate is disabled (every plugin is treated as
+	// approved). Wired by main.go to a *storage.PluginApprovalRepo.
+	PluginApprovals pluginhost.ApprovalStore
 	// SyncerFor returns a Syncer wired against the given session, or nil if
 	// the session is not usable (e.g. tenant unset). Constructed lazily so
 	// session changes from the UI take effect immediately.
@@ -251,9 +255,10 @@ func New(deps Deps) *App {
 	// goroutine.
 	if deps.PluginsDir != "" && deps.PluginSettings != nil {
 		a.pluginHost = pluginhost.NewHost(pluginhost.HostDeps{
-			Logger:     a.logger,
-			PluginsDir: deps.PluginsDir,
-			Settings:   deps.PluginSettings,
+			Logger:        a.logger,
+			PluginsDir:    deps.PluginsDir,
+			Settings:      deps.PluginSettings,
+			ApprovalStore: deps.PluginApprovals,
 			OnDiscovered: func(info pluginhost.Info) {
 				// a.ctx is set in Startup(); the discovery loop only runs
 				// after Start() (which is invoked from Startup), so by
@@ -1066,7 +1071,11 @@ func (a *App) SaveConfig(c config.Config) error {
 	if prevEntra != c.Entra {
 		a.applyEntraConfig(c.Entra)
 	}
-	a.logger.Info("app: config saved", "path", a.deps.ConfigPath)
+	// The config path lives under %APPDATA%\TimeTracker and embeds the OS
+	// username, so keep it at Debug (dropped from feedback bundles) per
+	// CLAUDE.md §5.
+	a.logger.Info("app: config saved")
+	a.logger.Debug("app: config saved", "path", a.deps.ConfigPath)
 	return nil
 }
 
@@ -1165,7 +1174,8 @@ func (a *App) maybeTriggerAutoRelogin() {
 func (a *App) PersonioLogin() error {
 	cfg := a.GetConfig()
 	tenant := strings.TrimSpace(cfg.Personio.Tenant)
-	a.logger.Info("app: PersonioLogin started", "tenant", tenant)
+	a.logger.Info("app: PersonioLogin started")
+	a.logger.Debug("app: PersonioLogin started", "tenant", tenant)
 	if tenant == "" {
 		return errors.New("kein Personio-Tenant in den Einstellungen hinterlegt")
 	}
@@ -1197,7 +1207,9 @@ func (a *App) PersonioLogin() error {
 	if err := a.deps.Sessions.Set(res.Session); err != nil {
 		return fmt.Errorf("session speichern: %w", err)
 	}
-	a.logger.Info("personio login: session stored",
+	a.logger.Info("personio login: session stored")
+	// Tenant / host / employee id are PII; keep them at Debug only.
+	a.logger.Debug("personio login: session stored",
 		"tenant", res.Session.Tenant,
 		"app_host", res.Session.AppHost,
 		"employee_id", res.Session.EmployeeID)

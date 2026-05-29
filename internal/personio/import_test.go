@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dusthoff/hashpoint/internal/storage"
 )
@@ -478,5 +479,93 @@ func TestEnsureFallbackTag_Idempotent(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("expected exactly one fallback tag, got %d", count)
+	}
+}
+
+// TestImportDay_ClampsPeriods verifies that an oversized timesheet (more
+// than maxImportPeriods entries) is clamped to the first maxImportPeriods
+// and surfaces a non-destructive note, rather than processing an unbounded
+// list.
+func TestImportDay_ClampsPeriods(t *testing.T) {
+	t.Parallel()
+	e := newImportEnv(t)
+	periods := make([]map[string]any, 0, maxImportPeriods+1)
+	for i := 0; i < maxImportPeriods+1; i++ {
+		periods = append(periods, map[string]any{
+			"id":         "p",
+			"start":      "2026-05-08T08:00:00",
+			"end":        "2026-05-08T08:30:00",
+			"type":       "break",
+			"comment":    "",
+			"project_id": nil,
+		})
+	}
+	e.resp.Periods = periods
+	day, _ := time.ParseInLocation("2006-01-02", "2026-05-08", time.Local)
+	res, err := e.syncer.ImportDay(e.ctx, day.UTC())
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if res.PeriodsConsidered != maxImportPeriods {
+		t.Fatalf("expected exactly %d periods considered after clamp, got %d", maxImportPeriods, res.PeriodsConsidered)
+	}
+	found := false
+	for _, msg := range res.Errors {
+		if strings.Contains(msg, "verarbeite nur die ersten") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected a clamp note in res.Errors, got %v", res.Errors)
+	}
+}
+
+// TestImportDay_TruncatesLongComment verifies a Personio comment longer than
+// maxImportCommentRunes is truncated rune-safely (no broken UTF-8) before it
+// is stored as a tag-block description.
+func TestImportDay_TruncatesLongComment(t *testing.T) {
+	t.Parallel()
+	e := newImportEnv(t)
+	pid := "4711"
+	tag := storage.Tag{Name: "#projekta", PersonioProjectID: &pid, SyncToPersonio: true}
+	if err := e.tags.Create(e.ctx, &tag); err != nil {
+		t.Fatalf("create tag: %v", err)
+	}
+	// Multi-byte runes so byte-slicing would corrupt UTF-8.
+	longComment := strings.Repeat("ä", maxImportCommentRunes+1)
+	e.resp.Periods = []map[string]any{
+		{
+			"id":         "p-long",
+			"start":      "2026-05-08T08:00:00",
+			"end":        "2026-05-08T10:00:00",
+			"type":       "work",
+			"comment":    longComment,
+			"project_id": 4711,
+		},
+	}
+	day, _ := time.ParseInLocation("2006-01-02", "2026-05-08", time.Local)
+	res, err := e.syncer.ImportDay(e.ctx, day.UTC())
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if res.BlocksCreated != 1 {
+		t.Fatalf("expected 1 block created, got %+v", res)
+	}
+	got, err := e.blocks.ListBetween(e.ctx,
+		time.Date(2026, 5, 7, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 5, 9, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("list blocks: %v", err)
+	}
+	if len(got) != 1 || got[0].Description == nil {
+		t.Fatalf("expected 1 block with a description, got %+v", got)
+	}
+	desc := *got[0].Description
+	if !utf8.ValidString(desc) {
+		t.Errorf("truncated description is not valid UTF-8")
+	}
+	if n := utf8.RuneCountInString(desc); n != maxImportCommentRunes {
+		t.Errorf("expected %d runes after truncation, got %d", maxImportCommentRunes, n)
 	}
 }

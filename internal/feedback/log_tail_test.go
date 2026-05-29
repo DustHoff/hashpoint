@@ -51,6 +51,33 @@ func TestReadLogTail_FiltersAndSanitises(t *testing.T) {
 	}
 }
 
+// TestReadLogTail_AllowlistDropsPII verifies the allowlist removes PII-bearing
+// keys (tenant, employee_id, app_host, path) that the previous blocklist would
+// have let through, while keeping allowlisted operational fields.
+func TestReadLogTail_AllowlistDropsPII(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "timetracker.log")
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	mustWrite(t, path,
+		`{"time":"2026-05-16T11:50:00Z","level":"INFO","msg":"session stored","tenant":"acme","employee_id":4242,"app_host":"acme.app.personio.com","path":"C:\\Users\\bob\\AppData","process":"chrome.exe","duration_sec":5}`+"\n")
+
+	out, err := ReadLogTail(context.Background(), path, LogWindowHour, now)
+	if err != nil {
+		t.Fatalf("ReadLogTail: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, `"msg":"session stored"`) ||
+		!strings.Contains(s, `"process":"chrome.exe"`) ||
+		!strings.Contains(s, `"duration_sec":5`) {
+		t.Errorf("allowlisted fields dropped: %s", s)
+	}
+	for _, leaked := range []string{"tenant", "acme", "employee_id", "4242", "app_host", "bob", "AppData"} {
+		if strings.Contains(s, leaked) {
+			t.Errorf("PII token %q leaked into log tail: %s", leaked, s)
+		}
+	}
+}
+
 func TestReadLogTail_TodayUsesLocalMidnight(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "timetracker.log")

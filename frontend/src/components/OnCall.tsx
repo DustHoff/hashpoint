@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { safeExternalHref } from "../lib/url";
 import type {
   OnCallDocChangedPayload,
   OnCallDocStatus,
@@ -357,9 +358,9 @@ function DocForm({
               >
                 <span className="text-slate-300">{s.plugin_name}</span>
                 <span className="flex items-center gap-2">
-                  {s.external_url ? (
+                  {safeExternalHref(s.external_url) ? (
                     <a
-                      href={s.external_url}
+                      href={safeExternalHref(s.external_url)}
                       target="_blank"
                       rel="noreferrer"
                       className="text-accent hover:underline"

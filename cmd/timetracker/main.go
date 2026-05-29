@@ -206,7 +206,7 @@ func run() error {
 		MinWidth:         800,
 		MinHeight:        600,
 		WindowStartState: options.Maximised,
-		AssetServer:      &assetserver.Options{Assets: hashpoint.Frontend},
+		AssetServer:      &assetserver.Options{Assets: hashpoint.Frontend, Middleware: cspMiddleware},
 		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
 		OnStartup:        a.Startup,
 		OnShutdown: func(c context.Context) {
@@ -331,6 +331,19 @@ func buildDomain(ctx context.Context, paths config.Paths, cfg *config.Config, si
 	settings := storage.NewSettingsRepo(db)
 	oncallRepo := storage.NewOnCallRepo(db)
 	pluginSettingsRepo := storage.NewPluginSettingsRepo(db, storage.NewDPAPICipher())
+	pluginApprovals := storage.NewPluginApprovalRepo(settings)
+	// Auto-approve the vendor-seeded plugin set (the MSI's plugins-seed) so
+	// seeded plugins launch without a manual opt-in. Directories side-loaded
+	// straight into PluginsDir are NOT auto-approved and stay pending until
+	// the user approves them in the UI. Approve is idempotent.
+	if exe, err := os.Executable(); err == nil {
+		seedDir := filepath.Join(filepath.Dir(exe), "plugins-seed")
+		for _, name := range pluginhost.BundledPluginNames(seedDir) {
+			if err := pluginApprovals.Approve(ctx, name); err != nil {
+				slog.Warn("auto-approve seeded plugin failed", "plugin", name, "err", err)
+			}
+		}
+	}
 
 	orchestrator := tagging.NewOrchestrator(tagBlocks, tracks, rules, slog.Default())
 	orchestrator.SetGranularity(cfg.Tracking.TagBlockGranularity())
@@ -382,24 +395,25 @@ func buildDomain(ctx context.Context, paths config.Paths, cfg *config.Config, si
 
 	var a *app.App
 	a = app.New(app.Deps{
-		Tracks:         tracks,
-		TagBlocks:      tagBlocks,
-		Tags:           tags,
-		Rules:          rules,
-		Settings:       settings,
-		OnCall:         oncallRepo,
-		Tracker:        trk,
-		Orchestrator:   orchestrator,
-		Sessions:       sessionStore,
-		SyncerFor:      syncerFor,
-		EntraFor:       entraFor,
-		PluginsDir:     paths.PluginsDir,
-		PluginSettings: pluginSettingsRepo,
-		ConfigPath:     paths.ConfigFile,
-		Config:         cfg,
-		LogDir:         paths.LogDir,
-		Sink:           sink,
-		Window:         window,
+		Tracks:          tracks,
+		TagBlocks:       tagBlocks,
+		Tags:            tags,
+		Rules:           rules,
+		Settings:        settings,
+		OnCall:          oncallRepo,
+		Tracker:         trk,
+		Orchestrator:    orchestrator,
+		Sessions:        sessionStore,
+		SyncerFor:       syncerFor,
+		EntraFor:        entraFor,
+		PluginsDir:      paths.PluginsDir,
+		PluginSettings:  pluginSettingsRepo,
+		PluginApprovals: pluginApprovals,
+		ConfigPath:      paths.ConfigFile,
+		Config:          cfg,
+		LogDir:          paths.LogDir,
+		Sink:            sink,
+		Window:          window,
 		OnConfigSet: func(c *config.Config) error {
 			trkMu.Lock()
 			defer trkMu.Unlock()
