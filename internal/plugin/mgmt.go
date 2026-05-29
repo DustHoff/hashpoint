@@ -106,8 +106,8 @@ func (h *Host) ListAvailablePlugins(ctx context.Context) ([]AvailablePluginEntry
 // plugin would silently overwrite its files; the user should call
 // UpdatePlugin instead.
 func (h *Host) InstallPlugin(ctx context.Context, sourcePlugin, name string) error {
-	if name == "" {
-		return errors.New("plugin: empty name")
+	if err := ValidatePluginName(name); err != nil {
+		return err
 	}
 
 	h.mu.RLock()
@@ -124,6 +124,12 @@ func (h *Host) InstallPlugin(ctx context.Context, sourcePlugin, name string) err
 	if err := handler.Install(ctx, name); err != nil {
 		return fmt.Errorf("install via %s: %w", sourcePlugin, err)
 	}
+	// A catalog install is an explicit, user-initiated action, so approve
+	// the plugin before launching it — the opt-in gate exists for
+	// directories that appear WITHOUT a deliberate install.
+	if err := h.approve(ctx, name); err != nil {
+		return fmt.Errorf("approve after install: %w", err)
+	}
 	if err := h.launch(ctx, name); err != nil {
 		return fmt.Errorf("launch after install: %w", err)
 	}
@@ -136,8 +142,8 @@ func (h *Host) InstallPlugin(ctx context.Context, sourcePlugin, name string) err
 // already be known to the host — if it is not installed, the caller
 // should use InstallPlugin instead.
 func (h *Host) UpdatePlugin(ctx context.Context, sourcePlugin, name string) error {
-	if name == "" {
-		return errors.New("plugin: empty name")
+	if err := ValidatePluginName(name); err != nil {
+		return err
 	}
 
 	handler, err := h.mgmtHandler(sourcePlugin)
@@ -175,8 +181,8 @@ func (h *Host) UpdatePlugin(ctx context.Context, sourcePlugin, name string) erro
 // After this returns the plugin is fully gone from the host's view; a
 // future Install starts from manifest defaults.
 func (h *Host) UninstallPlugin(ctx context.Context, sourcePlugin, name string) error {
-	if name == "" {
-		return errors.New("plugin: empty name")
+	if err := ValidatePluginName(name); err != nil {
+		return err
 	}
 	if name == sourcePlugin {
 		return ErrSelfUninstallRefused

@@ -121,6 +121,10 @@ type Deps struct {
 	// PluginSettings persists per-plugin config + the enable flag. Nil
 	// disables the plugin system (same effect as empty PluginsDir).
 	PluginSettings storage.PluginSettingsRepository
+	// PluginApprovals persists the user's opt-in to run each plugin. Nil ⇒
+	// the host's approval gate is disabled (every plugin is treated as
+	// approved). Wired by main.go to a *storage.PluginApprovalRepo.
+	PluginApprovals pluginhost.ApprovalStore
 	// SyncerFor returns a Syncer wired against the given session, or nil if
 	// the session is not usable (e.g. tenant unset). Constructed lazily so
 	// session changes from the UI take effect immediately.
@@ -251,9 +255,10 @@ func New(deps Deps) *App {
 	// goroutine.
 	if deps.PluginsDir != "" && deps.PluginSettings != nil {
 		a.pluginHost = pluginhost.NewHost(pluginhost.HostDeps{
-			Logger:     a.logger,
-			PluginsDir: deps.PluginsDir,
-			Settings:   deps.PluginSettings,
+			Logger:        a.logger,
+			PluginsDir:    deps.PluginsDir,
+			Settings:      deps.PluginSettings,
+			ApprovalStore: deps.PluginApprovals,
 			OnDiscovered: func(info pluginhost.Info) {
 				// a.ctx is set in Startup(); the discovery loop only runs
 				// after Start() (which is invoked from Startup), so by

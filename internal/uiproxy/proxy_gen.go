@@ -205,6 +205,10 @@ func (a *App) PersonioStatus() appdom.PersonioSessionStatus {
 	return r0
 }
 
+func (a *App) PluginApprove(p0 string) error {
+	return a.call("PluginApprove", []any{p0}, nil)
+}
+
 func (a *App) PluginDeleteSecret(p0 string, p1 string) error {
 	return a.call("PluginDeleteSecret", []any{p0, p1}, nil)
 }

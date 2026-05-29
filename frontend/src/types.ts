@@ -287,7 +287,8 @@ export type PluginState =
   | "running"
   | "needs_config"
   | "failed"
-  | "disabled";
+  | "disabled"
+  | "pending_approval";
 
 // Mirrors the host-side sdk.Capability constants. Plain string union so
 // the frontend stays decoupled from the wire enum; the backend serialises

@@ -193,6 +193,10 @@ export const api = {
     bridge().PluginSetEnabled(name, enabled) as Promise<void>,
   pluginReload: (name: string) =>
     bridge().PluginReload(name) as Promise<void>,
+  // Records the user's opt-in to run a plugin parked in pending_approval
+  // (a directory side-loaded into PluginsDir) and launches it.
+  pluginApprove: (name: string) =>
+    bridge().PluginApprove(name) as Promise<void>,
   // Asks the host to re-pull the named plugin's tag catalogue via the
   // tag_provider capability. Returns the count of newly-created tags
   // (existing paths are no-ops per the user-tag-wins rule).

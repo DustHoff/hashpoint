@@ -425,6 +425,17 @@ func (a *App) PluginReload(name string) error {
 	return a.pluginHost.Reload(a.ctx, name)
 }
 
+// PluginApprove records the user's explicit opt-in to run a plugin that was
+// parked in the pending_approval state (e.g. a directory side-loaded into
+// PluginsDir) and launches it. Vendor-seeded plugins are approved
+// automatically at startup, so this is only needed for manually added ones.
+func (a *App) PluginApprove(name string) error {
+	if a.pluginHost == nil {
+		return errors.New("plugin host not configured")
+	}
+	return a.pluginHost.ApprovePlugin(a.ctx, name)
+}
+
 // PluginListAvailable merges the catalogs of every running plugin that
 // advertises plugin_management, stamps each entry with its source +
 // installed version, and returns the deduplicated list rendered in the
