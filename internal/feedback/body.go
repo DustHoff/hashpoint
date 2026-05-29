@@ -134,7 +134,7 @@ func Render(in Input) string {
 
 	if len(in.LogTail) > 0 {
 		b.WriteString("\n<details>\n")
-		fmt.Fprintf(&b, "<summary>Anwendungslog — %s (gekürzt, ohne Debug-Level und Fenstertitel)</summary>\n\n",
+		fmt.Fprintf(&b, "<summary>Anwendungslog — %s (gekürzt; nur freigegebene Felder — Debug-Zeilen, Fenstertitel, Pfade und Personio-Daten wie Tenant/Mitarbeiter-ID werden entfernt)</summary>\n\n",
 			windowLabel(in.LogWindow))
 		b.WriteString("```\n")
 		b.Write(in.LogTail)

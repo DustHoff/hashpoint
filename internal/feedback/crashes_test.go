@@ -58,6 +58,33 @@ func TestReadRecentCrashes_SelectsSanitisesAndOrders(t *testing.T) {
 	}
 }
 
+// TestReadRecentCrashes_AllowlistDropsPIIDetail verifies PII keys that share a
+// crash log line are not copied into the (public) crash Detail map, while
+// allowlisted crash diagnostics are retained.
+func TestReadRecentCrashes_AllowlistDropsPIIDetail(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "timetracker.log")
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	mustWrite(t, path,
+		`{"time":"2026-05-16T11:40:00Z","level":"ERROR","msg":"recovered panic","event":"panic","cause":"boom","prev_pid":7,"tenant":"acme","employee_id":4242,"path":"C:\\Users\\bob"}`+"\n")
+
+	got, err := ReadRecentCrashes(context.Background(), path, LogWindowHour, now)
+	if err != nil {
+		t.Fatalf("ReadRecentCrashes: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d crashes, want 1", len(got))
+	}
+	if got[0].Detail["prev_pid"] == nil {
+		t.Errorf("allowlisted prev_pid missing from Detail: %+v", got[0].Detail)
+	}
+	for _, k := range []string{"tenant", "employee_id", "path"} {
+		if _, leaked := got[0].Detail[k]; leaked {
+			t.Errorf("PII key %q leaked into crash Detail: %+v", k, got[0].Detail)
+		}
+	}
+}
+
 func TestReadRecentCrashes_CapsAtMax(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "timetracker.log")

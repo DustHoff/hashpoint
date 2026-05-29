@@ -110,7 +110,9 @@ export default function Feedback() {
     setSubmitting(true);
     setFormError(null);
     try {
-      const res = await api.feedbackSubmit(form);
+      // Submit the exact body the user reviewed in the preview modal, so the
+      // uploaded issue matches what was consented to (no TOCTOU re-read).
+      const res = await api.feedbackSubmit({ ...form, body: preview ?? undefined });
       setSubmitted(res);
       setPreview(null);
       setForm(emptyForm);

@@ -282,9 +282,10 @@ func (c *UIClient) do(ctx context.Context, method, path string, body []byte) (*h
 		return nil, err
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		raw, _ := io.ReadAll(limitedReader(resp))
+		// Close without logging the body: a 401/403 body can echo request
+		// context and logging it only widens the log surface for no gain.
 		resp.Body.Close()
-		c.logger.Warn("personio: auth rejected", "status", resp.StatusCode, "body", truncate(string(raw), 200))
+		c.logger.Warn("personio: auth rejected", "status", resp.StatusCode)
 		return nil, ErrSessionExpired
 	}
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {

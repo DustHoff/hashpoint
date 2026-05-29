@@ -333,8 +333,17 @@ func (a *boundHostAPI) PublishTags(ctx context.Context, tags []sdk.ImportedTag) 
 }
 
 // Log forwards a structured log line to the host's slog with an attached
-// "plugin" attribute. Unknown levels degrade to Info. The plugin's name
-// is filled in by the host — plugins must not echo it in fields.
+// "plugin" attribute. The plugin's name is filled in by the host — plugins
+// must not echo it in fields.
+//
+// Plugin-supplied records are treated as untrusted: the level is capped at
+// Info (Warn/Error are downgraded) and every field key is namespaced under
+// "plugin." Both guard the feedback log-tail bundle, which is uploaded to a
+// public issue: the level cap stops a plugin from injecting alarming
+// Warn/Error entries, and the namespacing stops a plugin value from landing
+// under a sanitizer-allowlisted host key (e.g. "cause", "url") and riding
+// into the issue verbatim. Debug stays Debug (Debug lines are dropped from
+// bundles entirely).
 func (a *boundHostAPI) Log(_ context.Context, level, message string, fields map[string]string) error {
 	attrs := make([]any, 0, 2*len(fields))
 	for k, v := range fields {
@@ -342,16 +351,11 @@ func (a *boundHostAPI) Log(_ context.Context, level, message string, fields map[
 		if k == "plugin" {
 			continue
 		}
-		attrs = append(attrs, k, v)
+		attrs = append(attrs, "plugin."+k, v)
 	}
-	switch level {
-	case "debug":
+	if level == "debug" {
 		a.log.Debug(message, attrs...)
-	case "warn":
-		a.log.Warn(message, attrs...)
-	case "error":
-		a.log.Error(message, attrs...)
-	default:
+	} else {
 		a.log.Info(message, attrs...)
 	}
 	return nil

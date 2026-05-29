@@ -25,15 +25,22 @@ const (
 	LogWindowDay   LogWindow = "24h"   // last 24 hours
 )
 
-// sensitiveLogFields lists keys whose values are stripped from log
-// records before they reach the issue body. CLAUDE.md §5 forbids
-// logging window titles at Info+; the orchestrator and tracker
-// nonetheless attach the field on Debug, and Debug lines themselves
-// are dropped — but a sloppy plugin could promote one to Warn, so
-// strip defensively at the field level too.
-var sensitiveLogFields = map[string]struct{}{
-	"window_title": {},
-	"title":        {},
+// allowedLogFields is the allowlist of structured slog keys that may appear
+// in a feedback/crash bundle uploaded to the (public) issue tracker. An
+// allowlist — not a blocklist — guarantees that a newly-added log field
+// carrying PII cannot silently leak: any key not listed here is dropped
+// before the record reaches the issue body. PII-bearing keys such as
+// tenant, employee_id, app_host, path and client_id are intentionally
+// absent, as are window titles (CLAUDE.md §5).
+var allowedLogFields = map[string]struct{}{
+	// structural slog keys
+	"time": {}, "level": {}, "msg": {}, "event": {},
+	// crash / process-lifecycle diagnostics
+	"goroutine": {}, "fatal": {}, "cause": {}, "stack": {},
+	"prev_pid": {}, "downtime_sec": {}, "role": {}, "exit_code": {},
+	// benign operational fields
+	"duration_sec": {}, "process": {}, "count": {}, "status": {},
+	"user_code": {}, "number": {}, "url": {},
 }
 
 // ReadLogTail loads the active log file, drops Debug-level records,
@@ -118,8 +125,10 @@ func sanitizeLine(line []byte, cutoff time.Time) ([]byte, bool) {
 	if ts, ok := recordTime(record); ok && ts.Before(cutoff) {
 		return nil, false
 	}
-	for k := range sensitiveLogFields {
-		delete(record, k)
+	for k := range record {
+		if _, ok := allowedLogFields[k]; !ok {
+			delete(record, k)
+		}
 	}
 	out, err := json.Marshal(record)
 	if err != nil {

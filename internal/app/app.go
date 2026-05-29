@@ -1066,7 +1066,11 @@ func (a *App) SaveConfig(c config.Config) error {
 	if prevEntra != c.Entra {
 		a.applyEntraConfig(c.Entra)
 	}
-	a.logger.Info("app: config saved", "path", a.deps.ConfigPath)
+	// The config path lives under %APPDATA%\TimeTracker and embeds the OS
+	// username, so keep it at Debug (dropped from feedback bundles) per
+	// CLAUDE.md §5.
+	a.logger.Info("app: config saved")
+	a.logger.Debug("app: config saved", "path", a.deps.ConfigPath)
 	return nil
 }
 
@@ -1165,7 +1169,8 @@ func (a *App) maybeTriggerAutoRelogin() {
 func (a *App) PersonioLogin() error {
 	cfg := a.GetConfig()
 	tenant := strings.TrimSpace(cfg.Personio.Tenant)
-	a.logger.Info("app: PersonioLogin started", "tenant", tenant)
+	a.logger.Info("app: PersonioLogin started")
+	a.logger.Debug("app: PersonioLogin started", "tenant", tenant)
 	if tenant == "" {
 		return errors.New("kein Personio-Tenant in den Einstellungen hinterlegt")
 	}
@@ -1197,7 +1202,9 @@ func (a *App) PersonioLogin() error {
 	if err := a.deps.Sessions.Set(res.Session); err != nil {
 		return fmt.Errorf("session speichern: %w", err)
 	}
-	a.logger.Info("personio login: session stored",
+	a.logger.Info("personio login: session stored")
+	// Tenant / host / employee id are PII; keep them at Debug only.
+	a.logger.Debug("personio login: session stored",
 		"tenant", res.Session.Tenant,
 		"app_host", res.Session.AppHost,
 		"employee_id", res.Session.EmployeeID)

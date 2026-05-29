@@ -405,6 +405,10 @@ export interface FeedbackInput {
   repro: string;
   include_log: boolean;
   log_window: FeedbackLogWindow;
+  // body is the exact previewed Markdown; when set the backend posts it
+  // verbatim instead of re-rendering (which would re-read the live log and
+  // could upload lines the user never saw in the preview).
+  body?: string;
 }
 
 export interface FeedbackSubmitResult {
