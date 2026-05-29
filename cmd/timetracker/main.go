@@ -76,6 +76,10 @@ const (
 	modeCollector
 	// modeUI is the throwaway Wails shell the collector spawns.
 	modeUI
+	// modeWatchdog is the out-of-process supervisor (ADR 0001 "Stufe C"),
+	// hosted as a Windows service. It restarts the collector after an unclean
+	// death and closes any open tag-blocks at the last-alive time (issue #21).
+	modeWatchdog
 )
 
 // dispatch routes to the selected process mode. With no mode flag the legacy
@@ -88,6 +92,8 @@ func dispatch(args []string) error {
 		return runCollector()
 	case modeUI:
 		return runUI(pipe)
+	case modeWatchdog:
+		return runWatchdog()
 	default:
 		return run()
 	}
@@ -105,6 +111,8 @@ func parseArgs(args []string) (procMode, string) {
 			mode = modeCollector
 		case a == "--ui":
 			mode = modeUI
+		case a == "--watchdog":
+			mode = modeWatchdog
 		case strings.HasPrefix(a, "--pipe="):
 			pipe = strings.TrimPrefix(a, "--pipe=")
 		}

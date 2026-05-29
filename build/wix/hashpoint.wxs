@@ -16,6 +16,10 @@
        plugin. The running app copies this into the per-user PluginsDir on
        first launch (see internal/plugin/seed.go); the MSI cannot reach
        %APPDATA% reliably from an elevated context.
+    5. `HashpointWatchdog` service — `hashpoint.exe --watchdog` under
+       LocalSystem (ADR 0001 "Stufe C", issue #21). Monitors the collector,
+       closes open tag-blocks at last-alive on an unclean death, and relaunches
+       the collector into the user session. See the ServiceInstall component.
 
   Behavioural bits beyond the regular MSI lifecycle:
     - WixUtilExtension `CloseApplication` sends WM_CLOSE to any running
@@ -109,6 +113,42 @@
               Source="$(var.ExeFile)"
               KeyPath="yes"
               Checksum="yes" />
+
+        <!--
+          Watchdog service (ADR 0001 "Stufe C", issue #21). Runs the same
+          binary as `hashpoint.exe --watchdog` under LocalSystem (Account
+          omitted ⇒ LocalSystem default). Because the collector dies silently
+          during Modern Standby with no cleanup, this service — living in
+          Session 0, so it outlives that kill — monitors the collector, closes
+          any open tag-blocks at its last-alive time, and relaunches it into the
+          interactive user session (WTSQueryUserToken + CreateProcessAsUser).
+          It only relaunches after an *unclean* death, so a user's tray
+          "Beenden" (which removes the crash marker) is respected. Vital="no":
+          a service-start hiccup must not fail the whole install. The SC
+          failure-action restart is belt-and-suspenders on top of the
+          in-process relaunch backoff.
+        -->
+        <ServiceInstall Id="HashpointWatchdogService"
+                        Name="HashpointWatchdog"
+                        DisplayName="Hashpoint Watchdog"
+                        Description="Überwacht den Hashpoint-Collector, schließt offene Tag-Blöcke bei einem Absturz und startet den Collector neu (Issue #21)."
+                        Type="ownProcess"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Arguments="--watchdog"
+                        Vital="no">
+          <util:ServiceConfig FirstFailureActionType="restart"
+                              SecondFailureActionType="restart"
+                              ThirdFailureActionType="restart"
+                              RestartServiceDelayInSeconds="10"
+                              ResetPeriodInDays="1" />
+        </ServiceInstall>
+        <ServiceControl Id="HashpointWatchdogControl"
+                        Name="HashpointWatchdog"
+                        Start="install"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
       </Component>
     </DirectoryRef>
 
