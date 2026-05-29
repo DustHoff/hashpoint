@@ -99,6 +99,13 @@ func NewUIClient(opts UIClientOptions) (*UIClient, error) {
 // a fresh interactive login is required.
 var ErrSessionExpired = errors.New("personio: session expired — please re-authenticate")
 
+// maxPersonioRespBytes caps how much of a Personio response body the client
+// will buffer or decode. A malicious or MITM'd endpoint (a valid TLS cert
+// for the captured host) could otherwise stream an arbitrarily large reply
+// and exhaust process memory; 16 MiB is far above any legitimate
+// navigation/timesheet payload.
+const maxPersonioRespBytes = 16 << 20
+
 // NavigationContext is the (subset of the) /api/v1/navigation/context
 // response containing the employee identifier we need.
 type NavigationContext struct {
@@ -125,7 +132,7 @@ func (c *UIClient) FetchEmployeeID(ctx context.Context) (int64, error) {
 			} `json:"user"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+	if err := decodeLimited(resp, &parsed); err != nil {
 		return 0, fmt.Errorf("decode navigation context: %w", err)
 	}
 	if parsed.Data.User.ID == 0 {
@@ -186,7 +193,7 @@ func (c *UIClient) FetchTimesheet(ctx context.Context, employeeID int64, from, t
 	var parsed struct {
 		Timecards []Timecard `json:"timecards"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+	if err := decodeLimited(resp, &parsed); err != nil {
 		return nil, fmt.Errorf("decode timesheet: %w", err)
 	}
 	return parsed.Timecards, nil
@@ -275,7 +282,7 @@ func (c *UIClient) do(ctx context.Context, method, path string, body []byte) (*h
 		return nil, err
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		raw, _ := io.ReadAll(resp.Body)
+		raw, _ := io.ReadAll(limitedReader(resp))
 		resp.Body.Close()
 		c.logger.Warn("personio: auth rejected", "status", resp.StatusCode, "body", truncate(string(raw), 200))
 		return nil, ErrSessionExpired
@@ -294,7 +301,7 @@ func (c *UIClient) do(ctx context.Context, method, path string, body []byte) (*h
 }
 
 func statusErr(op string, resp *http.Response) error {
-	raw, _ := io.ReadAll(resp.Body)
+	raw, _ := io.ReadAll(limitedReader(resp))
 	return fmt.Errorf("personio: %s: status %d: %s", op, resp.StatusCode, truncate(string(raw), 300))
 }
 
@@ -303,4 +310,35 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// limitedReader wraps resp.Body so the snippet/error read paths buffer at
+// most maxPersonioRespBytes (+1, to detect overrun) instead of slurping an
+// arbitrarily large reply into memory.
+func limitedReader(resp *http.Response) io.Reader {
+	return io.LimitReader(resp.Body, maxPersonioRespBytes+1)
+}
+
+// decodeLimited JSON-decodes resp.Body into v, refusing to read more than
+// maxPersonioRespBytes so a hostile endpoint cannot exhaust memory.
+func decodeLimited(resp *http.Response, v any) error {
+	return decodeLimitedN(resp.Body, v, maxPersonioRespBytes)
+}
+
+// decodeLimitedN decodes JSON from r into v while reading at most max+1
+// bytes. When the payload would exceed max it returns an explicit
+// limit error instead of silently truncating (which could otherwise yield
+// a valid-looking partial object or fail the decode opaquely).
+func decodeLimitedN(r io.Reader, v any, max int64) error {
+	lr := &io.LimitedReader{R: r, N: max + 1}
+	if err := json.NewDecoder(lr).Decode(v); err != nil {
+		if lr.N <= 0 {
+			return fmt.Errorf("response exceeds %d byte limit: %w", max, err)
+		}
+		return err
+	}
+	if lr.N <= 0 {
+		return fmt.Errorf("response exceeds %d byte limit", max)
+	}
+	return nil
 }

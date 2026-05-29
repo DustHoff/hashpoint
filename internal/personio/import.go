@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dusthoff/hashpoint/internal/storage"
 )
@@ -20,6 +21,17 @@ import (
 // block does not loop the period back to Personio under a different
 // identity.
 const FallbackTagName = "#PersonioImport"
+
+// maxImportPeriods bounds how many timesheet periods a single import will
+// process, and maxImportCommentRunes bounds the rune length of a period
+// comment copied into a tag-block description. Both guard against an
+// oversized (malicious or MITM'd) timesheet response driving unbounded work
+// or storing an unbounded string; the values sit far above any realistic
+// day's data.
+const (
+	maxImportPeriods      = 1000
+	maxImportCommentRunes = 4000
+)
 
 // SyncPreflight is the result of peeking at a Personio day before sync. The
 // frontend renders a confirm dialog from this whenever ExistingPeriods is
@@ -221,7 +233,12 @@ func (s *Syncer) ImportDay(ctx context.Context, day time.Time) (*ImportResult, e
 
 	res := &ImportResult{}
 	var fallbackTagID int64
-	for _, p := range tc.Periods {
+	periods := tc.Periods
+	if len(periods) > maxImportPeriods {
+		res.Errors = append(res.Errors, fmt.Sprintf("Personio lieferte %d Perioden — verarbeite nur die ersten %d", len(periods), maxImportPeriods))
+		periods = periods[:maxImportPeriods]
+	}
+	for _, p := range periods {
 		res.PeriodsConsidered++
 		if !strings.EqualFold(p.Type, "work") {
 			res.PeriodsSkipped++
@@ -275,6 +292,13 @@ func (s *Syncer) ImportDay(ctx context.Context, day time.Time) (*ImportResult, e
 
 		var desc *string
 		if c := strings.TrimSpace(p.Comment); c != "" {
+			if utf8.RuneCountInString(c) > maxImportCommentRunes {
+				s.logger.Warn("personio import: comment truncated",
+					"period", p.ID,
+					"orig_runes", utf8.RuneCountInString(c),
+					"max", maxImportCommentRunes)
+				c = string([]rune(c)[:maxImportCommentRunes])
+			}
 			desc = &c
 		}
 		inserted := 0
