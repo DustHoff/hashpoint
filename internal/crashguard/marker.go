@@ -71,12 +71,11 @@ func Start(ctx context.Context, dataDir string, role Role, info Info, logger *sl
 	if logger == nil {
 		logger = slog.Default()
 	}
-	dir := filepath.Join(dataDir, markerDirName)
-	path := filepath.Join(dir, string(role)+".alive")
+	path := MarkerPath(dataDir, role)
 
 	reportPrevious(path, role, logger)
 
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create runtime dir: %w", err)
 	}
 	now := time.Now().UTC()
@@ -99,25 +98,73 @@ func Start(ctx context.Context, dataDir string, role Role, info Info, logger *sl
 	return m, nil
 }
 
+// MarkerPath returns the on-disk path of the sentinel file for role under
+// dataDir. It is exported so an out-of-process supervisor (the watchdog) can
+// locate a collector's marker without duplicating the layout.
+func MarkerPath(dataDir string, role Role) string {
+	return filepath.Join(dataDir, markerDirName, string(role)+".alive")
+}
+
+// MarkerSnapshot is a point-in-time read of a sentinel file.
+type MarkerSnapshot struct {
+	PID       int       // process ID that armed the marker
+	Mode      string    // role string ("collector", "monolith", "ui")
+	Version   string    // build version of the armed process
+	Commit    string    // build commit of the armed process
+	StartUTC  time.Time // when the marker was armed
+	LastAlive time.Time // last heartbeat timestamp
+}
+
+// ErrMarkerAbsent is returned by ReadMarker when no sentinel file exists — the
+// normal state after a clean shutdown (Disarm removes the file) or before the
+// role has ever started.
+var ErrMarkerAbsent = errors.New("crashguard: marker absent")
+
+// ErrMarkerCorrupt is returned by ReadMarker when the sentinel file exists but
+// cannot be parsed. The marker is written non-atomically (see writeLocked), so
+// a reader can observe a torn write; callers should retry rather than conclude
+// the process is dead.
+var ErrMarkerCorrupt = errors.New("crashguard: marker corrupt")
+
+// ReadMarker reads and parses the sentinel file at path. It returns
+// ErrMarkerAbsent when the file does not exist and ErrMarkerCorrupt when it
+// exists but is not valid JSON. The on-disk format is the single source of
+// truth shared with the watchdog, which probes a collector's liveness across
+// the Session-0 boundary where the single-instance mutex is invisible.
+func ReadMarker(path string) (MarkerSnapshot, error) {
+	raw, err := os.ReadFile(path) // #nosec G304 -- path is built from the app data dir and a fixed role name; no user input.
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return MarkerSnapshot{}, ErrMarkerAbsent
+		}
+		return MarkerSnapshot{}, fmt.Errorf("read marker: %w", err)
+	}
+	var f markerFile
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return MarkerSnapshot{}, ErrMarkerCorrupt
+	}
+	return MarkerSnapshot(f), nil
+}
+
 // reportPrevious reads a leftover marker and, if present, logs an
 // unclean-shutdown record. A missing file is the normal clean case. A corrupt
 // file is still reported (best-effort): its mere presence proves the previous
 // run did not disarm.
 func reportPrevious(path string, role Role, logger *slog.Logger) {
-	raw, err := os.ReadFile(path) // #nosec G304 -- path is built from the app data dir and a fixed role name; no user input.
+	prev, err := ReadMarker(path)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
+		switch {
+		case errors.Is(err, ErrMarkerAbsent):
+			return // normal clean case
+		case errors.Is(err, ErrMarkerCorrupt):
+			logger.Error("previous run did not exit cleanly",
+				"event", EventUncleanShutdown, "role", role, "marker", "corrupt")
+		default:
 			logger.Warn("crashguard: could not read previous marker", "role", role, "err", err)
 		}
 		return
 	}
 	now := time.Now().UTC()
-	var prev markerFile
-	if err := json.Unmarshal(raw, &prev); err != nil {
-		logger.Error("previous run did not exit cleanly",
-			"event", EventUncleanShutdown, "role", role, "marker", "corrupt")
-		return
-	}
 	attrs := []any{
 		"event", EventUncleanShutdown,
 		"role", role,

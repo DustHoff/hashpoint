@@ -12,6 +12,11 @@ import (
 // ErrUnsupported is returned by stub implementations on non-Windows platforms.
 var ErrUnsupported = errors.New("winapi: unsupported on this platform")
 
+// ErrNoActiveSession is returned by ActiveConsoleSessionID when no interactive
+// user is logged on at the physical console. The watchdog treats this as "idle"
+// — there is no user session to relaunch the collector into.
+var ErrNoActiveSession = errors.New("winapi: no active console session")
+
 // FocusInfo describes the currently focused foreground window.
 type FocusInfo struct {
 	HWND        uintptr
