@@ -80,7 +80,7 @@ func runUI(pipeName string) error {
 		MinWidth:         800,
 		MinHeight:        600,
 		WindowStartState: options.Maximised,
-		AssetServer:      &assetserver.Options{Assets: hashpoint.Frontend},
+		AssetServer:      &assetserver.Options{Assets: hashpoint.Frontend, Middleware: cspMiddleware},
 		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
 		OnStartup: func(ctx context.Context) {
 			go func() {

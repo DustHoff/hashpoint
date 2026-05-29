@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -510,7 +512,15 @@ func (a *App) persistSubmissionResult(docID int64, r pluginhost.SubmitResult) {
 		})
 		return
 	}
-	if err := a.deps.OnCall.MarkSubmissionSubmitted(a.ctx, sub.ID, r.Result.ExternalRef, r.Result.ExternalURL, now); err != nil {
+	// Sanitize the plugin-provided URL: only http(s) is rendered as a
+	// clickable link, so a malicious plugin cannot smuggle a javascript:/data:
+	// URI into the privileged renderer. The raw value is never logged.
+	extURL := safeExternalURL(r.Result.ExternalURL)
+	if extURL != r.Result.ExternalURL {
+		a.logger.Warn("oncall: dropped non-http(s) submission URL from plugin",
+			"plugin", r.PluginName, "sub_id", sub.ID)
+	}
+	if err := a.deps.OnCall.MarkSubmissionSubmitted(a.ctx, sub.ID, r.Result.ExternalRef, extURL, now); err != nil {
 		a.logger.Warn("oncall: cannot persist successful result",
 			"sub_id", sub.ID, "err", err)
 	}
@@ -519,7 +529,7 @@ func (a *App) persistSubmissionResult(docID int64, r pluginhost.SubmitResult) {
 		PluginName:  r.PluginName,
 		Status:      "submitted",
 		ExternalRef: r.Result.ExternalRef,
-		ExternalURL: r.Result.ExternalURL,
+		ExternalURL: extURL,
 	})
 }
 
@@ -580,6 +590,27 @@ func submissionsToView(subs []storage.OnCallSubmission) []OnCallSubmissionView {
 		out = append(out, v)
 	}
 	return out
+}
+
+// safeExternalURL returns raw only when it parses as an absolute http(s)
+// URL, and "" otherwise. A plugin's SubmissionResult.ExternalURL is shown as
+// a clickable link in the UI; rejecting non-http(s) schemes here (server
+// side) stops a malicious plugin from smuggling a javascript:/data: URI into
+// the renderer, complementing the frontend safeExternalHref guard.
+func safeExternalURL(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+		return raw
+	default:
+		return ""
+	}
 }
 
 func buildOnCallFilter(in OnCallListFilter) (storage.OnCallFilter, error) {

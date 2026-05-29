@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { log } from "../lib/log";
+import { safeExternalHref } from "../lib/url";
 import type {
   FeedbackCategory,
   FeedbackDeviceCode,
@@ -145,7 +146,7 @@ export default function Feedback() {
         <div className="rounded bg-emerald-900/40 px-3 py-2 text-sm text-emerald-200">
           Issue #{submitted.number} angelegt.{" "}
           <a
-            href={submitted.html_url}
+            href={safeExternalHref(submitted.html_url)}
             target="_blank"
             rel="noreferrer"
             className="underline underline-offset-2 hover:text-emerald-100"
@@ -525,7 +526,7 @@ function DeviceCodeModal({
           <li>
             1. Öffne{" "}
             <a
-              href={device.verification_uri}
+              href={safeExternalHref(device.verification_uri)}
               target="_blank"
               rel="noreferrer"
               className="text-accent underline underline-offset-2 hover:opacity-80"

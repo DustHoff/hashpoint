@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../api";
+import { safeExternalHref } from "../lib/url";
 
 interface DocPage {
   slug: string;
@@ -168,7 +169,7 @@ function mdComponents(
     a: ({ href, children, ...props }) => (
       <a
         {...props}
-        href={href}
+        href={safeExternalHref(href)}
         onClick={(e) => {
           if (onInternalLink(href)) e.preventDefault();
         }}
