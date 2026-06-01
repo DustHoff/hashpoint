@@ -63,7 +63,7 @@
       revision field). Prereleases use that revision for the rc number
       (x.y.z.<rc>), so successive rc MSIs upgrade each other and the final
       release (x.y.z) cleanly replaces any rc of the same target. Harmless for
-      normal releases, whose versions always differ. Triggers ICE61 → both
+      normal releases, whose versions always differ. Triggers ICE61 -> both
       release.yml and prerelease.yml suppress it (-sice:ICE61).
     -->
     <MajorUpgrade
@@ -117,7 +117,7 @@
         <!--
           Watchdog service (ADR 0001 "Stufe C", issue #21). Runs the same
           binary in watchdog mode (Arguments below) under LocalSystem (Account
-          omitted ⇒ LocalSystem default). Because the collector dies silently
+          omitted => LocalSystem default). Because the collector dies silently
           during Modern Standby with no cleanup, this service — living in
           Session 0, so it outlives that kill — monitors the collector, closes
           any open tag-blocks at its last-alive time, and relaunches it into the
@@ -240,8 +240,8 @@
 
     <!--
       Launch hashpoint.exe after the install transaction commits. Type 18
-      CA with FileKey="HashpointExe" → runs the just-installed binary;
-      asyncNoWait → msiexec returns immediately; Impersonate="yes" → runs
+      CA with FileKey="HashpointExe" -> runs the just-installed binary;
+      asyncNoWait -> msiexec returns immediately; Impersonate="yes" -> runs
       as the user that initiated msiexec (not elevated, not SYSTEM).
       Skipped on uninstall via the NOT REMOVE condition.
 
