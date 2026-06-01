@@ -43,9 +43,18 @@
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
      xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+  <!--
+    Codepage="1252" is required, not cosmetic: without it WiX defaults the
+    string table to codepage 0 (neutral/ASCII-only), and light then rejects
+    the German umlauts in this file (e.g. the watchdog ServiceInstall
+    Description below) with LGHT0311. 1252 (Windows Western European) is the
+    ANSI codepage that pairs with Language="1031" (German) and covers every
+    non-ASCII character used here.
+  -->
   <Product Id="*"
            Name="Hashpoint TimeTracker"
            Language="1031"
+           Codepage="1252"
            Version="$(var.ProductVersion)"
            Manufacturer="Dustin Hoffmann"
            UpgradeCode="8B0A3C7E-7D1F-4B23-9A2C-1F8E5D9C0B42">
