@@ -137,3 +137,12 @@ Falls das Hashpoint-Icon nicht im Benachrichtigungsbereich sichtbar ist:
 3. Eintrag *Hashpoint TimeTracker* auf **An** setzen.
 
 Falls die Anwendung gar nicht läuft, im Startmenü erneut starten.
+
+> **Nach Standby/Energiesparmodus (Deckel zu/auf):** Beim Aufwachen kann das
+> alte Icon kurz als „Geist" zurückbleiben – sichtbar, aber nicht anklickbar –,
+> bis man mit der Maus darüberfährt. Hashpoint stellt sich dann selbst wieder
+> her: Der Watchdog-Dienst startet den Hintergrundprozess neu, sobald der
+> Bildschirm **entsperrt** ist, und es erscheint ein frisches, funktionierendes
+> Icon. Das Hauptfenster wird bewusst erst nach dem Entsperren wieder geöffnet.
+> Bleibt dauerhaft kein klickbares Icon übrig, hilft ein Neustart über das
+> Startmenü.

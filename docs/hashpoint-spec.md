@@ -755,7 +755,7 @@ Vertragsdetails, Beispielcode und die ausführliche Sicherheitsnotiz:
 ```
 
 ### 4.2 Bibliotheken
-- **Tray:** `github.com/getlantern/systray` (etabliert, plattformübergreifend).
+- **Tray:** `fyne.io/systray` (gepflegter, aktiv maintainter Fork von `getlantern/systray`, plattformübergreifend).
 - **SQLite:** `modernc.org/sqlite` (pure Go, kein CGO nötig → einfacher Build) ODER `mattn/go-sqlite3` falls Performance kritisch.
 - **Windows API:** `golang.org/x/sys/windows` für `GetForegroundWindow` etc.
 - **UI-Fenster:** **Wails v2** (Go-Backend + Web-Frontend). Frontend-Stack: **TypeScript + React + Vite**, Styling mit **Tailwind CSS**. Timeline via `vis-timeline` oder `react-calendar-timeline`.

@@ -27,4 +27,11 @@ type trayActions struct {
 	// making the next start misreport a clean quit as an unclean shutdown. May
 	// be nil (e.g. the collector, which never hard-exits from the tray).
 	disarm func()
+	// trayLost is invoked when the tray's message loop ends unexpectedly while
+	// the process is otherwise healthy — the OS destroyed the tray window, e.g.
+	// during a Modern-Standby transition (#21). The collector wires this to a
+	// controlled process exit so the watchdog relaunches a fresh collector with
+	// a working icon; the monolith leaves it nil (its Wails window remains a way
+	// back in). May be nil.
+	trayLost func()
 }

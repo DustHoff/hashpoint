@@ -10,17 +10,20 @@ import (
 	"sync"
 	"time"
 
+	"fyne.io/systray"
 	"github.com/dusthoff/hashpoint/internal/app"
+	"github.com/dusthoff/hashpoint/internal/crashguard"
 	"github.com/dusthoff/hashpoint/internal/personio"
 	"github.com/dusthoff/hashpoint/internal/storage"
-	"github.com/getlantern/systray"
 )
 
 // manualTagSlotCount caps how many tags we can show in the manual-tag
-// submenu. systray has no API for removing menu items at runtime, so we
-// pre-allocate a fixed pool of slots and re-bind them as the tag list
-// changes. 64 is well above the realistic number of tags a single user
-// keeps around.
+// submenu. We pre-allocate a fixed pool of slots and re-bind them as the tag
+// list changes, rather than adding/removing items per refresh: it gives each
+// slot one stable click-handler goroutine and avoids item/handler churn on
+// every rescan. (fyne.io/systray does expose MenuItem.Remove(), but the pool
+// is kept deliberately.) 64 is well above the realistic number of tags a
+// single user keeps around.
 const manualTagSlotCount = 64
 
 // manualTagRefreshInterval controls how often the tray rescans the tag
@@ -33,14 +36,30 @@ func defaultSessionStore() personio.SessionStore {
 }
 
 func runTray(ctx context.Context, a *app.App, act trayActions, version string) {
-	// systray.Run blocks until systray.Quit is called. If it returns for
-	// any other reason — e.g. the underlying message-only window is
-	// destroyed by an OS event we don't yet handle — the tray icon
-	// disappears silently. Logging the return makes that case visible in
-	// the production log instead of being a missing log line. See #21.
-	systray.Run(func() { onTrayReady(ctx, a, act, version) }, func() {
-		slog.Info("tray: systray.Run returned")
+	// systray.Run blocks until the tray's message loop ends. That happens on a
+	// normal Quit (the ctx.Done path in onTrayReady) but also when the OS tears
+	// the tray window down out from under us — most often as the machine enters
+	// Modern Standby, which then hard-kills this process moments later (#21).
+	//
+	// We deliberately do not try to rebuild the tray in-process: fyne/systray
+	// keeps global state (quitOnce, the initialized window, the menu-item map)
+	// that a second Run would not cleanly reset. Instead, an unexpected loop
+	// exit asks for a controlled restart — the watchdog brings up a fresh
+	// collector, and thus a fresh, clickable icon, within seconds. Safe() guards
+	// the native loop so even a panic there reaches the restart path rather than
+	// silently ending the goroutine.
+	crashguard.Safe(slog.Default(), "tray-run", func() {
+		systray.Run(func() { onTrayReady(ctx, a, act, version) }, func() {
+			slog.Info("tray: systray.Run returned")
+		})
 	})
+	if ctx.Err() != nil {
+		return // expected: our own shutdown quit the tray
+	}
+	slog.Error("tray: message loop ended unexpectedly while running — requesting restart")
+	if act.trayLost != nil {
+		act.trayLost()
+	}
 }
 
 func onTrayReady(ctx context.Context, a *app.App, act trayActions, version string) {
@@ -55,9 +74,9 @@ func onTrayReady(ctx context.Context, a *app.App, act trayActions, version strin
 
 	// Manual-tag submenu — clicking a tag closes any currently open manual
 	// block and opens a new placeholder block under that tag from "now".
-	// "Kein Tag" closes the active manual block. systray has no remove-item
-	// API, so we pre-allocate a pool of slots and rebind them as tags come
-	// and go (see refreshManualTagSlots).
+	// "Kein Tag" closes the active manual block. We pre-allocate a pool of
+	// slots and rebind them as tags come and go (see refreshManualTagSlots)
+	// rather than adding/removing items per refresh.
 	mManualTag := systray.AddMenuItem("Manueller Tag", "Zeit manuell einem Tag zuordnen")
 	mManualNone := mManualTag.AddSubMenuItem("Kein Tag (Stop)", "Manuelle Zuordnung beenden")
 	go func() {
@@ -122,11 +141,11 @@ func onTrayReady(ctx context.Context, a *app.App, act trayActions, version strin
 	}
 }
 
-// manualTagSlots backs the dynamic Manual-Tag submenu. systray exposes
-// only Show/Hide/SetTitle on existing items — no removal — so we keep a
-// fixed pool of slots and rewire them whenever the underlying tag list
-// changes. Each slot has one click handler goroutine; the goroutine
-// reads the slot's current tag id under mu, so updates are race-free.
+// manualTagSlots backs the dynamic Manual-Tag submenu. We keep a fixed pool
+// of slots and rewire them (Show/Hide/SetTitle) whenever the underlying tag
+// list changes, instead of adding/removing items per refresh. Each slot has
+// one click handler goroutine; the goroutine reads the slot's current tag id
+// under mu, so updates are race-free.
 type manualTagSlots struct {
 	a      *app.App
 	parent *systray.MenuItem
