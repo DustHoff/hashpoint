@@ -128,7 +128,7 @@ func runCollector() error {
 		// Surface the UI child's logs while developing the split.
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		return cmd
-	}, slog.Default())
+	}, slog.Default(), uisupervisor.WithSpawnGate(waitForUnlockedSession))
 	supDone := make(chan struct{})
 	go func() {
 		defer crashguard.Recover(slog.Default(), "ui-supervisor")
@@ -143,6 +143,15 @@ func runCollector() error {
 		open:     func() { hub.Publish(collector.EventShowUI, nil) },
 		openHelp: func() { hub.Publish(collector.EventShowUI, nil); hub.Publish(uiHelpEvent, nil) },
 		quit:     func() bool { cancel(); return false },
+		trayLost: func() {
+			// The tray died but this process is still alive (the OS destroyed
+			// the tray window). Exit non-clean — leaving the crash marker armed
+			// — so the watchdog relaunches a fresh collector with a working
+			// icon. The watchdog closes any open tag block at relaunch, so no
+			// data is lost. See #21.
+			slog.Error("collector: tray unrecoverable — exiting for watchdog relaunch")
+			os.Exit(1)
+		},
 	}
 	go func() {
 		defer crashguard.Recover(slog.Default(), "tray")
@@ -175,10 +184,60 @@ func signalContext() (context.Context, context.CancelFunc) {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
 	go func() {
-		<-ch
+		sig := <-ch
+		// Logged so a suspend/Modern-Standby death that arrives through the
+		// signal path (a catchable CTRL/SIGTERM) is distinguishable from a hard
+		// OS kill that leaves no log line — this tells us whether the collector
+		// could be kept alive across suspend at all (#21).
+		slog.Info("collector: received OS signal — shutting down", "signal", sig.String())
 		cancel()
 	}()
 	return ctx, cancel
+}
+
+const (
+	// uiGatePollInterval is how often waitForUnlockedSession re-checks the
+	// session lock state while holding back a UI spawn.
+	uiGatePollInterval = 2 * time.Second
+	// uiGateMaxWait caps how long the gate holds a UI spawn while the session
+	// looks locked. It is a fail-safe: if lock detection is ever wrong, the UI
+	// still eventually starts (the supervisor's crash-loop backoff then bounds
+	// any churn) instead of never appearing.
+	uiGateMaxWait = 30 * time.Minute
+)
+
+// waitForUnlockedSession blocks until the interactive session is unlocked, the
+// context is cancelled, the lock state cannot be determined, or uiGateMaxWait
+// elapses. It is the UI supervisor's spawn gate: after a Modern-Standby resume
+// the watchdog may relaunch the collector while the lock screen is still up, and
+// spawning the WebView2 UI onto the secure desktop makes it crash-loop (#21).
+// The headless collector runs fine while locked, so only the UI spawn waits
+// here. A non-nil return means the context was cancelled; every other outcome
+// returns nil so the spawn proceeds.
+func waitForUnlockedSession(ctx context.Context) error {
+	deadline := time.Now().Add(uiGateMaxWait)
+	for {
+		locked, err := winapi.SessionLocked()
+		if err != nil {
+			// Don't strand the UI on a probe failure — allow the spawn.
+			slog.Debug("ui gate: session-lock check failed — allowing spawn", "err", err)
+			return nil
+		}
+		if !locked {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			slog.Warn("ui gate: session still locked after max wait — allowing spawn anyway",
+				"max_wait", uiGateMaxWait)
+			return nil
+		}
+		slog.Debug("ui gate: session locked — deferring UI spawn")
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(uiGatePollInterval):
+		}
+	}
 }
 
 // sessionToken returns a random hex token used to make the per-user pipe name

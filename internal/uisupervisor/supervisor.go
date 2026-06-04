@@ -22,6 +22,13 @@ const (
 	// healthy and the restart backoff resets. Quicker exits are treated as a
 	// crash loop, so the backoff grows to avoid hammering a wedged UI.
 	healthyRuntime = 5 * time.Second
+	// crashLoopThreshold is how many consecutive sub-healthyRuntime exits mark a
+	// crash loop; once reached, the respawn wait jumps to crashLoopBackoff so a
+	// wedged UI — e.g. a WebView2 that cannot initialize right after a
+	// Modern-Standby resume (issue #21) — stops being hammered every few
+	// hundred milliseconds.
+	crashLoopThreshold = 5
+	crashLoopBackoff   = 60 * time.Second
 )
 
 // Supervisor restarts a child process until its context is cancelled.
@@ -30,6 +37,7 @@ type Supervisor struct {
 	logger     *slog.Logger
 	minBackoff time.Duration
 	maxBackoff time.Duration
+	gate       func(context.Context) error
 }
 
 // Option configures a Supervisor.
@@ -38,6 +46,16 @@ type Option func(*Supervisor)
 // WithBackoff overrides the restart backoff bounds (mainly for tests).
 func WithBackoff(minBackoff, maxBackoff time.Duration) Option {
 	return func(s *Supervisor) { s.minBackoff, s.maxBackoff = minBackoff, maxBackoff }
+}
+
+// WithSpawnGate sets an optional gate consulted before each (re)spawn: the
+// supervisor calls gate(ctx) and starts the child only once it returns nil. A
+// gate that returns a non-nil error (e.g. because ctx was cancelled while it
+// waited) ends the supervisor. The collector uses this to hold UI spawns until
+// the interactive session is unlocked, so the WebView2 UI is not started onto
+// the lock/secure desktop where it crash-loops (issue #21).
+func WithSpawnGate(gate func(context.Context) error) Option {
+	return func(s *Supervisor) { s.gate = gate }
 }
 
 // New builds a supervisor that (re)starts the command returned by newCmd.
@@ -65,9 +83,18 @@ func New(newCmd func(context.Context) *exec.Cmd, logger *slog.Logger, opts ...Op
 // survives healthyRuntime.
 func (s *Supervisor) Run(ctx context.Context) error {
 	backoff := s.minBackoff
+	rapidExits := 0
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		// Optional gate: hold the spawn until the environment is ready (the
+		// collector gates on the session being unlocked). A gate error means
+		// ctx was cancelled while waiting, so end the loop.
+		if s.gate != nil {
+			if err := s.gate(ctx); err != nil {
+				return err
+			}
 		}
 		started := time.Now()
 		s.runOnce(ctx)
@@ -76,15 +103,29 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		}
 		if time.Since(started) >= healthyRuntime {
 			backoff = s.minBackoff
+			rapidExits = 0
+		} else {
+			rapidExits++
 		}
-		s.logger.Warn("ui: process exited — respawning", "backoff", backoff)
+		// A sustained crash loop (e.g. WebView2 unable to init right after a
+		// resume) escalates the wait to crashLoopBackoff so we stop hammering;
+		// a single healthy run resets it above.
+		wait := backoff
+		if rapidExits >= crashLoopThreshold && wait < crashLoopBackoff {
+			wait = crashLoopBackoff
+			s.logger.Warn("ui: crash loop detected — extended backoff",
+				"rapid_exits", rapidExits, "backoff", wait)
+		}
+		s.logger.Warn("ui: process exited — respawning", "backoff", wait)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(backoff):
+		case <-time.After(wait):
 		}
-		if backoff *= 2; backoff > s.maxBackoff {
-			backoff = s.maxBackoff
+		if backoff < s.maxBackoff {
+			if backoff *= 2; backoff > s.maxBackoff {
+				backoff = s.maxBackoff
+			}
 		}
 	}
 }
