@@ -125,6 +125,8 @@ Heute ist alles in-process; ein Split **schafft eine neue lokale Angriffsfläche
 - Lifecycle-Komplexität: **zwei** Single-Instance-Locks; Collector-Autostart; UI-Cold-Start beim Hotkey (siehe §7); Versions-Handshake zweier separat aktualisierbarer Binaries.
 - Installer/MSI: zwei Binaries ausliefern + registrieren, Collector autostarten, Plugin-Seeding auf den Collector zeigen lassen.
 
+**Nachtrag — Tray-Init-Recovery (Bugfix):** `fyne/systray`s `Run` blockiert auf Windows auch dann dauerhaft in `GetMessage`, wenn `initInstance` fehlschlägt — `registerSystray` loggt nur `systray error: unable to init instance` und kehrt zurück, die Message-Loop läuft aber fensterlos weiter, sodass `Run` nie zurückkehrt und `onTrayReady` nie feuert. Das tritt bei Kaltstarts bzw. Watchdog-Relaunches kurz nach Resume aus Modern Standby auf, solange die Notification-Area noch im Wiederaufbau ist und `Shell_NotifyIcon(NIM_ADD)` mit `E_FAIL` (0x80004005, „Unspecified error") quittiert. Folge bisher: der Collector lebt weiter (Tracking läuft), hat aber kein klickbares Icon — der User sieht nur ein totes „Geister"-Icon des vorher gekillten Prozesses und muss den Collector hart beenden; der Watchdog sieht den wedged-aber-lebenden Prozess als `alive` und startet nicht neu. `runTray` wartet deshalb jetzt mit einem Readiness-Timeout (`trayReadyTimeout`, 8 s) auf das `onTrayReady`-Signal; bleibt es aus, wird derselbe `trayLost`→`os.Exit(1)`→Watchdog-Relaunch-Pfad ausgelöst wie bei einem Teardown. Das Timeout liegt bewusst über dem 5-s-Poll des Watchdogs, damit der kurzlebige Retry zwischen zwei Polls als `alive` gesehen wird und dessen Crash-Loop-Cooldown nicht greift.
+
 ---
 
 ## 6. Bezug zu den anderen Optionen

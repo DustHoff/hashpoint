@@ -31,6 +31,18 @@ const manualTagSlotCount = 64
 // imperceptible to the user yet keeps the menu fresh without wasting CPU.
 const manualTagRefreshInterval = 3 * time.Second
 
+// trayReadyTimeout bounds how long runTray waits for the native tray to come
+// up before treating the start as a failed init. fyne/systray's Run blocks in
+// GetMessage even when initInstance fails: registerSystray logs "unable to
+// init instance" and returns, but Run still enters the message loop with no
+// window, so it never returns and onTrayReady never fires. Without this
+// timeout the collector would sit alive-but-tray-less forever, leaving the
+// user a dead ghost icon that must be killed by hand. 8s is comfortably
+// above both a healthy init (milliseconds) and the watchdog's 5s poll, so the
+// short-lived retry is still observed alive between attempts and does not trip
+// the watchdog's crash-loop cooldown.
+const trayReadyTimeout = 8 * time.Second
+
 func defaultSessionStore() personio.SessionStore {
 	return personio.NewWinCredSessionStore()
 }
@@ -39,30 +51,89 @@ func runTray(ctx context.Context, a *app.App, act trayActions, version string) {
 	// systray.Run blocks until the tray's message loop ends. That happens on a
 	// normal Quit (the ctx.Done path in onTrayReady) but also when the OS tears
 	// the tray window down out from under us — most often as the machine enters
-	// Modern Standby, which then hard-kills this process moments later (#21).
+	// Modern Standby, which then hard-kills this process moments later (#21) —
+	// and, critically, when the native init fails: fyne/systray then wedges in
+	// GetMessage and Run never returns. We therefore run it on its own
+	// goroutine and decide the outcome from a readiness signal, rather than
+	// relying on Run returning.
 	//
 	// We deliberately do not try to rebuild the tray in-process: fyne/systray
 	// keeps global state (quitOnce, the initialized window, the menu-item map)
 	// that a second Run would not cleanly reset. Instead, an unexpected loop
-	// exit asks for a controlled restart — the watchdog brings up a fresh
-	// collector, and thus a fresh, clickable icon, within seconds. Safe() guards
-	// the native loop so even a panic there reaches the restart path rather than
-	// silently ending the goroutine.
-	crashguard.Safe(slog.Default(), "tray-run", func() {
-		systray.Run(func() { onTrayReady(ctx, a, act, version) }, func() {
-			slog.Info("tray: systray.Run returned")
+	// exit (or a failed init) asks for a controlled restart — the watchdog
+	// brings up a fresh collector, and thus a fresh, clickable icon, within
+	// seconds. Safe() guards the native loop so even a panic there reaches the
+	// outcome decision rather than silently ending the goroutine.
+	ready := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		crashguard.Safe(slog.Default(), "tray-run", func() {
+			systray.Run(func() { onTrayReady(ctx, a, act, version, ready) }, func() {
+				slog.Info("tray: systray.Run returned")
+			})
 		})
-	})
-	if ctx.Err() != nil {
+	}()
+
+	reason := waitTrayOutcome(ctx, ready, done, trayReadyTimeout)
+	if reason == "" {
 		return // expected: our own shutdown quit the tray
 	}
-	slog.Error("tray: message loop ended unexpectedly while running — requesting restart")
+	slog.Error("tray: requesting restart", "reason", reason)
 	if act.trayLost != nil {
 		act.trayLost()
 	}
 }
 
-func onTrayReady(ctx context.Context, a *app.App, act trayActions, version string) {
+// waitTrayOutcome blocks until the tray's fate is decided and returns the
+// reason a restart is needed, or "" when the exit is expected (our own
+// shutdown). ready is closed by onTrayReady once the menu is up; done is closed
+// when systray.Run returns. readyTimeout guards against a failed native init,
+// which closes neither channel (Run wedges in GetMessage with no window, so
+// onTrayReady never runs and Run never returns). It is split out from runTray
+// so the decision logic is unit-testable without a live systray.
+func waitTrayOutcome(ctx context.Context, ready, done <-chan struct{}, readyTimeout time.Duration) string {
+	t := time.NewTimer(readyTimeout)
+	defer t.Stop()
+
+	// Phase 1 — wait for the tray to come up, fail to come up, or be cancelled.
+	select {
+	case <-ready:
+		// Tray is up; fall through to phase 2.
+	case <-done:
+		// Run returned before signalling ready (e.g. a teardown racing
+		// startup). The native loop will not come up on its own.
+		if ctx.Err() != nil {
+			return ""
+		}
+		return "tray loop ended before it became ready"
+	case <-ctx.Done():
+		// Our own shutdown beat the tray coming up. The native loop may be
+		// wedged on a failed init, so do not block waiting for done.
+		return ""
+	case <-t.C:
+		// Failed init: registerSystray logged the error and Run is now wedged
+		// in GetMessage. Ask for a restart; trayLost hard-exits the process.
+		if ctx.Err() != nil {
+			return ""
+		}
+		return "tray did not become ready within timeout — native init likely failed"
+	}
+
+	// Phase 2 — tray is serving; wait for the loop to end or our shutdown.
+	select {
+	case <-done:
+		if ctx.Err() != nil {
+			return ""
+		}
+		return "tray message loop ended unexpectedly"
+	case <-ctx.Done():
+		<-done // tray is up, so Quit() returns promptly; let onExit finish
+		return ""
+	}
+}
+
+func onTrayReady(ctx context.Context, a *app.App, act trayActions, version string, ready chan struct{}) {
 	systray.SetIcon(trayIcon())
 	systray.SetTitle("Hashpoint")
 	systray.SetTooltip("Hashpoint TimeTracker " + version)
@@ -96,6 +167,11 @@ func onTrayReady(ctx context.Context, a *app.App, act trayActions, version strin
 	mHelp := systray.AddMenuItem("Hilfe", "Benutzerhandbuch öffnen")
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Beenden", "App beenden")
+
+	// Signal that the tray is fully built and clickable. This only runs once
+	// the native init succeeded (systray invokes onReady from registerSystray
+	// after initInstance), so it is the readiness gate runTray waits on.
+	close(ready)
 
 	for {
 		select {
