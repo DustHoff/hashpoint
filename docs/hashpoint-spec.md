@@ -526,19 +526,40 @@ Sie tragen **kein** `synced_at` und werden bei einem späteren Sync ggf.
 zurück nach Personio gepusht (sofern der gewählte Tag
 `SyncToPersonio = 1` hat).
 
-**Tag-Auflösung beim Import:**
-- `personio_project_id` der Period → lokales Tag mit gleichem
-  `personio_project_id`. Match-Vergleich nutzt String-Form
-  (`strconv.FormatInt`).
-- Kein Match → Fallback auf den Auto-Tag `#PersonioImport`. Der wird
-  beim ersten Import angelegt (Top-Level, Farbe `#94a3b8`,
-  `SyncToPersonio = 0`, damit re-importierte Blöcke nicht ungewollt
-  zurück nach Personio kreiseln). `ensureFallbackTag` sucht den Tag
-  per **Namens-Match** auf der Top-Level-Ebene — wird er gelöscht oder
-  umbenannt, legt der nächste Fallback-Bedarf einen frischen
-  `#PersonioImport` an. Eigenschaften wie Farbe oder Project-ID kann
-  der User im Tag-Manager überschreiben, ohne dass der Lookup das
-  bemerkt.
+**Tag-Auflösung & Kommentar-Schema beim Import:** Der Personio-`comment`
+wird mit `tagging.ParseComment` — dem Gegenstück zum beim Sync erzeugten
+`comment` (siehe unten) — nach dem Export-Schema
+`#Parent #Sub — Beschreibung` zerlegt. Erste greifende Quelle bestimmt das
+Tag:
+
+1. **Kommentar-Schema:** führende `#Parent`/`#Sub`-Tokens → lokales Tag via
+   `TagRepository.EnsureByPath("#Parent/#Sub")` (find-or-create, Match
+   case-insensitiv). Fehlende Tags werden **angelegt**; ein aus Hashpoint
+   exportierter Block landet so wieder unter seinem exakten Sub-Tag statt nur
+   auf Projekt-Ebene.
+2. **`personio_project_id`** der Period → lokales Tag mit gleichem
+   `personio_project_id` (String-Form, `strconv.FormatInt`) — greift, wenn
+   der Kommentar keine Schema-Tags trägt.
+3. **Fallback** auf den Auto-Tag `#PersonioImport`. Der wird beim ersten
+   Import angelegt (Top-Level, Farbe `#94a3b8`, `SyncToPersonio = 0`, damit
+   re-importierte Blöcke nicht ungewollt zurück nach Personio kreiseln).
+   `ensureFallbackTag` sucht den Tag per **Namens-Match** auf der Top-Level-
+   Ebene — wird er gelöscht oder umbenannt, legt der nächste Fallback-Bedarf
+   einen frischen `#PersonioImport` an. Eigenschaften wie Farbe oder
+   Project-ID kann der User im Tag-Manager überschreiben, ohne dass der
+   Lookup das bemerkt.
+
+**Block-Beschreibung:** Nur der Freitext-Teil hinter dem Schema (nach ` — `
+bzw. ` - `) wird als `description` gespeichert — die `#Tags` selbst landen
+nicht mehr in der Beschreibung. Kommentare ohne führende Hashtags gelten als
+reiner Freitext und werden unverändert übernommen. `ParseComment` toleriert
+`—` und `-` als Trenner; interne Bindestriche im Beschreibungstext bleiben
+erhalten.
+
+**Vorschau (Preflight):** `PreflightPeriod.TagName` spiegelt dieselbe
+Reihenfolge (Kommentar-Schema vor `project_id`), löst das Schema aber
+**read-only** gegen die vorhandenen Tags auf (`resolveTagByNames`) und legt
+— anders als `ImportDay` — keine Tags an.
 
 **Granularität:** Der Import nutzt **die Personio-Originalzeiten ohne
 Snap auf das lokale Granularitätsraster**. Personio ist hier die Quelle

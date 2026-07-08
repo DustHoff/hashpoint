@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/dusthoff/hashpoint/internal/storage"
+	"github.com/dusthoff/hashpoint/internal/tagging"
 )
 
 // FallbackTagName is the name of the auto-created tag that catches Personio
@@ -143,10 +144,19 @@ func (s *Syncer) Preflight(ctx context.Context, day time.Time) (*SyncPreflight, 
 			Type:    p.Type,
 			Comment: p.Comment,
 		}
+		// Preview the tag the import would assign: comment schema first
+		// (read-only match — Preflight must not create tags), then
+		// personio_project_id, matching ImportDay's resolution order.
+		parent, subName, _ := tagging.ParseComment(p.Comment)
+		if t, ok := resolveTagByNames(tags, parent, subName); ok {
+			pf.TagName = t.Name
+		}
 		if p.ProjectID != nil {
 			pf.ProjectID = strconv.FormatInt(*p.ProjectID, 10)
-			if t, ok := tagsByProject[pf.ProjectID]; ok {
-				pf.TagName = t.Name
+			if pf.TagName == "" {
+				if t, ok := tagsByProject[pf.ProjectID]; ok {
+					pf.TagName = t.Name
+				}
 			}
 		}
 		out.ExistingPeriods = append(out.ExistingPeriods, pf)
@@ -173,10 +183,14 @@ func (s *Syncer) Preflight(ctx context.Context, day time.Time) (*SyncPreflight, 
 // are authoritative: each Personio period is trimmed against them and the
 // remaining sub-ranges (if any) are inserted as new manual tag blocks.
 //
-// Imported blocks carry the Personio period's comment as their description
-// and a tag resolved via personio_project_id. Periods without a matching
-// tag fall back to the auto-created `FallbackTagName` tag so no time
-// silently disappears.
+// The tag and description are recovered from the period comment using the
+// same `#Parent #Sub — description` schema hashpoint emits on export (see
+// tagging.ParseComment): the parsed hierarchy resolves the tag — creating it
+// via EnsureByPath when it does not exist yet — and only the free-text part
+// becomes the block description. Comments without schema tags fall back to
+// resolving the tag via personio_project_id (and keep the whole comment as
+// the description); periods matching neither fall back to the auto-created
+// `FallbackTagName` tag so no time silently disappears.
 //
 // Imported blocks are inserted as `is_manual=true` so the auto-tagging
 // engine never reclaims them. They are NOT marked synced — re-syncing the
@@ -263,8 +277,25 @@ func (s *Syncer) ImportDay(ctx context.Context, day time.Time) (*ImportResult, e
 			continue
 		}
 
+		// Recover tag + description from the comment schema. The parsed tag
+		// wins over personio_project_id (it carries sub-tag granularity); the
+		// project id and the #PersonioImport tag are progressive fallbacks.
+		parent, subName, parsedDesc := tagging.ParseComment(p.Comment)
+
 		var tagID int64
-		if p.ProjectID != nil {
+		if parent != "" {
+			path := parent
+			if subName != "" {
+				path = parent + "/" + subName
+			}
+			t, err := s.tags.EnsureByPath(ctx, path)
+			if err != nil {
+				res.Errors = append(res.Errors, fmt.Sprintf("period %s: resolve tag %q: %v", p.ID, path, err))
+			} else {
+				tagID = t.ID
+			}
+		}
+		if tagID == 0 && p.ProjectID != nil {
 			pid := strconv.FormatInt(*p.ProjectID, 10)
 			if id, ok := tagsByProject[pid]; ok {
 				tagID = id
@@ -291,7 +322,7 @@ func (s *Syncer) ImportDay(ctx context.Context, day time.Time) (*ImportResult, e
 		}
 
 		var desc *string
-		if c := strings.TrimSpace(p.Comment); c != "" {
+		if c := strings.TrimSpace(parsedDesc); c != "" {
 			if utf8.RuneCountInString(c) > maxImportCommentRunes {
 				s.logger.Warn("personio import: comment truncated",
 					"period", p.ID,
@@ -388,6 +419,37 @@ func subtractRanges(r timeRange, others []timeRange) []timeRange {
 		out = next
 	}
 	return out
+}
+
+// resolveTagByNames finds the tag named by a parsed comment schema
+// (#Parent / #Sub) among already-loaded tags, matching case-insensitively on
+// the hashtag names. It returns the leaf — the sub-tag when present, otherwise
+// the parent — and ok=false when no such tag exists. Pure read: Preflight uses
+// it for its tag-name preview and must not create tags. ImportDay instead
+// resolves (and creates) via TagRepository.EnsureByPath.
+func resolveTagByNames(tags []storage.Tag, parent, sub string) (storage.Tag, bool) {
+	if parent == "" {
+		return storage.Tag{}, false
+	}
+	var parentTag *storage.Tag
+	for i := range tags {
+		if tags[i].ParentID == nil && strings.EqualFold(tags[i].Name, parent) {
+			parentTag = &tags[i]
+			break
+		}
+	}
+	if parentTag == nil {
+		return storage.Tag{}, false
+	}
+	if sub == "" {
+		return *parentTag, true
+	}
+	for i := range tags {
+		if tags[i].ParentID != nil && *tags[i].ParentID == parentTag.ID && strings.EqualFold(tags[i].Name, sub) {
+			return tags[i], true
+		}
+	}
+	return storage.Tag{}, false
 }
 
 // ensureFallbackTag returns the ID of the auto-import placeholder tag,

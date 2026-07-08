@@ -1,6 +1,10 @@
 package tagging
 
-import "github.com/dusthoff/hashpoint/internal/storage"
+import (
+	"strings"
+
+	"github.com/dusthoff/hashpoint/internal/storage"
+)
 
 // EffectiveMapping is the resolved Personio mapping for a tag — the sub-tag's
 // project/activity if set, otherwise inherited from the parent.
@@ -74,6 +78,41 @@ func (m EffectiveMapping) BuildComment() string {
 		parts = append(parts, m.SubDescription)
 	}
 	return joinNonEmpty(parts, " ")
+}
+
+// ParseComment is the inverse of BuildComment: it splits a Personio comment
+// into its parent tag, sub tag and the remaining free-text description.
+//
+// Leading whitespace-separated tokens that satisfy the hashtag schema
+// (^#[A-Za-z0-9]+$) are read as the parent (first) and sub (second) tag;
+// scanning stops at the first non-hashtag token or after two tags. A single
+// standalone separator token ("—" or "-") immediately following the tags is
+// dropped, and the remainder is the description. When the comment has no
+// leading hashtag, parent and sub are empty and description is the trimmed
+// comment — so free-text or manually entered comments survive verbatim.
+//
+// Note: a sub-tag's own Description, which BuildComment appends before the
+// block description, is not distinguished from the block description here; it
+// falls into description and is reconstructed from the resolved tag on
+// re-export.
+func ParseComment(comment string) (parent, sub, description string) {
+	fields := strings.Fields(comment)
+	i := 0
+	for i < len(fields) && i < 2 && IsValidName(fields[i]) {
+		i++
+	}
+	if i > 0 {
+		parent = fields[0]
+	}
+	if i > 1 {
+		sub = fields[1]
+	}
+	rest := fields[i:]
+	if len(rest) > 0 && (rest[0] == "—" || rest[0] == "-") {
+		rest = rest[1:]
+	}
+	description = strings.Join(rest, " ")
+	return parent, sub, description
 }
 
 func joinNonEmpty(parts []string, sep string) string {
