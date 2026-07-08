@@ -569,3 +569,203 @@ func TestImportDay_TruncatesLongComment(t *testing.T) {
 		t.Errorf("expected %d runes after truncation, got %d", maxImportCommentRunes, n)
 	}
 }
+
+// findTag returns the tag with the given name; wantChild selects between a
+// sub-tag (ParentID set) and a top-level tag. Fails the test if absent.
+func findTag(t *testing.T, e *importTestEnv, name string, wantChild bool) storage.Tag {
+	t.Helper()
+	all, err := e.tags.List(e.ctx)
+	if err != nil {
+		t.Fatalf("list tags: %v", err)
+	}
+	for _, tag := range all {
+		if tag.Name == name && (tag.ParentID != nil) == wantChild {
+			return tag
+		}
+	}
+	t.Fatalf("tag %q (child=%v) not found in %+v", name, wantChild, all)
+	return storage.Tag{}
+}
+
+// listDayBlocks returns the tag blocks stored for the 2026-05-08 test day.
+func listDayBlocks(t *testing.T, e *importTestEnv) []storage.TagBlock {
+	t.Helper()
+	got, err := e.blocks.ListBetween(e.ctx,
+		time.Date(2026, 5, 7, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 5, 9, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("list blocks: %v", err)
+	}
+	return got
+}
+
+// TestImportDay_ResolvesTagFromComment: a comment following the export schema
+// creates the #Parent/#Sub hierarchy, tags the block with the sub-tag, and
+// stores only the free-text part as the description.
+func TestImportDay_ResolvesTagFromComment(t *testing.T) {
+	t.Parallel()
+	e := newImportEnv(t)
+	e.resp.Periods = []map[string]any{
+		{
+			"id":         "p-1",
+			"start":      "2026-05-08T08:00:00",
+			"end":        "2026-05-08T10:00:00",
+			"type":       "work",
+			"comment":    "#projekta #frontend — Login fix",
+			"project_id": nil,
+		},
+	}
+	day, _ := time.ParseInLocation("2006-01-02", "2026-05-08", time.Local)
+	res, err := e.syncer.ImportDay(e.ctx, day.UTC())
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if res.BlocksCreated != 1 {
+		t.Fatalf("expected 1 block, got %+v", res)
+	}
+	if res.FallbackTagUsed {
+		t.Errorf("comment-resolved tag must not trigger fallback")
+	}
+	leaf := findTag(t, e, "#frontend", true)
+	parentTag := findTag(t, e, "#projekta", false)
+	if leaf.ParentID == nil || *leaf.ParentID != parentTag.ID {
+		t.Errorf("#frontend should be a child of #projekta")
+	}
+	got := listDayBlocks(t, e)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(got))
+	}
+	if got[0].TagID != leaf.ID {
+		t.Errorf("block should be tagged with sub-tag #frontend (id %d), got %d", leaf.ID, got[0].TagID)
+	}
+	if got[0].Description == nil || *got[0].Description != "Login fix" {
+		t.Errorf("expected description 'Login fix' (schema stripped), got %v", got[0].Description)
+	}
+}
+
+// TestImportDay_CommentTagWinsOverProjectID: when a period carries both a
+// parseable comment schema and a matching project_id, the comment tag wins.
+func TestImportDay_CommentTagWinsOverProjectID(t *testing.T) {
+	t.Parallel()
+	e := newImportEnv(t)
+	pid := "4711"
+	other := storage.Tag{Name: "#other", PersonioProjectID: &pid, SyncToPersonio: true}
+	if err := e.tags.Create(e.ctx, &other); err != nil {
+		t.Fatalf("create tag: %v", err)
+	}
+	e.resp.Periods = []map[string]any{
+		{
+			"id":         "p-1",
+			"start":      "2026-05-08T08:00:00",
+			"end":        "2026-05-08T10:00:00",
+			"type":       "work",
+			"comment":    "#projekta #frontend — Login fix",
+			"project_id": 4711,
+		},
+	}
+	day, _ := time.ParseInLocation("2006-01-02", "2026-05-08", time.Local)
+	res, err := e.syncer.ImportDay(e.ctx, day.UTC())
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if res.BlocksCreated != 1 {
+		t.Fatalf("expected 1 block, got %+v", res)
+	}
+	leaf := findTag(t, e, "#frontend", true)
+	got := listDayBlocks(t, e)
+	if got[0].TagID != leaf.ID {
+		t.Errorf("comment tag #frontend must win over project_id tag; got tag id %d, want %d", got[0].TagID, leaf.ID)
+	}
+	if got[0].TagID == other.ID {
+		t.Errorf("block must not use the project_id tag #other")
+	}
+}
+
+// TestImportDay_CommentTagMatchesExisting: an existing hierarchy is reused
+// (case-insensitively) rather than duplicated.
+func TestImportDay_CommentTagMatchesExisting(t *testing.T) {
+	t.Parallel()
+	e := newImportEnv(t)
+	seeded, err := e.tags.EnsureByPath(e.ctx, "#projekta/#frontend")
+	if err != nil {
+		t.Fatalf("seed tag: %v", err)
+	}
+	e.resp.Periods = []map[string]any{
+		{
+			"id":         "p-1",
+			"start":      "2026-05-08T08:00:00",
+			"end":        "2026-05-08T10:00:00",
+			"type":       "work",
+			"comment":    "#Projekta #Frontend — x", // mixed case must still match
+			"project_id": nil,
+		},
+	}
+	day, _ := time.ParseInLocation("2006-01-02", "2026-05-08", time.Local)
+	if _, err := e.syncer.ImportDay(e.ctx, day.UTC()); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	got := listDayBlocks(t, e)
+	if len(got) != 1 || got[0].TagID != seeded.ID {
+		t.Fatalf("block should reuse existing #frontend id %d, got %+v", seeded.ID, got)
+	}
+	all, _ := e.tags.List(e.ctx)
+	if len(all) != 2 {
+		t.Errorf("expected exactly 2 tags (#projekta, #frontend), got %d: %+v", len(all), all)
+	}
+}
+
+// TestPreflight_ResolvesTagNameFromComment: the preview reflects the
+// comment-resolved tag when it exists locally.
+func TestPreflight_ResolvesTagNameFromComment(t *testing.T) {
+	t.Parallel()
+	e := newImportEnv(t)
+	if _, err := e.tags.EnsureByPath(e.ctx, "#projekta/#frontend"); err != nil {
+		t.Fatalf("seed tag: %v", err)
+	}
+	e.resp.Periods = []map[string]any{
+		{
+			"id":         "p-1",
+			"start":      "2026-05-08T08:00:00",
+			"end":        "2026-05-08T10:00:00",
+			"type":       "work",
+			"comment":    "#projekta #frontend — x",
+			"project_id": nil,
+		},
+	}
+	day, _ := time.ParseInLocation("2006-01-02", "2026-05-08", time.Local)
+	pre, err := e.syncer.Preflight(e.ctx, day.UTC())
+	if err != nil {
+		t.Fatalf("preflight: %v", err)
+	}
+	if len(pre.ExistingPeriods) != 1 || pre.ExistingPeriods[0].TagName != "#frontend" {
+		t.Fatalf("expected preview TagName=#frontend, got %+v", pre.ExistingPeriods)
+	}
+}
+
+// TestPreflight_DoesNotCreateTags: Preflight is read-only — an unmatched
+// comment schema must not materialise tags.
+func TestPreflight_DoesNotCreateTags(t *testing.T) {
+	t.Parallel()
+	e := newImportEnv(t)
+	e.resp.Periods = []map[string]any{
+		{
+			"id":         "p-1",
+			"start":      "2026-05-08T08:00:00",
+			"end":        "2026-05-08T10:00:00",
+			"type":       "work",
+			"comment":    "#brandnew #child — x",
+			"project_id": nil,
+		},
+	}
+	day, _ := time.ParseInLocation("2006-01-02", "2026-05-08", time.Local)
+	if _, err := e.syncer.Preflight(e.ctx, day.UTC()); err != nil {
+		t.Fatalf("preflight: %v", err)
+	}
+	all, err := e.tags.List(e.ctx)
+	if err != nil {
+		t.Fatalf("list tags: %v", err)
+	}
+	if len(all) != 0 {
+		t.Errorf("Preflight must not create tags, but found %+v", all)
+	}
+}
