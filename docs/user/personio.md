@@ -120,13 +120,22 @@ zurückspielen.
 
 **Tag-Zuordnung beim Import:**
 
-- Personio-Projekt-ID → lokales Tag mit gleicher *Personio-Projekt-ID*.
-- Findet sich kein passendes Tag, wird beim ersten Import ein Auto-Tag
-  `#PersonioImport` angelegt (Sync-zu-Personio aus, neutrale Farbe).
-  Spätere Importe ohne Match wiederverwenden denselben Tag, solange er
-  unter dem Namen `#PersonioImport` existiert. Siehe
+Hashpoint liest aus dem Personio-Kommentar dasselbe Schema zurück, das es
+beim Übertragen schreibt: `#Elterntag #Untertag — Beschreibung`.
+
+- Steht im Kommentar ein solches `#Elterntag #Untertag`, wird der Block
+  genau diesem Tag zugeordnet. Fehlt das Tag lokal noch, legt Hashpoint es
+  (inklusive Hierarchie) automatisch an.
+- Andernfalls greift die *Personio-Projekt-ID* → lokales Tag mit gleicher
+  Personio-Projekt-ID.
+- Findet sich auch darüber kein passendes Tag, wird beim ersten Import ein
+  Auto-Tag `#PersonioImport` angelegt (Sync-zu-Personio aus, neutrale
+  Farbe). Spätere Importe ohne Match wiederverwenden denselben Tag, solange
+  er unter dem Namen `#PersonioImport` existiert. Siehe
   [Tags → Automatisch angelegte Tags](tags.md#automatisch-angelegte-tags).
-- Der Personio-`comment` wird als Block-Beschreibung übernommen.
+- Als **Block-Beschreibung** wird nur der Text hinter dem Schema übernommen
+  (die `#Tags` selbst nicht). Kommentare ohne solche Tags werden komplett
+  als Beschreibung übernommen.
 
 Die Vorab-Prüfung gilt für **alle drei Sync-Auslöser**:
 
