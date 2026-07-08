@@ -8,13 +8,15 @@ nötig.
 
 ## Aufbau des Tabs
 
-Der Tab ist in fünf Abschnitte unterteilt:
+Der Tab ist in sieben Abschnitte unterteilt:
 
 1. **Erfassung** — globaler Erfassungs-Schalter, Polling-Intervall, Idle-Schwelle und Tag-Block-Granularität.
-2. **Quick-Tag-Picker** — globaler Hotkey für die schnelle Tag-Auswahl (siehe [Quick-Tag-Picker](quick-tag.md)).
-3. **Kommunikations-Prozesse** — Liste paralleler Erfassungsprozesse (Teams, Zoom, …) für hybride Meetings.
-4. **Personio** — Tenant-Subdomain und interaktive Anmeldung.
-5. **Microsoft Entra ID** — Client-/Tenant-ID und optionale Anmeldung für Microsoft 365 / SharePoint / Custom-APIs.
+2. **Arbeitszeit** — nominale tägliche Arbeitszeit und Arbeitstage (Hervorhebung im Monatskalender und Off-Hours-Definition der Rufbereitschaft).
+3. **Quick-Tag-Picker** — globaler Hotkey für die schnelle Tag-Auswahl (siehe [Quick-Tag-Picker](quick-tag.md)).
+4. **Kommunikations-Prozesse** — Liste paralleler Erfassungsprozesse (Teams, Zoom, …) für hybride Meetings.
+5. **Personio** — Tenant-Subdomain und interaktive Anmeldung.
+6. **Microsoft Entra ID** — Client-/Tenant-ID und optionale Anmeldung für Microsoft 365 / SharePoint / Custom-APIs.
+7. **Rufbereitschaft** — Tags, deren Blöcke außerhalb der Arbeitszeit als Rufbereitschaft dokumentiert werden (siehe [Rufbereitschaft](rufbereitschaft.md)).
 
 > **Autostart:** Der TimeTracker bietet hier keinen Autostart-Schalter mehr. Der MSI-Installer aktiviert den Autostart automatisch für den installierenden Account; eine manuelle Aktivierung beschreibt der Abschnitt [Autostart](installation.md#autostart) im Installationskapitel.
 
@@ -30,6 +32,21 @@ Validierungsfehler werden oben im Tab als Banner angezeigt.
 | **Poll-Intervall (Sekunden)** | `2` | `1`–`300` | Wie oft prüft der TimeTracker, welches Fenster im Vordergrund ist. Niedriger = präziser, aber höhere CPU-Last. |
 | **Idle-Schwelle (Minuten)** | `5` | `1`–`240` | Nach wie vielen Minuten ohne Tastatur-/Maus-Eingabe der laufende Block beendet und als **Idle** markiert wird. |
 | **Tag-Block-Granularität (Minuten)** | `0` | `0`–`60` | Legt **Tag-Blöcke** (manuelle Range-Tags und Auto-Tag-Blöcke) auf ein **Slot-Raster** dieser Breite (verankert an lokaler Mitternacht, also z. B. `:00/:15/:30/:45` bei `15`). Beginn wird **abgerundet**, Ende **abgerundet**. Auto-Tag-Blöcke unterhalb der Granularität werden nicht erzeugt (Zero-Length-Suppression). **Process-Tracks** sind von dieser Einstellung **nicht** betroffen — der untere Strip zeigt immer die rohen, sekundengenauen Zeiten. Werteänderungen treten ohne Neustart in Kraft (greifen ab dem nächsten Tag-Block-Boundary). `0` deaktiviert das Raster komplett. |
+
+## Arbeitszeit
+
+Legt die **nominale** tägliche Arbeitszeit und die Arbeitstage fest. Diese Werte
+beeinflussen die Erfassung selbst **nicht** — sie läuft weiter, solange sie aktiv
+ist. Sie werden an zwei Stellen genutzt: zur **Hervorhebung im Monatskalender**
+(Nicht-Arbeitstage werden gedämpft dargestellt) und als **Off-Hours-Definition der
+[Rufbereitschaft](rufbereitschaft.md)** — Blöcke außerhalb dieser Zeiten oder an
+Nicht-Arbeitstagen qualifizieren sich für die Rufbereitschafts-Dokumentation.
+
+| Feld | Default | Bereich | Bedeutung |
+| --- | --- | --- | --- |
+| **Arbeitsbeginn** | `8` | `0`–`23` | Volle Stunde, **inklusiv**. |
+| **Arbeitsende** | `18` | `1`–`24` | Volle Stunde, **exklusiv** — `18` bedeutet „bis 17:59". Muss größer als **Arbeitsbeginn** sein. |
+| **Arbeitstage** | Mo–Fr | Mo–So | Aktive Wochentage (Mehrfachauswahl). Aktive Tage werden im Kalender normal dargestellt, inaktive gedämpft. In der `config.toml` als `["Mon","Tue","Wed","Thu","Fri"]`. |
 
 ## Quick-Tag-Picker
 
@@ -162,6 +179,19 @@ können den Login anstoßen oder zurücksetzen:
 
 Details zur App-Registrierung, zum Anmelde-Flow und zur Fehlerbehandlung
 siehe [Microsoft Entra ID](entra-id.md).
+
+## Rufbereitschaft
+
+Wählt die Tags, deren Blöcke **außerhalb der Arbeitszeit** (siehe Abschnitt
+[Arbeitszeit](#arbeitszeit)) als Rufbereitschaft dokumentiert werden. Untergeordnete
+Tags zählen automatisch mit — es genügt, den Eltern-Tag auszuwählen.
+
+| Feld | Bedeutung |
+| --- | --- |
+| **Rufbereitschafts-Tags** | Mehrfachauswahl. Über das Suchfeld lassen sich Tag-Namen oder Branch-Pfade (z. B. `rufbereitschaft/applikation-x`) filtern. **Ohne Auswahl bleibt die Rufbereitschafts-Funktion deaktiviert** — es werden keine Doku-Zeilen erzeugt. |
+
+Der vollständige Workflow (Inbox, Formular, Plugin-Übertragung, dynamische Feiertage)
+ist unter [Rufbereitschaft](rufbereitschaft.md) beschrieben.
 
 ## `config.toml` — direkter Zugriff (optional)
 

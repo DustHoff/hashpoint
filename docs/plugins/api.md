@@ -106,6 +106,7 @@ const (
     CapOffHoursProvider    Capability = "off_hours_provider"
     CapPluginManagement    Capability = "plugin_management"
     CapProcessAutoTag      Capability = "process_autotag"
+    CapTagProvider         Capability = "tag_provider"
 )
 ```
 
@@ -229,6 +230,10 @@ Contract with the host:
   `Uninstall` returns; the handler must not touch the database.
 - A source cannot uninstall itself — the host returns
   `ErrSelfUninstallRefused` and never invokes the handler.
+- Install / Update / Uninstall targeting a source that is not currently
+  running fails with `ErrUnknownPluginSource`: the host has no live
+  handler to route the call to. Surface this as "the managing plugin is
+  not available" rather than a generic failure.
 - Errors are surfaced verbatim in the UI; wrap with context.
 
 ### `process_autotag`

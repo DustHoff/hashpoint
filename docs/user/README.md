@@ -22,8 +22,10 @@ Der TimeTracker ist eine Windows-Desktop-Anwendung, die im Hintergrund automatis
 | [Auto-Tagging-Regeln](auto-tagging.md) | Regeln definieren, testen und auf Historie anwenden |
 | [Personio-Synchronisation](personio.md) | Voraussetzungen, Sync-Logik, Fehlerbehandlung |
 | [Microsoft Entra ID](entra-id.md) | Optionale Anmeldung für Microsoft 365, SharePoint, Kalender, Custom-APIs |
+| [Plugins](plugins.md) | Installierte Plugins verwalten, Verfügbare-Plugins-Katalog, Genehmigung, Capabilities |
 | [Systemtray](tray.md) | Tray-Menü, Pause, manuelles Tagging, Beenden |
 | [Quick-Tag-Picker](quick-tag.md) | Globaler Hotkey für blitzschnelles manuelles Taggen |
+| [Feedback](feedback.md) | Fehler & Wünsche als GitHub-Issue melden (Geräte-Login, Log-Anhang) |
 
 ## Schnellstart in fünf Schritten
 
@@ -37,10 +39,13 @@ Der TimeTracker ist eine Windows-Desktop-Anwendung, die im Hintergrund automatis
 
 - **Tray-Icon (rechts unten):** Pause umschalten, manuelles Tagging,
   Sync zu Personio, Beenden
-- **Hauptfenster:** Sechs Tabs – Zeitachse, Tags, Auto-Tagging,
-  Einstellungen, Hilfe, Über; oben rechts der Personio-Status-Badge.
-  Der Tab **Hilfe** zeigt das eingebettete Benutzerhandbuch (auch
-  direkt aus dem Tray über den Eintrag *Hilfe* erreichbar).
+- **Hauptfenster:** Zehn Tabs – Zeitachse, Rufbereitschaft, Tags,
+  Auto-Tagging, Einstellungen, Plugins, Verfügbare Plugins, Hilfe,
+  Feedback, Über; oben rechts die Status-Badges für Personio und —
+  sofern konfiguriert — Entra ID. Der Tab **Über** zeigt Version,
+  Commit, Build-Datum und das Datenverzeichnis. Der Tab **Hilfe**
+  zeigt das eingebettete Benutzerhandbuch (auch direkt aus dem Tray
+  über den Eintrag *Hilfe* erreichbar).
 - **Konfigurationsdatei:** `%APPDATA%\TimeTracker\config.toml`
 - **Datenbank & Logs:** `%LOCALAPPDATA%\TimeTracker\`
 - **Personio-Session:** Windows Credential Manager
