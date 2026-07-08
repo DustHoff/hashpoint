@@ -40,6 +40,7 @@ Der Tab **Tags** ist zweispaltig:
 | **Personio Project ID** | für Sync | ID des Projekts in Personio (z. B. `12345`). Sub-Tags erben den Wert vom Eltern-Tag, wenn leer. |
 | **Personio Activity ID** | für Sync | ID der Aktivität in Personio (z. B. `67890`). Sub-Tags erben den Wert vom Eltern-Tag, wenn leer. |
 | **Zu Personio synchronisieren** | nein | Default an. Bei deaktivierter Checkbox werden Blöcke mit diesem Tag **nicht** übertragen. |
+| **Auftrag** | nein | Optionaler Auftrags-/Projektbezug. Wählbar aus einem `tag_provider`-Plugin (siehe [Plugins](plugins.md)) oder frei eingebbar. Wird gespeichert, aber **nicht** zu Personio synchronisiert. |
 
 ### Namens-Regeln
 

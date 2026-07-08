@@ -81,12 +81,15 @@ var helpPageOrder = []string{
 	"installation",
 	"einstellungen",
 	"zeiterfassung",
+	"rufbereitschaft",
 	"tags",
 	"auto-tagging",
 	"personio",
 	"entra-id",
+	"plugins",
 	"tray",
 	"quick-tag",
+	"feedback",
 }
 
 // UserDocPage is the metadata payload used by the Help-tab sidebar.

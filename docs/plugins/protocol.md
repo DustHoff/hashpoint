@@ -208,6 +208,14 @@ on each tick. Manually-deleted plugin directories are intentionally
 **not** cleaned up; their entries stay in the list until the next app
 restart.
 
+## Crash detection
+
+Independently of discovery, the host polls each running plugin's
+subprocess liveness every 2 s (`defaultExitPollInterval`). When a
+subprocess exits unexpectedly the plugin is moved to `failed` and its
+capability fan-outs stop routing to it until it is restarted — manually
+via *„Neu starten"* (`Host.ReloadPlugin`) or on the next app start.
+
 ## Name validation & approval gate
 
 Two checks run at the very top of `launch()`, before any path is built
