@@ -30,6 +30,50 @@ func TestStart_NoPreviousMarker_NoReport(t *testing.T) {
 	}
 }
 
+func TestStart_StartUTC(t *testing.T) {
+	processStart := time.Date(2026, 10, 9, 4, 49, 44, 886_000_000, time.UTC)
+	tests := []struct {
+		name string
+		info Info
+		// want is nil when start_utc should be the arm time (≈ now).
+		want *time.Time
+	}{
+		{"process start recorded", Info{ProcessStart: processStart}, &processStart},
+		{"non-UTC process start normalised", Info{ProcessStart: processStart.In(time.FixedZone("CEST", 2*3600))}, &processStart},
+		{"zero falls back to arm time", Info{}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			logger, _ := bufLogger()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			before := time.Now().UTC()
+			mk, err := Start(ctx, dir, RoleCollector, tt.info, logger)
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			defer mk.Disarm()
+
+			snap, err := ReadMarker(MarkerPath(dir, RoleCollector))
+			if err != nil {
+				t.Fatalf("ReadMarker: %v", err)
+			}
+			if tt.want != nil {
+				if !snap.StartUTC.Equal(*tt.want) {
+					t.Errorf("StartUTC = %v, want %v", snap.StartUTC, *tt.want)
+				}
+			} else if snap.StartUTC.Before(before) || snap.StartUTC.After(time.Now().UTC()) {
+				t.Errorf("StartUTC = %v, want arm time ≥ %v", snap.StartUTC, before)
+			}
+			if snap.LastAlive.Before(before) {
+				t.Errorf("LastAlive = %v, want arm time ≥ %v", snap.LastAlive, before)
+			}
+		})
+	}
+}
+
 func TestStart_StaleMarker_ReportsUnclean(t *testing.T) {
 	dir := t.TempDir()
 	writeMarker(t, dir, "monolith.alive", markerFile{
