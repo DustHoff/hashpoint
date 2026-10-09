@@ -38,6 +38,12 @@ const heartbeatInterval = 30 * time.Second
 type Info struct {
 	Version string
 	Commit  string
+	// ProcessStart is the OS-recorded creation time of the arming process.
+	// When set it becomes the marker's start_utc, which the watchdog compares
+	// with the live process's creation time to rule out PID reuse. Zero falls
+	// back to the time the marker is armed — which, late in a slow startup, can
+	// drift past the watchdog's tolerance and trigger false relaunches.
+	ProcessStart time.Time
 }
 
 // markerFile is the on-disk JSON shape of a sentinel.
@@ -79,6 +85,10 @@ func Start(ctx context.Context, dataDir string, role Role, info Info, logger *sl
 		return nil, fmt.Errorf("create runtime dir: %w", err)
 	}
 	now := time.Now().UTC()
+	start := now
+	if !info.ProcessStart.IsZero() {
+		start = info.ProcessStart.UTC()
+	}
 	m := &Marker{
 		path:   path,
 		logger: logger,
@@ -87,7 +97,7 @@ func Start(ctx context.Context, dataDir string, role Role, info Info, logger *sl
 			Mode:      string(role),
 			Version:   info.Version,
 			Commit:    info.Commit,
-			StartUTC:  now,
+			StartUTC:  start,
 			LastAlive: now,
 		},
 	}

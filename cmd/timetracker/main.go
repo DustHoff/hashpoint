@@ -89,7 +89,7 @@ const (
 func dispatch(args []string) error {
 	switch mode, pipe := parseArgs(args); mode {
 	case modeCollector:
-		return runCollector()
+		return runCollector(hasArg(args, watchdogRelaunchFlag))
 	case modeUI:
 		return runUI(pipe)
 	case modeWatchdog:
@@ -118,6 +118,32 @@ func parseArgs(args []string) (procMode, string) {
 		}
 	}
 	return mode, pipe
+}
+
+// watchdogRelaunchFlag marks a collector started by the watchdog rather than
+// by the user. Such a launch must never steal focus: if a collector already
+// runs, the watchdog misjudged its liveness and the duplicate just exits.
+const watchdogRelaunchFlag = "--watchdog-relaunch"
+
+// hasArg reports whether flag appears verbatim in args.
+func hasArg(args []string, flag string) bool {
+	for _, a := range args {
+		if a == flag {
+			return true
+		}
+	}
+	return false
+}
+
+// processStartTime returns this process's OS creation time for the crash
+// marker, or zero (marker falls back to the arm time) if it cannot be read.
+func processStartTime() time.Time {
+	t, err := winapi.CurrentProcessCreationTime()
+	if err != nil {
+		slog.Warn("crashguard: process creation time unavailable — using arm time", "err", err)
+		return time.Time{}
+	}
+	return t
 }
 
 func run() error {
@@ -154,7 +180,7 @@ func run() error {
 	// next start to detect. Best-effort — an arm failure only disables crash
 	// detection, it must not block startup.
 	mk, err := crashguard.Start(ctx, paths.DataDir, crashguard.RoleMonolith,
-		crashguard.Info{Version: version, Commit: commit}, slog.Default())
+		crashguard.Info{Version: version, Commit: commit, ProcessStart: processStartTime()}, slog.Default())
 	if err != nil {
 		slog.Warn("crashguard: arm failed — crash detection disabled", "err", err)
 	}

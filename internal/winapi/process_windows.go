@@ -62,6 +62,19 @@ func ProcessLiveness(pid int, wantImage string, wantCreate time.Time) (bool, err
 	return true, nil
 }
 
+// CurrentProcessCreationTime returns the OS-recorded creation time of the
+// calling process in UTC. Liveness markers record it instead of a wall-clock
+// reading taken later in startup, so ProcessLiveness's creation-time guard
+// holds however long the process took to arm its marker — a slow start under
+// login load must not look like PID reuse to the watchdog.
+func CurrentProcessCreationTime() (time.Time, error) {
+	var create, exit, kernel, user windows.Filetime
+	if err := windows.GetProcessTimes(windows.CurrentProcess(), &create, &exit, &kernel, &user); err != nil {
+		return time.Time{}, fmt.Errorf("GetProcessTimes: %w", err)
+	}
+	return time.Unix(0, create.Nanoseconds()).UTC(), nil
+}
+
 // imageMatches reports whether the process image base name (case-insensitive)
 // equals want. A query failure is treated as a match so a transient error does
 // not suppress a needed liveness signal.

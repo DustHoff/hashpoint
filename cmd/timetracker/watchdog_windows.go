@@ -139,7 +139,8 @@ func (windowsProbe) CollectorAlive(_ context.Context, t watchdog.Target) (bool, 
 	return alive, snap.LastAlive, nil
 }
 
-// Relaunch starts the collector (--collector) in the interactive user session.
+// Relaunch starts the collector (--collector) in the interactive user session,
+// tagged with watchdogRelaunchFlag so a duplicate launch never raises the UI.
 func (windowsProbe) Relaunch(_ context.Context, t watchdog.Target) error {
 	sid, err := winapi.ActiveConsoleSessionID()
 	if err != nil {
@@ -154,7 +155,7 @@ func (windowsProbe) Relaunch(_ context.Context, t watchdog.Target) error {
 	}
 	defer func() { _ = tok.Close() }()
 
-	if _, err := winapi.LaunchAsUser(tok, t.Exe, []string{"--collector"}, filepath.Dir(t.Exe)); err != nil {
+	if _, err := winapi.LaunchAsUser(tok, t.Exe, []string{"--collector", watchdogRelaunchFlag}, filepath.Dir(t.Exe)); err != nil {
 		return fmt.Errorf("launch collector: %w", err)
 	}
 	return nil
