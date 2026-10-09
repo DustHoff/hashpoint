@@ -35,10 +35,17 @@ const collectorInstanceMutexName = "Hashpoint.Collector"
 //
 // Tray ownership and on-demand UI spawning (vs. the always-on supervision used
 // here) land in the lifecycle step; the shipped default remains run().
-func runCollector() error {
+func runCollector(watchdogRelaunch bool) error {
 	lock, err := winapi.AcquireSingleInstanceLock(collectorInstanceMutexName)
 	if err != nil {
 		if errors.Is(err, winapi.ErrAlreadyRunning) {
+			if watchdogRelaunch {
+				// The watchdog misjudged a live collector as dead. Exit
+				// quietly: raising the UI here would pop the window up on
+				// every relaunch the watchdog attempts.
+				fmt.Fprintln(os.Stderr, "hashpoint: collector already running — ignoring watchdog relaunch")
+				return nil
+			}
 			// A collector is already running (e.g. autostarted at login and
 			// this is a Start-menu click): ask it to show the UI, then exit.
 			return signalShowUI()
@@ -61,7 +68,7 @@ func runCollector() error {
 	// runs on the clean teardown below; an abrupt kill leaves the marker for the
 	// next collector start to report.
 	mk, err := crashguard.Start(ctx, paths.DataDir, crashguard.RoleCollector,
-		crashguard.Info{Version: version, Commit: commit}, slog.Default())
+		crashguard.Info{Version: version, Commit: commit, ProcessStart: processStartTime()}, slog.Default())
 	if err != nil {
 		slog.Warn("crashguard: arm failed — crash detection disabled", "err", err)
 	}
