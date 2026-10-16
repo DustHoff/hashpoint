@@ -10,7 +10,7 @@ Personios öffentliche Attendance-API erlaubt nur **firmenweite** OAuth-Credenti
 
 ## Entscheidung
 
-- Nutzung der **internen UI-API** (dieselbe wie die Personio-Web-App): `GET /api/v1/navigation/context`, `GET /svc/attendance-bff/v1/timesheet/{employee_id}`, `PUT /svc/attendance-api/v1/days/{day_id}`.
+- Nutzung der **internen UI-API** (dieselbe wie die Personio-Web-App): `GET /api/v1/navigation/context`, `GET /svc/attendance-bff/v1/timesheet/{employee_id}`, zum Schreiben ursprünglich `PUT /svc/attendance-api/v1/days/{day_id}` – seit Okt. 2026 die GraphQL-Mutation `TrackAttendancePeriodsOnDay` (siehe ADR 0025).
 - **Login über eine eigene Chrome-Instanz via `chromedp`/CDP**: Anwender meldet sich interaktiv an (inkl. MFA/SSO), Cookies werden übernommen, der tatsächliche `AppHost` wird erfasst.
 - Auth ist **cookie-basiert**; das XSRF-Cookie wird als `x-athena-xsrf-token` gespiegelt. Keine automatische Redirect-Verfolgung: `401/403` oder `30x → /login` ⇒ `ErrSessionExpired`.
 - Session-Blob wird im **Windows Credential Manager** (`TimeTracker.PersonioSession`) gespeichert, nie in `config.toml`; Auth-Header werden nie geloggt.

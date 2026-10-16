@@ -432,33 +432,52 @@ Pro Request:
 | --- | --- |
 | `GET /api/v1/navigation/context` | Eigene Mitarbeiter-ID auflösen (`data.user.id`). |
 | `GET /svc/attendance-bff/v1/timesheet/{employee_id}?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&timezone=Europe%2FBerlin&source=OVERTIME_SERVICE` | Pro Tag im Zeitraum: `day_id`, `state` (`trackable` / `locked` / `non_trackable` / …), bestehende `periods`. |
-| `PUT /svc/attendance-api/v1/days/{day_id}?autoFix=true&usedInTimesheet=true` | Perioden eines Tages setzen (Upsert über UUID). |
-| `DELETE /svc/attendance-api/v1/days/{day_id}` | Tag löschen (aktuell nicht vom Sync verwendet). |
+| `POST /graphql?op=TM_TrackAttendancePeriodsOnDay_v2026071301` | Alle Perioden eines Tages setzen (ersetzt den Tag; Adressierung über das Datum). |
 
-**day_id-Auflösung:** Das Timesheet liefert pro Tag entweder eine bestehende `day_id` oder einen leeren Wert. Hat der Tag noch keinen Personio-Datensatz und ist `trackable`, **generiert der Client clientseitig eine UUID v4** und sendet damit den PUT — der Endpunkt erzeugt den Datensatz dann. Tage mit `state=non_trackable` (Wochenenden, Sperren) werden als „nicht buchbar" mit Fehler übersprungen.
+> **Attendance-Migration (Okt. 2026):** Personio hat das Schreiben von Arbeitszeiten auf GraphQL umgestellt (`TM_GetAttendanceSettingsMigration` meldet `MIGRATION_STATE_CONSUMPTION_ENABLED`). Der frühere Endpunkt `PUT /svc/attendance-api/v1/days/{day_id}?autoFix=true&usedInTimesheet=true` antwortet seitdem mit `501 Not Implemented` und wird nicht mehr verwendet. Das Timesheet-`GET` ist unverändert.
 
-**Body von `PUT /svc/attendance-api/v1/days/{day_id}`:**
+**Tag-Adressierung:** Die Mutation adressiert den Tag über `assumedAttributionDate`; eine `day_id` ist zum Schreiben nicht mehr nötig. Tage mit `state=non_trackable` (Wochenenden, Sperren) oder ohne Timesheet-Eintrag werden weiterhin als „nicht buchbar" mit Fehler übersprungen.
+
+**Persisted Query:** Das Feld `query` enthält nicht den GraphQL-Text, sondern den SHA-256-Hash eines bei Personio registrierten Dokuments. Operationsname (inkl. Versionssuffix) und Hash stammen aus dem HAR-Capture der Web-App und sind als Konstanten in `internal/personio/track.go` hinterlegt. Kennt Personio die Operation nicht mehr (`PERSISTED_QUERY_NOT_FOUND`), liefert der Client `ErrOperationOutdated` – Abhilfe ist ein Code-Update, kein erneuter Login.
+
+**Body von `POST /graphql?op=TM_TrackAttendancePeriodsOnDay_v2026071301`:**
 ```json
 {
-  "employee_id": 10076878,
-  "periods": [
-    {
-      "id":             "<uuidv4>",
-      "comment":        "#projekta #frontend — Refactoring Login-Flow",
-      "period_type":    "work",
-      "project_id":     4711,
-      "start":          "2026-04-25T08:00:00",
-      "end":            "2026-04-25T09:00:00",
-      "auto_generated": false
+  "query": "52d040f7dfa51ff8a9a3cd149cd2da58c5d15ed404f2be69e1d081bcab879c83",
+  "operationName": "TM_TrackAttendancePeriodsOnDay_v2026071301",
+  "variables": {
+    "input": {
+      "autoFix": false,
+      "origin": "ATTENDANCE_ORIGIN_WEB",
+      "assumedAttributionDate": {"year": 2026, "month": 4, "day": 25},
+      "personId": {"id": "<employee_id>"},
+      "attendancePeriods": [
+        {
+          "id": {"id": "<uuidv4>"},
+          "type": "ATTENDANCE_PERIOD_TYPE_WORK",
+          "startLocalTime": {"date": {"year": 2026, "month": 4, "day": 25}, "time": {"hours": 8, "minutes": 0}},
+          "endLocalTime":   {"date": {"year": 2026, "month": 4, "day": 25}, "time": {"hours": 9, "minutes": 0}},
+          "projectId": {"id": "4711"},
+          "comment": "#projekta #frontend — Refactoring Login-Flow",
+          "personId": {"id": "<employee_id>"},
+          "origin": "ATTENDANCE_ORIGIN_WEB",
+          "legacyBreakMinutes": 0,
+          "startGeolocation": null,
+          "endGeolocation": null,
+          "duration": {"seconds": "3600"}
+        }
+      ]
     }
-  ],
-  "original_periods": [...same...],
-  "geolocation":      null,
-  "is_from_clock_out": false
+  }
 }
 ```
 
-**Zeitformat:** lokal-naiv (`YYYY-MM-DDTHH:MM:SS`, kein `Z`/Offset). Timezone wird über den `timezone`-Parameter im Timesheet-Request gesetzt; Default `Europe/Berlin`.
+- Die Liste `attendancePeriods` beschreibt den **vollständigen** Tag (die Web-App sendet beim Hinzufügen einer zweiten Periode beide).
+- `projectId` ist `null` oder `{"id":"<project_id>"}`. Das Objekt-Format ist aus dem übrigen ID-Schema abgeleitet und noch nicht per HAR mit Projekt belegt.
+- `time.seconds` wird nur gesendet, wenn ungleich 0.
+- **Antwort:** `data.trackAttendancePeriodsOnDay.{original,saved}.attendancePeriodsList`. Fachliche Fehler kommen mit HTTP `200` im `errors`-Array und werden als Fehler pro Tag gemeldet; fehlt `saved`, gilt der Schreibvorgang als fehlgeschlagen.
+
+**Zeitformat:** Timesheet-Antworten sind lokal-naiv (`YYYY-MM-DDTHH:MM:SS`, kein `Z`/Offset); die GraphQL-Mutation erwartet lokales Datum + Uhrzeit als strukturierte Objekte. Timezone wird über den `timezone`-Parameter im Timesheet-Request gesetzt; Default `Europe/Berlin`.
 
 > Die UI-API kennt im Period-Modell **keine Activity-ID**. `tags.personio_activity_id` bleibt deshalb als **Legacy-Feld** im Schema/UI bestehen, wird aber beim Sync nicht verwendet. Sollte Personio das Feld in einer späteren UI-Version wieder einführen, kann der Syncer es ohne Schemaänderung berücksichtigen.
 
@@ -471,8 +490,8 @@ Pro Request:
   Zeitabstand ≤ 5 s werden zu **einer** Period zusammengefasst. Eine
   Lücke darüber oder ein nicht-syncbarer Block beendet den Lauf.
 - Pro Period: `start` = früheste Tag-Block-Startzeit des Laufs, `end` =
-  späteste Tag-Block-Endzeit (UTC → lokal-naive `YYYY-MM-DDTHH:MM:SS`).
-- `period_type` ist immer `"work"`. Pausen werden aktuell nicht synchronisiert.
+  späteste Tag-Block-Endzeit (UTC → lokales Datum + Uhrzeit).
+- `type` ist immer `ATTENDANCE_PERIOD_TYPE_WORK`. Pausen werden aktuell nicht synchronisiert.
 - Kommentar-Format: `"<parent_name> <sub_name> <sub_description>"` aus dem
   Tag-Mapping, plus optional ` — <block_description>` aus
   `tag_blocks.description`. Die Block-Description kann aus einem
@@ -484,7 +503,8 @@ Pro Request:
 
 #### 2.5.4 Fehlerbehandlung
 - Antwort `401`/`403` oder `30x → /login` ⇒ `ErrSessionExpired`. Im UI: rotes Banner mit Hinweis auf erneute Anmeldung; Tray-Sync schreibt nur ins Log.
-- Antwort `4xx` (z. B. Tag nicht buchbar) ⇒ Eintrag im `Result.Errors` mit Datum + Statusmeldung.
+- Antwort `4xx`/`5xx` oder GraphQL-`errors` (z. B. Tag nicht buchbar, überlappende Perioden) ⇒ Eintrag im `Result.Errors` mit Datum + Meldung.
+- GraphQL `PERSISTED_QUERY_NOT_FOUND` ⇒ `ErrOperationOutdated` („Personio hat die Web-API geändert, Hashpoint-Update nötig") als Fehler pro Tag; die Blöcke bleiben unsynchronisiert.
 - Auth-Header (`X-CSRF-Token`, Cookies) werden **nie** geloggt.
 
 #### 2.5.5 Sync-Modi & Idempotenz
@@ -492,16 +512,17 @@ Pro Request:
 - Zeitraum (`SyncRange`) — aktuell intern, im UI nicht exponiert.
 - Automatisch beim Starten der Anwendung für den letzten unsynchronisierten
   Werktag vor heute (siehe §2.5.6).
-- Personio's `PUT day` ist idempotent (ersetzt den Tag). Bereits
+- Die Mutation `TrackAttendancePeriodsOnDay` ist idempotent (ersetzt den Tag). Bereits
   synchronisierte Tag-Blöcke werden lokal mit `synced_at` und der `day_id`
-  als `personio_id` markiert (`tag_blocks` trägt diese Felder). Erneuter
+  aus dem Timesheet als `personio_id` markiert (Fallback ohne Personio-Datensatz:
+  das Datum `YYYY-MM-DD`; `tag_blocks` trägt diese Felder). Erneuter
   Sync überschreibt den Personio-Tag mit dem aktuellen Stand; manuelle
   Änderungen in Personio gehen dabei verloren — solange der Anwender nicht
   vorher auf „Importieren" wählt (siehe §2.5.7).
 
 #### 2.5.7 Pre-Sync-Check & Personio-Import
 
-Bevor der eigentliche `PUT day` ausgeführt wird, ruft der Syncer
+Bevor der eigentliche Schreibvorgang ausgeführt wird, ruft der Syncer
 `Syncer.Preflight(ctx, day)` auf — eine reine Lese-Operation, die das
 Timesheet abruft und die bestehenden **Work-Type-Perioden** des Tages
 zurückgibt. Break-Perioden lösen den Check nicht aus, weil Personio sie
@@ -512,8 +533,8 @@ ein Modal-Dialog angezeigt, der dem User drei Optionen gibt:
 
 | Option | Wirkung |
 | --- | --- |
-| **Trotzdem überschreiben** | Klassisches `PUT day` — Personio-Stand wird durch den lokalen Hashpoint-Stand ersetzt. Manuelle Personio-Eingaben gehen verloren. |
-| **Aus Personio importieren** | `Syncer.ImportDay(ctx, day)`: zieht die Personio-Perioden in die `tag_blocks`-Tabelle. Lokale Tag-Blöcke gewinnen — überlappende Importe werden zurechtgeschnitten (siehe unten). Anschließend wird **kein** PUT ausgeführt; der User kann reviewen und erneut auf Sync klicken. |
+| **Trotzdem überschreiben** | Schreib-Mutation (`TrackPeriodsOnDay`) — Personio-Stand wird durch den lokalen Hashpoint-Stand ersetzt. Manuelle Personio-Eingaben gehen verloren. |
+| **Aus Personio importieren** | `Syncer.ImportDay(ctx, day)`: zieht die Personio-Perioden in die `tag_blocks`-Tabelle. Lokale Tag-Blöcke gewinnen — überlappende Importe werden zurechtgeschnitten (siehe unten). Anschließend wird **nicht** geschrieben; der User kann reviewen und erneut auf Sync klicken. |
 | **Abbrechen** | Schließt das Modal ohne Datenänderung. |
 
 **Trim-Logik im Import:** Für jede Personio-Periode wird der Bereich
@@ -602,7 +623,7 @@ Goroutine auf, sobald das Frontend bereit ist. Der eigentliche Sync läuft
    **stillschweigend** kein Banner gezeigt (Info-Log).
 2. `Syncer.Preflight(ctx, day)` als reine Lese-Operation. Findet die
    Vorabprüfung Work-Perioden auf dem Tag (siehe §2.5.7), wird statt des
-   PUT das Wails-Event `startup-sync:conflict` mit der `SyncPreflight`-
+   Schreibvorgangs das Wails-Event `startup-sync:conflict` mit der `SyncPreflight`-
    Payload gefeuert — das Frontend zeigt dasselbe Override/Import-Modal
    wie beim manuellen Sync. Der eigentliche Push wird in dem Fall vom
    User getriggert (oder vom „Abbrechen"-Knopf abgelehnt).
@@ -628,7 +649,7 @@ beim Start dangling Blöcke per `Recover()` und
 `CloseDanglingManualAtStartup` — der nachfolgende Startup-Sync
 übernimmt die nun geschlossenen Blöcke automatisch.
 
-**Idempotenz:** Personio's `PUT day` überschreibt den Tag. Ein zweiter
+**Idempotenz:** Die Personio-Schreib-Mutation überschreibt den Tag. Ein zweiter
 manueller Sync für denselben Tag ist gefahrlos. Da der Startup-Sync nur
 Tage anfasst, die mindestens einen Block ohne `synced_at` haben,
 verursacht ein erneuter Anwendungsstart am selben Tag keinen redundanten
@@ -956,8 +977,8 @@ closeAuto(snap):
 5. Aggregiere konsekutive Tag-Blöcke mit identischem `(lokalem Datum,
    project_id, comment)` zu **einer** Period (siehe §2.5.3).
 6. Hole pro Tag das Timesheet (`day_id`, `state`); bei `state=trackable`
-   PUT mit den aggregierten Perioden, sonst Fehler ins Result.
-7. Sende Requests; bei Erfolg `personio_id` (= `day_id`) und `synced_at`
+   GraphQL-Mutation `TrackAttendancePeriodsOnDay` mit den aggregierten Perioden, sonst Fehler ins Result.
+7. Sende Requests; bei Erfolg `personio_id` (= `day_id` aus dem Timesheet, sonst Datum) und `synced_at`
    auf jedem beteiligten `tag_block` speichern.
 8. Zeige Erfolgs-/Fehlerübersicht.
 
