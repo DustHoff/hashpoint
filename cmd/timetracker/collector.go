@@ -179,7 +179,9 @@ func runCollector(watchdogRelaunch bool) error {
 	// being terminated; wait for it, drain the server, then flush the domain.
 	<-supDone
 	srv.Stop()
-	<-serveErr
+	if err := <-serveErr; err != nil {
+		slog.Warn("collector: ipc server returned error during shutdown", "err", err)
+	}
 	d.shutdown(context.Background())
 	return nil
 }
