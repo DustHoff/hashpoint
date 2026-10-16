@@ -93,9 +93,16 @@ In allen drei Fällen läuft technisch derselbe Ablauf: der TimeTracker holt
 zunächst das **Timesheet** für den/die gewählten Tag(e)
 (`GET /svc/attendance-bff/v1/timesheet/{employee_id}`), gruppiert die
 getaggten Blöcke pro Tag und Personio-Projekt-ID, und schreibt pro Tag
-ein `PUT /svc/attendance-api/v1/days/{day_id}?autoFix=true&usedInTimesheet=true`
-mit den Perioden. Hat ein Tag noch keinen Personio-Datensatz, generiert
-der Client eine UUID und legt den Tag damit an (Upsert).
+alle Perioden in einem Aufruf – über dieselbe Schnittstelle, die auch die
+Personio-Weboberfläche beim Speichern nutzt
+(`POST /graphql?op=TM_TrackAttendancePeriodsOnDay_…`). Der Tag wird dabei
+über sein Datum angesprochen und, falls nötig, von Personio angelegt.
+
+> **Fehlermeldung „GraphQL-Operation unbekannt — Personio hat die Web-API
+> geändert"**: Personio hat seine interne Schnittstelle aktualisiert. Ein
+> erneutes Anmelden hilft hier nicht – es ist ein Hashpoint-Update nötig.
+> Ihre Zeiten bleiben lokal erhalten und werden nach dem Update
+> synchronisiert.
 
 ## Vorab-Prüfung gegen Datenverlust
 

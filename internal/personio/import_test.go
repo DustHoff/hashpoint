@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -35,6 +36,18 @@ type timesheetStub struct {
 	State   string
 	DayID   string
 	Periods []map[string]any
+
+	// TrackResp is the raw body returned for the GraphQL track mutation;
+	// tracked collects every decoded mutation request.
+	TrackResp string
+	mu        sync.Mutex
+	tracked   []trackPeriodsRequest
+}
+
+func (s *timesheetStub) trackedRequests() []trackPeriodsRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]trackPeriodsRequest(nil), s.tracked...)
 }
 
 func newImportEnv(t *testing.T) *importTestEnv {
@@ -49,7 +62,10 @@ func newImportEnv(t *testing.T) *importTestEnv {
 	tags := storage.NewTagRepo(db)
 	blocks := storage.NewTagBlockRepo(db)
 
-	stub := &timesheetStub{Date: "2026-05-08", State: "trackable", DayID: "day-uuid"}
+	stub := &timesheetStub{
+		Date: "2026-05-08", State: "trackable", DayID: "day-uuid",
+		TrackResp: `{"data":{"trackAttendancePeriodsOnDay":{"saved":{"attendancePeriodsList":[]}}}}`,
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/svc/attendance-bff/v1/timesheet/"):
@@ -65,6 +81,16 @@ func newImportEnv(t *testing.T) *importTestEnv {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(payload)
+		case r.URL.Path == "/graphql" && r.Method == http.MethodPost:
+			var req trackPeriodsRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("decode graphql body: %v", err)
+			}
+			stub.mu.Lock()
+			stub.tracked = append(stub.tracked, req)
+			stub.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, stub.TrackResp)
 		case r.URL.Path == "/api/v1/navigation/context":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"data":{"user":{"id":4242}}}`)

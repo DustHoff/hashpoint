@@ -37,7 +37,7 @@ Cookie-based, replayed on every request:
   `/auth`) is the primary expired-session signal.
 - Common headers on every call (`uiclient.go` `do`): `Accept: application/json…`,
   `x-athena-xsrf-token` (when present), `Origin: https://{AppHost}`,
-  `Referer: https://{AppHost}/`; `Content-Type: application/json` on the `PUT`.
+  `Referer: https://{AppHost}/`; `Content-Type: application/json` on the GraphQL `POST`.
 
 ## Endpoints
 
@@ -65,46 +65,72 @@ Reads the attendance timecards for a date range. `uiclient.go:184`.
   - Times are local-naive `YYYY-MM-DDTHH:MM:SS`.
 - Used by `SyncRange`, `Preflight` (peek before overwrite) and `ImportDay`.
 
-### 3. PUT `/svc/attendance-api/v1/days/{day_id}?autoFix=true&usedInTimesheet=true`
+### 3. POST `/graphql?op=TM_TrackAttendancePeriodsOnDay_v2026071301`
 
-Creates or overwrites a day's periods. `uiclient.go:239`.
+Replaces all periods of one local calendar day. `track.go` (`TrackPeriodsOnDay`).
 
-- **Path param** `{day_id}` — a UUID v4. If the day is new, Personio creates it
-  under this id; otherwise it is the day's existing id (from endpoint 2).
-- **Fixed query params** `autoFix=true`, `usedInTimesheet=true` (match the web UI).
-- **Request body** (`SetDayPayload`, `uiclient.go:214`):
+> **Attendance migration (Oct 2026):** Personio moved attendance writes to
+> GraphQL. The former `PUT /svc/attendance-api/v1/days/{day_id}?autoFix=true&usedInTimesheet=true`
+> now answers `501 Not Implemented` and is no longer used. Reads (endpoint 2)
+> are unchanged.
+
+- **Persisted query**: `query` carries the SHA-256 hash of a document registered
+  on Personio's side, not GraphQL text. Operation name (with version suffix) and
+  hash are constants in `track.go`, taken from a HAR capture of the web app. When
+  Personio ships a new version, refresh both from a new capture. An unknown
+  operation (`PERSISTED_QUERY_NOT_FOUND`) maps to `ErrOperationOutdated`.
+- **Day addressing**: by `assumedAttributionDate`; no `day_id` needed.
+- **Request body**:
 
   ```json
   {
-    "employee_id": 4242,
-    "periods": [
-      {
-        "id": "<uuid-v4>",
-        "start": "2026-05-08T08:00:00",
-        "end": "2026-05-08T10:00:00",
-        "period_type": "work",
-        "project_id": 4711,
-        "comment": "#projekta #frontend — Login fix",
-        "auto_generated": false
+    "query": "<sha256 of persisted document>",
+    "operationName": "TM_TrackAttendancePeriodsOnDay_v2026071301",
+    "variables": {
+      "input": {
+        "autoFix": false,
+        "origin": "ATTENDANCE_ORIGIN_WEB",
+        "assumedAttributionDate": {"year": 2026, "month": 5, "day": 8},
+        "personId": {"id": "4242"},
+        "attendancePeriods": [
+          {
+            "id": {"id": "<uuid-v4>"},
+            "type": "ATTENDANCE_PERIOD_TYPE_WORK",
+            "startLocalTime": {"date": {"year": 2026, "month": 5, "day": 8}, "time": {"hours": 8, "minutes": 0}},
+            "endLocalTime": {"date": {"year": 2026, "month": 5, "day": 8}, "time": {"hours": 10, "minutes": 0}},
+            "projectId": {"id": "4711"},
+            "comment": "#projekta #frontend — Login fix",
+            "personId": {"id": "4242"},
+            "origin": "ATTENDANCE_ORIGIN_WEB",
+            "legacyBreakMinutes": 0,
+            "startGeolocation": null,
+            "endGeolocation": null,
+            "duration": {"seconds": "7200"}
+          }
+        ]
       }
-    ],
-    "original_periods": [ /* mirror of periods */ ],
-    "geolocation": null,
-    "is_from_clock_out": false
+    }
   }
   ```
 
-  - `period_type` is always `"work"`; `auto_generated` always `false`
-    (`sync.go`). `project_id` is `int64` or `null`. `id` is freshly generated per
-    period. `original_periods` mirrors `periods`.
-- **Response**: any `2xx` is success; the body is not parsed.
+  - `attendancePeriods` is the **complete** day — the web app resends all
+    periods when adding one.
+  - `type` is always `ATTENDANCE_PERIOD_TYPE_WORK` (`sync.go`); `id` is freshly
+    generated per period. `projectId` is `null` or `{"id":"…"}` — the object form
+    follows the API's id convention but is not yet confirmed by a capture with a
+    project. `time.seconds` is omitted when zero; `duration.seconds` is an
+    int64 encoded as string (as the web app does).
+- **Response**: `data.trackAttendancePeriodsOnDay.{original,saved}.attendancePeriodsList`.
+  GraphQL reports domain errors with HTTP `200` in `errors[]`; any entry there,
+  or a missing `saved`, is a failed write.
 
 ## Body & time format
 
-- **Time**: local-naive `YYYY-MM-DDTHH:MM:SS` — no offset, no `Z`. Written with
-  `.Local().Format("2006-01-02T15:04:05")`, read with
-  `time.ParseInLocation(...)` (`sync.go`, `import.go`). Personio interprets these
-  against the `timezone` sent to endpoint 2.
+- **Time (read)**: local-naive `YYYY-MM-DDTHH:MM:SS` — no offset, no `Z`; parsed
+  with `time.ParseInLocation(...)` (`sync.go`, `import.go`). Personio interprets
+  these against the `timezone` sent to endpoint 2.
+- **Time (write)**: structured local date + time of day (`startLocalTime` /
+  `endLocalTime`), derived via `.Local()` in `track.go`.
 - **Comment schema**: `#Parent #Sub — description`. On export the tag hierarchy is
   rendered as the `#Parent #Sub` prefix and the block description follows ` — `. On
   import the schema is parsed to resolve/create the tag; only the text after ` — `
@@ -122,5 +148,7 @@ Creates or overwrites a day's periods. `uiclient.go:239`.
 Callers treat `errors.Is(err, ErrSessionExpired)` as: purge the stored session and
 send the user (or plugin) back through an interactive login — never silently retry
 with the same cookies. Other typed cases: `ErrNoSession` (nothing stored /
-`session.go`), age-expired sessions (purged on read), and non-writable days
-(`locked`/`non_trackable`) surfaced per-day during sync.
+`session.go`), age-expired sessions (purged on read), non-writable days
+(`locked`/`non_trackable`) surfaced per-day during sync, and
+`ErrOperationOutdated` (`track.go`) when Personio no longer knows the persisted
+GraphQL operation — fixed by a code update, not by re-login.

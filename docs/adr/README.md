@@ -28,6 +28,7 @@ Architektur- und Feature-Entscheidungen von Hashpoint. ADRs ab 0002 dokumentiere
 | [0022](0022-resilienz-watchdog.md) | Resilienz: Crashguard, Watchdog-Dienst | Betrieb |
 | [0023](0023-datenschutz-sicherheits-baseline.md) | Datenschutz- & Sicherheits-Baseline | Sicherheit |
 | [0024](0024-build-release-installer.md) | Build, Versionierung, MSI | Delivery |
+| [0025](0025-personio-graphql-schreibpfad.md) | Personio-Schreibpfad über GraphQL (Attendance-Migration) | Integration |
 
 ## Vorlage
 

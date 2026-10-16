@@ -12,7 +12,7 @@ Getaggte Zeit muss als Arbeitszeit-Perioden nach Personio. `PUT day` ersetzt ein
 
 - **Quelle:** geschlossene `tag_blocks` mit effektivem `sync_to_personio = 1`; keine zusätzliche Rundung.
 - **Aggregation:** konsekutive Blöcke mit gleichem (lokalem Datum, `project_id`, Kommentar) und Lücke ≤ 5 s ⇒ eine Period (`period_type = work`). Kommentar: `<parent> <sub> <sub_description>` + optional ` — <block_description>`.
-- **Idempotenz:** `PUT day` pro Tag; synchronisierte Blöcke erhalten `synced_at` + `personio_id` (= `day_id`). Fehlende `day_id` für trackbare Tage wird clientseitig als UUID v4 erzeugt.
+- **Idempotenz:** ein Schreibaufruf pro Tag, der den Tag vollständig ersetzt (seit ADR 0025 die GraphQL-Mutation `TrackAttendancePeriodsOnDay`, vorher `PUT day`); synchronisierte Blöcke erhalten `synced_at` + `personio_id` (= `day_id` aus dem Timesheet, ohne Personio-Datensatz das Datum).
 - **Preflight:** vor jedem Push wird das Timesheet gelesen. Existieren Work-Perioden, entscheidet der Anwender per Modal: **Überschreiben**, **Aus Personio importieren** oder **Abbrechen**.
 - **Import:** Personio-Perioden werden als manuelle Blöcke übernommen, lokale Blöcke gewinnen (`subtractRanges`), kein Snapping. Tag-Auflösung: Kommentar-Schema `#Parent #Sub` (`EnsureByPath`) → `project_id` → Fallback-Tag `#PersonioImport` (`sync_to_personio = 0`).
 - **Startup-Sync** statt Shutdown-Sync: beim Start wird asynchron der **letzte unsynchronisierte Tag vor heute** synchronisiert (30 s Timeout), Ergebnis als Banner; Konflikte lösen dasselbe Modal aus.
