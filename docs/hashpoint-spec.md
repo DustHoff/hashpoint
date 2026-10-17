@@ -472,7 +472,8 @@ Pro Request:
 }
 ```
 
-- Die Liste `attendancePeriods` beschreibt den **vollständigen** Tag (die Web-App sendet beim Hinzufügen einer zweiten Periode beide).
+- Die Liste `attendancePeriods` beschreibt den **vollständigen** Tag: Personio löscht vorhandene Perioden, die in der Liste fehlen (per HAR bestätigt).
+- **Perioden-IDs beim Überschreiben:** Personio lässt nicht zu, dass ein vorhandener Tag alle Perioden verliert; auch die Web-App erlaubt beim letzten Eintrag nur Bearbeiten. Der Syncer übernimmt deshalb die IDs der vorhandenen Work-Perioden aus dem Timesheet, zeitlich sortiert, für seine Perioden. Überzählige vorhandene Perioden entfallen, zusätzliche eigene bekommen neue UUIDs.
 - `projectId` ist `null` oder `{"id":"<project_id>"}`. Das Objekt-Format ist aus dem übrigen ID-Schema abgeleitet und noch nicht per HAR mit Projekt belegt.
 - `time.seconds` wird nur gesendet, wenn ungleich 0.
 - **Antwort:** `data.trackAttendancePeriodsOnDay.{original,saved}.attendancePeriodsList`. Fachliche Fehler kommen mit HTTP `200` im `errors`-Array und werden als Fehler pro Tag gemeldet; fehlt `saved`, gilt der Schreibvorgang als fehlgeschlagen.

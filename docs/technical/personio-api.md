@@ -113,8 +113,12 @@ Replaces all periods of one local calendar day. `track.go` (`TrackPeriodsOnDay`)
   }
   ```
 
-  - `attendancePeriods` is the **complete** day — the web app resends all
-    periods when adding one.
+  - `attendancePeriods` is the **complete** day — periods missing from the
+    list are deleted (confirmed by HAR). Personio refuses to drop *every*
+    period of an existing day (the web UI only allows editing the last one),
+    so `reuseExistingPeriodIDs` (`sync.go`) assigns the ids of the day's
+    existing work periods, in start order, to the outgoing periods; surplus
+    existing ones are dropped, extra outgoing ones keep fresh UUIDs.
   - `type` is always `ATTENDANCE_PERIOD_TYPE_WORK` (`sync.go`); `id` is freshly
     generated per period. `projectId` is `null` or `{"id":"…"}` — the object form
     follows the API's id convention but is not yet confirmed by a capture with a
