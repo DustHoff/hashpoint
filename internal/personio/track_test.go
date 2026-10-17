@@ -253,6 +253,87 @@ func TestSyncDay_WritesViaGraphQL(t *testing.T) {
 	}
 }
 
+func TestReuseExistingPeriodIDs(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		existing string // JSON periods array of the timecard
+		outgoing int
+		want     []string
+	}{
+		{name: "no existing keeps fresh ids", existing: `[]`, outgoing: 2, want: []string{"new-0", "new-1"}},
+		{
+			name:     "more existing than outgoing — surplus dropped",
+			existing: `[{"id":"b","start":"2026-10-13T02:00:00","type":"work"},{"id":"a","start":"2026-10-13T01:00:00","type":"work"}]`,
+			outgoing: 1,
+			want:     []string{"a"},
+		},
+		{
+			name:     "fewer existing than outgoing — rest fresh",
+			existing: `[{"id":"a","start":"2026-10-13T01:00:00","type":"work"}]`,
+			outgoing: 3,
+			want:     []string{"a", "new-1", "new-2"},
+		},
+		{
+			name:     "breaks and empty ids are skipped",
+			existing: `[{"id":"brk","start":"2026-10-13T00:30:00","type":"break"},{"id":"","start":"2026-10-13T00:45:00","type":"work"},{"id":"w","start":"2026-10-13T01:00:00","type":"WORK"}]`,
+			outgoing: 2,
+			want:     []string{"w", "new-1"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var tc Timecard
+			if err := json.Unmarshal([]byte(`{"periods":`+tt.existing+`}`), &tc); err != nil {
+				t.Fatalf("unmarshal timecard: %v", err)
+			}
+			periods := make([]Period, tt.outgoing)
+			for i := range periods {
+				periods[i].ID = "new-" + string(rune('0'+i))
+			}
+			reuseExistingPeriodIDs(periods, tc)
+			for i, p := range periods {
+				if p.ID != tt.want[i] {
+					t.Fatalf("period %d id = %q, want %q (all: %+v)", i, p.ID, tt.want[i], periods)
+				}
+			}
+		})
+	}
+}
+
+// TestSyncDay_OverwriteReusesExistingIDs ensures overwriting a populated day
+// edits Personio's existing period instead of deleting all and recreating.
+func TestSyncDay_OverwriteReusesExistingIDs(t *testing.T) {
+	t.Parallel()
+	e := newImportEnv(t)
+	e.resp.Periods = []map[string]any{
+		{"id": "existing-1", "start": "2026-05-08T01:00:00", "end": "2026-05-08T02:00:00", "type": "work", "comment": "test"},
+	}
+	tag := storage.Tag{Name: "#projekta", SyncToPersonio: true}
+	if err := e.tags.Create(e.ctx, &tag); err != nil {
+		t.Fatalf("create tag: %v", err)
+	}
+	start := time.Date(2026, 5, 8, 8, 0, 0, 0, time.Local).UTC()
+	end := start.Add(time.Hour)
+	block := &storage.TagBlock{TagID: tag.ID, StartTime: start, EndTime: &end, DurationSec: 3600, IsManual: true}
+	if err := e.blocks.Open(e.ctx, block); err != nil {
+		t.Fatalf("seed block: %v", err)
+	}
+
+	res, err := e.syncer.SyncDay(e.ctx, time.Date(2026, 5, 8, 0, 0, 0, 0, time.UTC))
+	if err != nil || len(res.Errors) != 0 {
+		t.Fatalf("sync: err=%v errors=%v", err, res.Errors)
+	}
+	reqs := e.resp.trackedRequests()
+	if len(reqs) != 1 || len(reqs[0].Variables.Input.AttendancePeriods) != 1 {
+		t.Fatalf("unexpected requests: %+v", reqs)
+	}
+	if got := reqs[0].Variables.Input.AttendancePeriods[0].ID.ID; got != "existing-1" {
+		t.Fatalf("period id = %q, want existing-1", got)
+	}
+}
+
 func TestSyncDay_GraphQLErrorSurfacesPerDay(t *testing.T) {
 	t.Parallel()
 	e := newImportEnv(t)

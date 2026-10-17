@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -123,6 +124,7 @@ func (s *Syncer) SyncRange(ctx context.Context, from, to time.Time) (*Result, er
 			res.Errors = append(res.Errors, fmt.Sprintf("%s: ungültiges Datum: %s", dateStr, err.Error()))
 			continue
 		}
+		reuseExistingPeriodIDs(dayPayload.list, tc)
 		if err := s.client.TrackPeriodsOnDay(ctx, employeeID, day, dayPayload.list); err != nil {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s: %s", dateStr, err.Error()))
 			continue
@@ -144,6 +146,32 @@ func (s *Syncer) SyncRange(ctx context.Context, from, to time.Time) (*Result, er
 		}
 	}
 	return res, nil
+}
+
+// reuseExistingPeriodIDs hands the ids of the work periods Personio already
+// has on the day to the outgoing periods, in chronological order. The
+// mutation replaces the day by list, so an existing id turns the change into
+// an edit, and existing periods left out of the list are deleted. Personio
+// refuses to delete every period of an existing day — the web UI likewise
+// only lets the last entry be edited, never removed — so sending only fresh
+// ids made overwriting a populated day fail. Surplus outgoing periods keep
+// their fresh ids.
+func reuseExistingPeriodIDs(periods []Period, tc Timecard) {
+	existing := slices.Clone(tc.Periods)
+	// Local-naive ISO timestamps sort chronologically as strings.
+	sort.SliceStable(existing, func(a, b int) bool { return existing[a].Start < existing[b].Start })
+	i := 0
+	for _, p := range existing {
+		if i >= len(periods) {
+			return
+		}
+		id := strings.TrimSpace(p.ID)
+		if id == "" || !strings.EqualFold(p.Type, "work") {
+			continue
+		}
+		periods[i].ID = id
+		i++
+	}
 }
 
 func shouldSkip(b storage.TagBlock, tags map[int64]storage.Tag) bool {
