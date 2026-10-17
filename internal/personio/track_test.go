@@ -83,6 +83,14 @@ func TestTrackPeriodsOnDay(t *testing.T) {
 			contains: "periods overlap",
 		},
 		{
+			name:   "precondition reason from extensions",
+			status: http.StatusOK,
+			body: `{"data":null,"errors":[{"message":"FAILED_PRECONDITION","extensions":` +
+				`{"title":"overlapping_periods","details":[{"index":0}]}}]}`,
+			wantErr:  true,
+			contains: `FAILED_PRECONDITION (overlapping_periods) [{"index":0}]`,
+		},
+		{
 			name:    "persisted query unknown by code",
 			status:  http.StatusOK,
 			body:    `{"errors":[{"message":"not found","extensions":{"code":"PERSISTED_QUERY_NOT_FOUND"}}]}`,
