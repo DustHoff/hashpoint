@@ -123,10 +123,58 @@ func (e gqlError) String() string {
 	if t := strings.TrimSpace(e.Extensions.Title); t != "" && t != e.Message {
 		b.WriteString(" (" + t + ")")
 	}
-	if d := strings.TrimSpace(string(e.Extensions.Details)); d != "" && d != "null" && d != "[]" && d != "{}" {
-		b.WriteString(" " + truncate(d, 300))
+	if d := compactDetails(e.Extensions.Details); d != "" {
+		b.WriteString(" " + truncate(d, 800))
 	}
-	return truncate(b.String(), 500)
+	return truncate(b.String(), 1000)
+}
+
+// echoKeys are detail fields in which Personio echoes the submitted (and
+// auto-fixed) periods back. They dwarf the actual rule violation, which
+// would otherwise be truncated away, and repeat data the caller already has.
+var echoKeys = map[string]bool{
+	"attendancePeriods":     true,
+	"attendancePeriodsList": true,
+}
+
+// compactDetails re-encodes extensions.details without the period echoes so
+// the policy violation itself stays visible. Non-JSON or empty details yield
+// the trimmed raw text or "".
+func compactDetails(raw json.RawMessage) string {
+	d := strings.TrimSpace(string(raw))
+	if d == "" || d == "null" || d == "[]" || d == "{}" {
+		return ""
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return d
+	}
+	out, err := json.Marshal(stripEchoes(v))
+	if err != nil {
+		return d
+	}
+	return string(out)
+}
+
+func stripEchoes(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			if echoKeys[k] {
+				delete(t, k)
+				continue
+			}
+			t[k] = stripEchoes(val)
+		}
+		return t
+	case []any:
+		for i := range t {
+			t[i] = stripEchoes(t[i])
+		}
+		return t
+	default:
+		return v
+	}
 }
 
 type trackPeriodsResponse struct {

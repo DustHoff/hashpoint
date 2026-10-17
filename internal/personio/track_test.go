@@ -91,6 +91,15 @@ func TestTrackPeriodsOnDay(t *testing.T) {
 			contains: `FAILED_PRECONDITION (overlapping_periods) [{"index":0}]`,
 		},
 		{
+			name:   "policy violation keeps rule, drops period echo",
+			status: http.StatusOK,
+			body: `{"errors":[{"message":"FAILED_PRECONDITION","extensions":{"title":"Attendance periods violated blocking policy rules",` +
+				`"details":[{"validation":{"original":{"attendancePeriods":[{"hash":"x","duration":"11100s"}],` +
+				`"alerts":[{"rule":"MAX_DAILY_WORK"}]}}}]}}]}`,
+			wantErr:  true,
+			contains: `(Attendance periods violated blocking policy rules) [{"validation":{"original":{"alerts":[{"rule":"MAX_DAILY_WORK"}]}}}]`,
+		},
+		{
 			name:    "persisted query unknown by code",
 			status:  http.StatusOK,
 			body:    `{"errors":[{"message":"not found","extensions":{"code":"PERSISTED_QUERY_NOT_FOUND"}}]}`,
