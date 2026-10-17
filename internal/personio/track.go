@@ -102,11 +102,31 @@ type trackPeriodsRequest struct {
 	} `json:"variables"`
 }
 
+// gqlError is one entry of a GraphQL errors[] array. Personio's gateway puts
+// only the gRPC status name into Message ("FAILED_PRECONDITION",
+// "INTERNAL", …); the actual reason lives in Extensions.Title and, for
+// structured failures, Extensions.Details — the web app reads both.
 type gqlError struct {
 	Message    string `json:"message"`
 	Extensions struct {
-		Code string `json:"code"`
+		Code    string          `json:"code"`
+		Title   string          `json:"title"`
+		Details json.RawMessage `json:"details"`
 	} `json:"extensions"`
+}
+
+// String renders the error with its reason, e.g.
+// "FAILED_PRECONDITION (overlapping_periods) [{…}]".
+func (e gqlError) String() string {
+	var b strings.Builder
+	b.WriteString(e.Message)
+	if t := strings.TrimSpace(e.Extensions.Title); t != "" && t != e.Message {
+		b.WriteString(" (" + t + ")")
+	}
+	if d := strings.TrimSpace(string(e.Extensions.Details)); d != "" && d != "null" && d != "[]" && d != "{}" {
+		b.WriteString(" " + truncate(d, 300))
+	}
+	return truncate(b.String(), 500)
 }
 
 type trackPeriodsResponse struct {
@@ -208,7 +228,7 @@ func graphQLErr(errs []gqlError) error {
 		if strings.Contains(code, "PERSISTED_QUERY_NOT_FOUND") || strings.Contains(strings.ToLower(e.Message), "persistedquerynotfound") {
 			return ErrOperationOutdated
 		}
-		msgs = append(msgs, truncate(e.Message, 200))
+		msgs = append(msgs, e.String())
 	}
 	return fmt.Errorf("personio: track periods: %s", strings.Join(msgs, "; "))
 }
