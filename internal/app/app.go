@@ -68,6 +68,7 @@ type StartupSyncEvent struct {
 	BlocksProcessed int               `json:"blocks_processed,omitempty"`
 	BlocksSkipped   int               `json:"blocks_skipped,omitempty"`
 	Errors          []string          `json:"errors,omitempty"`        // per-day messages from Result.Errors
+	Warnings        []string          `json:"warnings,omitempty"`      // Personio policy warnings from Result.Warnings
 	ErrorMessage    string            `json:"error_message,omitempty"` // hard error
 }
 
@@ -452,6 +453,7 @@ func (a *App) runStartupSync(parent context.Context) {
 		BlocksProcessed: res.BlocksProcessed,
 		BlocksSkipped:   res.BlocksSkipped,
 		Errors:          res.Errors,
+		Warnings:        res.Warnings,
 	}
 	switch {
 	case len(res.Errors) > 0:

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,7 +37,7 @@ func TestBuildTrackPeriodsRequest(t *testing.T) {
 			End:       time.Date(2026, 10, 13, 3, 0, 30, 0, time.Local),
 		},
 	}
-	raw, err := json.Marshal(buildTrackPeriodsRequest(4242, day, periods))
+	raw, err := json.Marshal(buildTrackPeriodsRequest(4242, day, periods, false))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -91,13 +92,21 @@ func TestTrackPeriodsOnDay(t *testing.T) {
 			contains: `FAILED_PRECONDITION (overlapping_periods) [{"index":0}]`,
 		},
 		{
-			name:   "policy violation keeps rule, drops period echo",
+			name:   "precondition details without alerts drop period echo",
+			status: http.StatusOK,
+			body: `{"errors":[{"message":"FAILED_PRECONDITION","extensions":{"title":"something else",` +
+				`"details":[{"validation":{"original":{"attendancePeriods":[{"hash":"x","duration":"11100s"}],"hint":"h"}}}]}}]}`,
+			wantErr:  true,
+			contains: `FAILED_PRECONDITION (something else) [{"validation":{"original":{"hint":"h"}}}]`,
+		},
+		{
+			name:   "blocking policy alert is not auto-confirmed",
 			status: http.StatusOK,
 			body: `{"errors":[{"message":"FAILED_PRECONDITION","extensions":{"title":"Attendance periods violated blocking policy rules",` +
-				`"details":[{"validation":{"original":{"attendancePeriods":[{"hash":"x","duration":"11100s"}],` +
-				`"alerts":[{"rule":"MAX_DAILY_WORK"}]}}}]}}]}`,
+				`"details":[{"validation":{"original":{"attendancePeriods":[],` +
+				`"alerts":[{"enforcement":"ENFORCEMENT_BLOCKING","date":{"year":2026,"month":10,"day":13},"maxDailyWork":{}}]}}}]}}]}`,
 			wantErr:  true,
-			contains: `(Attendance periods violated blocking policy rules) [{"validation":{"original":{"alerts":[{"rule":"MAX_DAILY_WORK"}]}}}]`,
+			contains: "Attendance periods violated blocking policy rules: maxDailyWork (BLOCKING)",
 		},
 		{
 			name:    "persisted query unknown by code",
@@ -155,7 +164,7 @@ func TestTrackPeriodsOnDay(t *testing.T) {
 				logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 			}
 			day := time.Date(2026, 10, 13, 0, 0, 0, 0, time.Local)
-			err := client.TrackPeriodsOnDay(context.Background(), 4242, day, []Period{{
+			_, err := client.TrackPeriodsOnDay(context.Background(), 4242, day, []Period{{
 				ID:    "p-1",
 				Start: day.Add(8 * time.Hour),
 				End:   day.Add(9 * time.Hour),
@@ -182,8 +191,91 @@ func TestTrackPeriodsOnDay(t *testing.T) {
 func TestTrackPeriodsOnDay_ZeroEmployee(t *testing.T) {
 	t.Parallel()
 	c := &UIClient{}
-	if err := c.TrackPeriodsOnDay(context.Background(), 0, time.Now(), nil); err == nil {
+	if _, err := c.TrackPeriodsOnDay(context.Background(), 0, time.Now(), nil); err == nil {
 		t.Fatal("expected error for zero employee id")
+	}
+}
+
+// overtimeWarningError and overtimeSaved mirror the two responses of the
+// web app's warning flow (HAR 2026-10-17, anonymised).
+const (
+	overtimeWarningError = `{"errors":[{"message":"FAILED_PRECONDITION","locations":[],"path":["trackAttendancePeriodsOnDay"],` +
+		`"extensions":{"title":"Attendance periods violated blocking policy rules","details":[{"validation":{"original":{` +
+		`"attendancePeriods":[{"hash":"x","type":"ATTENDANCE_PERIOD_TYPE_WORK","duration":"3600s"}],` +
+		`"alerts":[{"enforcement":"ENFORCEMENT_WARNING","date":{"year":2026,"month":10,"day":13},` +
+		`"overtimeApproaching":{"overtimeLimitMinutes":960,"currentOvertimeMinutes":720}}]}}}]}}]}`
+	overtimeSaved = `{"data":{"trackAttendancePeriodsOnDay":{"original":{"attendancePeriodsList":[],"alertsList":[]},` +
+		`"saved":{"attendancePeriodsList":[{}],"alertsList":[{"date":{"year":2026,"month":10,"day":13},` +
+		`"enforcement":"ENFORCEMENT_WARNING","kind":{"__typename":"prototimeattendance_day_OvertimeApproachingAlert_v1",` +
+		`"currentOvertimeMinutes":720,"overtimeLimitMinutes":960}}]}}}}`
+)
+
+// TestTrackPeriodsOnDay_ConfirmsWarnings reproduces the web app's flow: a
+// warning-only rejection is resent with autoFix=true and the warning is
+// returned to the caller.
+func TestTrackPeriodsOnDay_ConfirmsWarnings(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var autoFixes []bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req trackPeriodsRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode: %v", err)
+		}
+		mu.Lock()
+		autoFixes = append(autoFixes, req.Variables.Input.AutoFix)
+		mu.Unlock()
+		if req.Variables.Input.AutoFix {
+			_, _ = io.WriteString(w, overtimeSaved)
+			return
+		}
+		_, _ = io.WriteString(w, overtimeWarningError)
+	}))
+	t.Cleanup(srv.Close)
+	client := &UIClient{
+		BaseURL: srv.URL,
+		Session: &Session{Tenant: "lmis"},
+		http:    &http.Client{Timeout: 5 * time.Second},
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	day := time.Date(2026, 10, 13, 0, 0, 0, 0, time.Local)
+	alerts, err := client.TrackPeriodsOnDay(context.Background(), 4242, day, []Period{{ID: "p", Start: day.Add(8 * time.Hour), End: day.Add(9 * time.Hour)}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(autoFixes) != 2 || autoFixes[0] || !autoFixes[1] {
+		t.Fatalf("autoFix sequence = %v, want [false true]", autoFixes)
+	}
+	if len(alerts) != 1 || !alerts[0].IsWarning() {
+		t.Fatalf("alerts = %+v, want one warning", alerts)
+	}
+	if got, want := alerts[0].String(), "Überstunden nähern sich dem Limit (720 von 960 Min.)"; got != want {
+		t.Fatalf("alert text = %q, want %q", got, want)
+	}
+}
+
+func TestPolicyViolationError_OnlyWarnings(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		alerts []Alert
+		want   bool
+	}{
+		{name: "no alerts", want: false},
+		{name: "all warnings", alerts: []Alert{{Enforcement: enforcementWarning}, {Enforcement: enforcementWarning}}, want: true},
+		{name: "mixed", alerts: []Alert{{Enforcement: enforcementWarning}, {Enforcement: "ENFORCEMENT_BLOCKING"}}, want: false},
+		{name: "missing enforcement", alerts: []Alert{{}}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			pv := &PolicyViolationError{Alerts: tt.alerts}
+			if got := pv.onlyWarnings(); got != tt.want {
+				t.Fatalf("onlyWarnings = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -331,6 +423,29 @@ func TestSyncDay_OverwriteReusesExistingIDs(t *testing.T) {
 	}
 	if got := reqs[0].Variables.Input.AttendancePeriods[0].ID.ID; got != "existing-1" {
 		t.Fatalf("period id = %q, want existing-1", got)
+	}
+}
+
+func TestSyncDay_SurfacesPolicyWarnings(t *testing.T) {
+	t.Parallel()
+	e := newImportEnv(t)
+	e.resp.TrackResp = overtimeSaved
+	tag := storage.Tag{Name: "#projekta", SyncToPersonio: true}
+	if err := e.tags.Create(e.ctx, &tag); err != nil {
+		t.Fatalf("create tag: %v", err)
+	}
+	start := time.Date(2026, 5, 8, 8, 0, 0, 0, time.Local).UTC()
+	end := start.Add(time.Hour)
+	block := &storage.TagBlock{TagID: tag.ID, StartTime: start, EndTime: &end, DurationSec: 3600, IsManual: true}
+	if err := e.blocks.Open(e.ctx, block); err != nil {
+		t.Fatalf("seed block: %v", err)
+	}
+	res, err := e.syncer.SyncDay(e.ctx, time.Date(2026, 5, 8, 0, 0, 0, 0, time.UTC))
+	if err != nil || len(res.Errors) != 0 {
+		t.Fatalf("sync: err=%v errors=%v", err, res.Errors)
+	}
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "2026-05-08: Überstunden nähern sich dem Limit") {
+		t.Fatalf("warnings = %v", res.Warnings)
 	}
 }
 

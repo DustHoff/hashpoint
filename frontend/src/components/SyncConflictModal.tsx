@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { ImportResult, SyncPreflight, SyncResult } from "../types";
+import { warningSuffix } from "../lib/syncWarnings";
 
 interface Props {
   preflight: SyncPreflight;
@@ -64,7 +65,7 @@ export default function SyncConflictModal({
               level: "success",
               text: `Personio überschrieben: ${r.Periods} Periode(n), ${r.BlocksProcessed} Block/Blöcke gebucht${
                 r.BlocksSkipped > 0 ? ` (${r.BlocksSkipped} übersprungen)` : ""
-              }.`,
+              }.${warningSuffix(r.Warnings)}`,
             }
           : {
               level: "info",

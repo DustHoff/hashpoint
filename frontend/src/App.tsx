@@ -15,6 +15,7 @@ import EntraBadge from "./components/EntraBadge";
 import QuickTagPicker from "./components/QuickTagPicker";
 import SyncConflictModal from "./components/SyncConflictModal";
 import type { SyncPreflight } from "./types";
+import { warningSuffix } from "./lib/syncWarnings";
 
 type Tab =
   | "timeline"
@@ -48,6 +49,7 @@ interface StartupSyncEvent {
   blocks_processed?: number;
   blocks_skipped?: number;
   errors?: string[];
+  warnings?: string[];
   error_message?: string;
 }
 
@@ -67,7 +69,7 @@ function describeStartupSync(ev: StartupSyncEvent): StartupSyncBanner {
         level: "success",
         text: `Auto-Sync für ${day}: ${periods} Periode(n), ${blocks} Block/Blöcke gebucht${
           skipped > 0 ? ` (${skipped} übersprungen)` : ""
-        }.`,
+        }.${warningSuffix(ev.warnings)}`,
       };
     }
     case "partial": {
