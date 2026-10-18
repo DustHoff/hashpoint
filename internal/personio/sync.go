@@ -47,6 +47,9 @@ type Result struct {
 	BlocksProcessed int
 	BlocksSkipped   int
 	Errors          []string
+	// Warnings lists Personio policy warnings (e.g. overtime approaching)
+	// attached to days that were saved anyway.
+	Warnings []string
 }
 
 // SyncDay syncs a single calendar day (in UTC).
@@ -125,9 +128,13 @@ func (s *Syncer) SyncRange(ctx context.Context, from, to time.Time) (*Result, er
 			continue
 		}
 		reuseExistingPeriodIDs(dayPayload.list, tc)
-		if err := s.client.TrackPeriodsOnDay(ctx, employeeID, day, dayPayload.list); err != nil {
+		alerts, err := s.client.TrackPeriodsOnDay(ctx, employeeID, day, dayPayload.list)
+		if err != nil {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s: %s", dateStr, err.Error()))
 			continue
+		}
+		for _, a := range alerts {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("%s: %s", dateStr, a.String()))
 		}
 		// Writes are addressed by date now; the timesheet's day_id is still
 		// the most stable Personio reference for the local sync marker.

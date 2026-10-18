@@ -12,6 +12,7 @@ import {
 } from "../lib/time";
 import MonthCalendar from "./MonthCalendar";
 import SyncConflictModal from "./SyncConflictModal";
+import { warningSuffix } from "../lib/syncWarnings";
 
 type ViewMode = "day" | "month";
 
@@ -413,7 +414,7 @@ export default function Timeline() {
           level: "success",
           text: `Synchronisiert: ${r.Periods} Periode(n), ${r.BlocksProcessed} Block/Blöcke gebucht${
             r.BlocksSkipped > 0 ? ` (${r.BlocksSkipped} übersprungen)` : ""
-          }.`,
+          }.${warningSuffix(r.Warnings)}`,
         });
       } else if (r.BlocksSkipped > 0) {
         setSyncMessage({

@@ -76,6 +76,7 @@ export interface SyncResult {
   BlocksProcessed: number;
   BlocksSkipped: number;
   Errors: string[] | null;
+  Warnings: string[] | null;
 }
 
 // Returned by App.PreflightSyncDay. The frontend opens the override/import
